@@ -1,2 +1,2 @@
 class ItemRef:
-    TASK = ''
+    TASK = 'task'
