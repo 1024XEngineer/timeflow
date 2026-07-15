@@ -1,2 +1,0 @@
-class ItemRef:
-    TASK = 'todo'
