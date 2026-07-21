@@ -6,6 +6,8 @@ from timeapp.main import app
 
 
 def test_health_check() -> None:
+    """健康检查不依赖数据库即可返回成功。"""
+
     with TestClient(app) as client:
         response = client.get("/api/v1/health")
 

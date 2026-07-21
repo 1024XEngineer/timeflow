@@ -1,0 +1,31 @@
+services:
+  db:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-timeapp}
+      POSTGRES_USER: ${POSTGRES_USER:-timeapp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-timeapp}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - timeflow-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U timeapp -d timeapp"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./backend
+    environment:
+      TIMEAPP_ENVIRONMENT: ${TIMEAPP_ENVIRONMENT:-docker}
+      TIMEAPP_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-timeapp}:${POSTGRES_PASSWORD:-timeapp}@db:5432/${POSTGRES_DB:-timeapp}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-8000}:8000"
+
+volumes:
+  timeflow-postgres-data:

@@ -6,12 +6,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Runtime settings loaded from environment variables or a local .env file."""
+    """从环境变量或本地 .env 文件加载运行时配置。"""
 
     app_name: str = "TimeApp"
     environment: str = "development"
     debug: bool = False
     api_v1_prefix: str = "/api/v1"
+    database_url: str = "postgresql+psycopg://timeapp:timeapp@127.0.0.1:5432/timeapp"
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -23,6 +24,6 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    """Return one settings instance per process."""
+    """返回进程内复用的配置实例。"""
 
     return Settings()

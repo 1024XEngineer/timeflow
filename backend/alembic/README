@@ -1,0 +1,5 @@
+Alembic migration scripts for timeapp.
+
+- Generate: `uv run alembic revision --autogenerate -m "describe change"`
+- Apply: `uv run alembic upgrade head`
+- Import new ORM modules in `env.py` so autogenerate sees them.

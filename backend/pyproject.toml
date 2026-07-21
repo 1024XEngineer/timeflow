@@ -5,23 +5,24 @@ build-backend = "hatchling.build"
 [project]
 name = "timeapp"
 version = "0.1.0"
-description = "A small, extensible FastAPI service."
+description = "Timeflow API service"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.12"
 dependencies = [
-    "alembic",
-    "fastapi",
-    "pydantic-settings",
-    "sqlalchemy",
-    "uvicorn[standard]",
+    "alembic>=1.18,<2",
+    "fastapi>=0.139,<1",
+    "psycopg[binary]>=3.2,<4",
+    "pydantic-settings>=2.14,<3",
+    "sqlalchemy>=2.0,<3",
+    "uvicorn[standard]>=0.51,<1",
 ]
 
 [dependency-groups]
 dev = [
-    "httpx2",
-    "mypy>=2.3.0",
-    "pytest",
-    "ruff>=0.15.21",
+    "httpx2>=2.7,<3",
+    "mypy>=2.3,<3",
+    "pytest>=9,<10",
+    "ruff>=0.15,<1",
 ]
 
 [tool.pytest.ini_options]
@@ -32,30 +33,14 @@ testpaths = ["tests"]
 target-version = "py311"
 line-length = 100
 src = ["src", "tests"]
+extend-exclude = ["alembic.ini", "alembic/script.py.mako"]
 
 [tool.ruff.lint]
-select = [
-    "E",   # pycodestyle errors
-    "W",   # pycodestyle warnings
-    "F",   # pyflakes
-    "I",   # isort
-    "N",   # pep8-naming
-    "UP",  # pyupgrade
-    "B",   # flake8-bugbear
-    "S",   # flake8-bandit（安全）
-    "C4",  # flake8-comprehensions
-    "SIM", # flake8-simplify
-    "T20", # flake8-print（禁止 print）
-    "RUF", # ruff 专属规则
-]
-ignore = [
-    "RUF001", # 中文注释使用全角标点，属于项目约定
-    "RUF002",
-    "RUF003",
-]
+select = ["E", "W", "F", "I", "N", "UP", "B", "S", "C4", "SIM", "T20", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]  # 测试中允许 assert
+"tests/**" = ["S101"]
 
 [tool.mypy]
 python_version = "3.11"

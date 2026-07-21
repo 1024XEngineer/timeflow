@@ -8,7 +8,7 @@ from timeapp.core.config import get_settings
 
 
 def create_app() -> FastAPI:
-    """Create and configure a FastAPI application instance."""
+    """创建并配置 FastAPI 应用。"""
 
     settings = get_settings()
     application = FastAPI(
