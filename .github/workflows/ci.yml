@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    name: Detect project layout
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.projects.outputs.backend }}
+      frontend: ${{ steps.projects.outputs.frontend }}
+      compose: ${{ steps.projects.outputs.compose }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: projects
+        shell: bash
+        run: |
+          backend=false
+          frontend=false
+          compose=false
+
+          if [[ -f backend/pyproject.toml && -f backend/uv.lock ]]; then
+            backend=true
+          fi
+          if [[ -f frontend/package-lock.json ]]; then
+            frontend=true
+          fi
+          if [[ -f docker-compose.yml ]]; then
+            compose=true
+          fi
+
+          echo "backend=$backend" >> "$GITHUB_OUTPUT"
+          echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
+          echo "compose=$compose" >> "$GITHUB_OUTPUT"
+
+  backend:
+    name: Backend checks
+    needs: detect
+    if: needs.detect.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_DB: timeapp
+          POSTGRES_USER: timeapp
+          POSTGRES_PASSWORD: timeapp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U timeapp -d timeapp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TIMEAPP_DATABASE_URL: postgresql+psycopg://timeapp:timeapp@127.0.0.1:5432/timeapp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.11.15
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: 0.11.28
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - run: uv sync --locked --all-groups
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run pytest
+      - run: uv run alembic upgrade head
+      - run: uv run alembic check
+      - run: uv build
+
+  frontend:
+    name: Frontend checks
+    needs: detect
+    if: needs.detect.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.20.2
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm audit --audit-level=moderate
+      - run: npx --yes expo-doctor@1.20.1
+      - run: npx expo export --platform android --output-dir dist
+
+  containers:
+    name: Container validation
+    needs: detect
+    if: needs.detect.outputs.backend == 'true' && needs.detect.outputs.compose == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose --env-file .env.example config
+      - run: docker compose --env-file .env.example up --build --detach
+      - run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8000/api/v1/health; then
+              break
+            fi
+            if [[ "$attempt" -eq 30 ]]; then
+              exit 1
+            fi
+            sleep 2
+          done
+      - run: |
+          # Assert DB is at migration head (do not hardcode a revision id).
+          docker compose --env-file .env.example exec -T api alembic current | grep -Eq '\(head\)'
+      - if: always()
+        run: docker compose --env-file .env.example down --volumes
