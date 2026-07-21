@@ -2,8 +2,13 @@
   "name": "timeflow-mobile",
   "version": "1.0.0",
   "main": "index.ts",
+  "engines": {
+    "node": ">=20.20.2 <21",
+    "npm": ">=10.8.2 <11"
+  },
+  "packageManager": "npm@10.8.2",
   "dependencies": {
-    "expo": "~57.0.6",
+    "expo": "~57.0.7",
     "expo-status-bar": "~57.0.1",
     "react": "19.2.3",
     "react-native": "0.86.0"
@@ -15,6 +20,9 @@
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.9.5",
     "typescript": "~6.0.3"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   },
   "scripts": {
     "start": "expo start",
