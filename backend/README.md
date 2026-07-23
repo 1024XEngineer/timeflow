@@ -19,39 +19,34 @@ docker compose up --build
 
 健康检查：<http://127.0.0.1:8000/api/v1/health>
 
-## 预留目录
+## 目录结构
 
 ```text
 src/timeapp/
-├── agents/                 # 为主 Agent 和专项 Agent 预留
-│   ├── main_agent/         # 路由、模型和调度器占位
-│   │   ├── router.py
-│   │   ├── schemas.py
-│   │   └── dispatcher.py
-│   ├── schedule_todo_agent/    # schemas.py + service.py + prompts.py
-│   ├── task_breakdown_agent/   # schemas.py + service.py + prompts.py
-│   ├── replanning_agent/       # schemas.py + service.py + prompts.py
-│   ├── review_agent/           # schemas.py + service.py + prompts.py
-│   └── feedback_agent/         # schemas.py + service.py + prompts.py
-├── basic/                  # 手动业务、事项展示和 OCR/ASR 预留路由
+├── agents/                 # 主 Agent 与五个子 Agent 的空目录边界
+│   ├── main_agent/
+│   ├── schedule_todo_agent/
+│   ├── task_breakdown_agent/
+│   ├── replanning_agent/
+│   ├── review_agent/
+│   └── feedback_agent/
+├── basic/                  # 手动业务、用户画像和 OCR/ASR 模块边界
 │   ├── identity/
-│   ├── timeline/
-│   ├── reminders/
-│   ├── multimodal/
+│   ├── user_profile/
+│   ├── ocr/
+│   ├── asr/
 │   └── usage_management/
-├── common/                 # 共享能力和跨 Agent 契约预留
-│   ├── contracts/          # 响应、会话等模型占位
-│   ├── data/               # 公共事实数据读写
-│   ├── confirmation/       # 确认
-│   ├── questioning/        # 反问
-│   ├── llm/                # LLM 边界
-│   ├── task_profile/       # 任务级画像
-│   └── context/            # 上下文
+├── common/
+│   ├── data/               # 公共事实数据读写边界
+│   ├── llm/                # 统一模型调用与提示词管理边界
+│   ├── task_profile/       # 任务级画像管理边界
+│   ├── object_storage/     # 图片和音频对象存储边界
+│   └── system_logs/        # 系统日志与业务审计边界
 ├── api/                    # HTTP 路由聚合和基础设施探活
 └── core/                   # 配置、数据库连接和基础设施
 ```
 
-Agent 目录目前只保留包结构、空路由和模型占位，不包含 HTTP 端点、分发规则、对话窗口、数据库动作或具体业务字段。数据库与 Agent 调用协议确定后，再在独立功能提交中实现。
+Agent 目录边界已经保留，具体实现将在数据库和接口设计完成后通过独立功能提交添加。消息推送按 Wiki 约束由前端实现。
 
 ## 数据库迁移（Alembic）
 

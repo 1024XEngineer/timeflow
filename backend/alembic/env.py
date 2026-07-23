@@ -9,7 +9,6 @@ from timeapp.core.config import get_settings
 from timeapp.core.db import Base
 
 # 新增 ORM 模型后在此导入，确保 metadata 注册进 autogenerate。
-# 例：from timeapp.basic.timeline import models as timeline_models
 
 config = context.config
 
