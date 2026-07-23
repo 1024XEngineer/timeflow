@@ -1,13 +1,7 @@
-"""跨 Agent 共享的对话消息结构。"""
-
-from typing import Literal
+"""对话消息模型占位。"""
 
 from pydantic import BaseModel
 
 
 class ConversationMessage(BaseModel):
-    """一条用于上下文聚合的对话记录。"""
-
-    role: Literal["system", "user", "assistant"]
-    content: str
-    message_id: str | None = None
+    """等待对话上下文协议确定后补充字段。"""

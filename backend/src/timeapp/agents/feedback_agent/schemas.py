@@ -1,18 +1,7 @@
-"""反馈 Agent 的完整输入参数。"""
+"""反馈 Agent 输入模型占位。"""
 
-from datetime import datetime
-from typing import Any
-
-from pydantic import BaseModel, Field
-
-from timeapp.common.contracts.conversation import ConversationMessage
+from pydantic import BaseModel
 
 
 class FeedbackInput(BaseModel):
-    """用于定位事项并规范化反馈的候选数据。"""
-
-    raw_input: str
-    range_start: datetime
-    range_end: datetime
-    related_items: list[dict[str, Any]]
-    conversation: list[ConversationMessage] = Field(default_factory=list, max_length=20)
+    """等待反馈功能设计确定后补充字段。"""

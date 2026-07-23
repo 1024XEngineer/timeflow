@@ -19,12 +19,12 @@ docker compose up --build
 
 健康检查：<http://127.0.0.1:8000/api/v1/health>
 
-## Agent 目录边界
+## 预留目录
 
 ```text
 src/timeapp/
-├── agents/                 # 主 Agent 和专项 Agent
-│   ├── main_agent/         # 唯一 Agent HTTP 入口和内部调度
+├── agents/                 # 为主 Agent 和专项 Agent 预留
+│   ├── main_agent/         # 路由、模型和调度器占位
 │   │   ├── router.py
 │   │   ├── schemas.py
 │   │   └── dispatcher.py
@@ -33,14 +33,14 @@ src/timeapp/
 │   ├── replanning_agent/       # schemas.py + service.py + prompts.py
 │   ├── review_agent/           # schemas.py + service.py + prompts.py
 │   └── feedback_agent/         # schemas.py + service.py + prompts.py
-├── basic/                  # 手动业务、事项展示和 OCR/ASR
+├── basic/                  # 手动业务、事项展示和 OCR/ASR 预留路由
 │   ├── identity/
 │   ├── timeline/
 │   ├── reminders/
 │   ├── multimodal/
 │   └── usage_management/
-├── common/                 # 跨 Agent 契约与共享能力
-│   ├── contracts/          # 统一响应、会话等契约
+├── common/                 # 共享能力和跨 Agent 契约预留
+│   ├── contracts/          # 响应、会话等模型占位
 │   ├── data/               # 公共事实数据读写
 │   ├── confirmation/       # 确认
 │   ├── questioning/        # 反问
@@ -51,7 +51,7 @@ src/timeapp/
 └── core/                   # 配置、数据库连接和基础设施
 ```
 
-专项 Agent 是进程内能力包，不暴露 HTTP Router。它们只接收主 Agent 整理好的完整参数，返回 `AgentResponse`；不直接访问数据库、不负责追问，也不直接执行 `db_action`。所有写操作必须由主 Agent 在用户确认和公共数据校验后落盘。
+Agent 目录目前只保留包结构、空路由和模型占位，不包含 HTTP 端点、分发规则、对话窗口、数据库动作或具体业务字段。数据库与 Agent 调用协议确定后，再在独立功能提交中实现。
 
 ## 数据库迁移（Alembic）
 
