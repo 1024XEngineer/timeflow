@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "timeapp"
+version = "0.1.0"
+description = "Timeflow API service"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "alembic>=1.18,<2",
+    "fastapi>=0.139,<1",
+    "psycopg[binary]>=3.2,<4",
+    "pydantic-settings>=2.14,<3",
+    "sqlalchemy>=2.0,<3",
+    "uvicorn[standard]>=0.51,<1",
+]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.7,<3",
+    "mypy>=2.3,<3",
+    "pytest>=9,<10",
+    "ruff>=0.15,<1",
+]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+extend-exclude = ["alembic.ini", "alembic/script.py.mako"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP", "B", "S", "C4", "SIM", "T20", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+mypy_path = "src"
+files = ["src", "tests"]
+plugins = ["pydantic.mypy"]
