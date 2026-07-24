@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.eggs/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.cache/
+*.db
+*.sqlite
+*.sqlite3
+
+# Node / Expo / React Native
+node_modules/
+.expo/
+dist/
+build/
+web-build/
+expo-env.d.ts
+.metro-health-check*
+*.tsbuildinfo
+.kotlin/
+ios/
+android/
+
+# Native signing / secrets
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.pem
+
+# Env (keep .env.example)
+.env
+.env.*
+!.env.example
+
+# Logs & debug
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# OS / IDE / local tooling
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+.claude/
+.cursor/
