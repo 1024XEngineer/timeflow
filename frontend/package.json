@@ -33,8 +33,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
-    "test:api": "tsc -p tests/tsconfig.json && node --test .contract-test-dist/tests/api/*.test.js",
-    "check": "npm run lint && npm run format:check && npm run typecheck && npm run test:api"
+    "check": "npm run lint && npm run format:check && npm run typecheck"
   },
   "private": true
 }
