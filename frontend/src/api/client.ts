@@ -9,8 +9,8 @@ import type { ContractParser } from './core/validation';
  */
 export function apiFetch<T>(
   path: string,
-  options?: HttpRequestOptions,
-  parseData?: ContractParser<T>,
+  options: HttpRequestOptions,
+  parseData: ContractParser<T>,
 ): Promise<T> {
   return httpClient.request<T>(path, options, parseData);
 }

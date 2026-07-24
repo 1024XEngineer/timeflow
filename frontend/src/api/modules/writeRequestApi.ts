@@ -5,8 +5,14 @@ import type {
   DecideWriteRequest,
   WriteDecisionResult,
 } from '../contracts/writeRequest';
-import { parseCreateWriteRequestResult, parseWriteDecisionResult } from '../contracts/validators';
-import { HttpClient, httpClient } from '../core/http';
+import {
+  parseCreateWriteRequest,
+  parseCreateWriteRequestResult,
+  parseDecideWriteRequest,
+  parseWriteDecisionResult,
+} from '../contracts/validators';
+import { HttpClient, httpClient, validateRequest } from '../core/http';
+import { parseUuid } from '../core/validation';
 
 /** 负责所有手动 CRUD 的统一写入确认门禁。 */
 export class WriteRequestApi {
@@ -17,10 +23,11 @@ export class WriteRequestApi {
    * 对应 `POST /api/v1/write-requests`。
    */
   create(request: CreateWriteRequest): Promise<CreateWriteRequestResult> {
+    const validatedRequest = validateRequest(request, parseCreateWriteRequest);
     return this.http.request<CreateWriteRequestResult>(
       '/write-requests',
       {
-        body: request,
+        body: validatedRequest,
         method: 'POST',
       },
       parseCreateWriteRequestResult,
@@ -32,10 +39,12 @@ export class WriteRequestApi {
    * 对应 `POST /api/v1/write-requests/{write_request_id}/decide`。
    */
   decide(writeRequestId: UUID, request: DecideWriteRequest): Promise<WriteDecisionResult> {
+    const validatedWriteRequestId = validateRequest(writeRequestId, parseUuid);
+    const validatedRequest = validateRequest(request, parseDecideWriteRequest);
     return this.http.request<WriteDecisionResult>(
-      `/write-requests/${encodeURIComponent(writeRequestId)}/decide`,
+      `/write-requests/${encodeURIComponent(validatedWriteRequestId)}/decide`,
       {
-        body: request,
+        body: validatedRequest,
         method: 'POST',
       },
       parseWriteDecisionResult,

@@ -82,6 +82,28 @@ function invalidResponseError(status: number, reason?: string): ApiError {
   );
 }
 
+/**
+ * 在请求离开 SDK 前执行严格契约校验，并统一转换为可识别的客户端错误。
+ */
+export function validateRequest<T>(value: unknown, parser: ContractParser<T>): T {
+  try {
+    return parser(value, 'request');
+  } catch (error) {
+    throw new ApiError(
+      {
+        code: 'INVALID_REQUEST',
+        message:
+          error instanceof Error
+            ? `请求不符合统一接口契约：${error.message}`
+            : '请求不符合统一接口契约',
+        retryable: false,
+        stage: 'request_validation',
+      },
+      { status: 400 },
+    );
+  }
+}
+
 export class HttpClient {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof globalThis.fetch;
@@ -105,14 +127,10 @@ export class HttpClient {
    */
   async request<T>(
     path: string,
-    options: HttpRequestOptions = {},
-    parseData?: ContractParser<T>,
+    options: HttpRequestOptions,
+    parseData: ContractParser<T>,
   ): Promise<T> {
     const response = await this.raw(path, options);
-
-    if (response.status === 204) {
-      return undefined as T;
-    }
 
     let rawResponse: unknown;
 
@@ -139,10 +157,6 @@ export class HttpClient {
         },
         { status: response.status },
       );
-    }
-
-    if (!parseData) {
-      return rawResponse as T;
     }
 
     try {

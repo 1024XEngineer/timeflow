@@ -1,6 +1,11 @@
 import type { AuthSession, CurrentUser, LoginRequest, RegisterRequest } from '../contracts/auth';
-import { parseAuthSession, parseCurrentUser } from '../contracts/validators';
-import { HttpClient, httpClient } from '../core/http';
+import {
+  parseAuthSession,
+  parseCurrentUser,
+  parseLoginRequest,
+  parseRegisterRequest,
+} from '../contracts/validators';
+import { HttpClient, httpClient, validateRequest } from '../core/http';
 
 /** 负责账号注册、登录和当前用户初始化查询。 */
 export class AuthApi {
@@ -8,11 +13,12 @@ export class AuthApi {
 
   /** 创建用户账号并返回登录令牌。对应 `POST /api/v1/auth/register`。 */
   register(request: RegisterRequest): Promise<AuthSession> {
+    const validatedRequest = validateRequest(request, parseRegisterRequest);
     return this.http.request<AuthSession>(
       '/auth/register',
       {
         authenticated: false,
-        body: request,
+        body: validatedRequest,
         method: 'POST',
       },
       parseAuthSession,
@@ -21,11 +27,12 @@ export class AuthApi {
 
   /** 使用邮箱密码建立登录态。对应 `POST /api/v1/auth/login`。 */
   login(request: LoginRequest): Promise<AuthSession> {
+    const validatedRequest = validateRequest(request, parseLoginRequest);
     return this.http.request<AuthSession>(
       '/auth/login',
       {
         authenticated: false,
-        body: request,
+        body: validatedRequest,
         method: 'POST',
       },
       parseAuthSession,

@@ -1,4 +1,4 @@
-import type { AuthSession, CurrentUser } from './auth';
+import type { AuthSession, CurrentUser, LoginRequest, RegisterRequest } from './auth';
 import type {
   AgentName,
   ClarificationQuestion,
@@ -8,16 +8,32 @@ import type {
   ConversationInputAccepted,
   ConversationMessage,
   ConversationMessageMetadata,
+  ConversationMessagesRequest,
   ConversationMessagesResult,
   ConversationServerEvent,
   ConversationSnapshot,
+  ConversationSnapshotRequest,
+  MediaConversationInputRequest,
+  TextConversationInputRequest,
   TimeRange,
   TransportSnapshotPayload,
 } from './conversation';
-import type { LongGoal, LongGoalDetailResult, LongGoalListResult } from './goal';
-import type { TaskItem, TimelineItemsResult } from './item';
-import type { UserProfile } from './profile';
-import type { CreateWriteRequestResult, WriteDecisionResult } from './writeRequest';
+import type {
+  LongGoal,
+  LongGoalDetailRequest,
+  LongGoalDetailResult,
+  LongGoalListRequest,
+  LongGoalListResult,
+  TaskProfileSnapshot,
+} from './goal';
+import type { TaskItem, TimelineItemsRequest, TimelineItemsResult } from './item';
+import type { UserProfile, UserProfileRequest } from './profile';
+import type {
+  CreateWriteRequest,
+  CreateWriteRequestResult,
+  DecideWriteRequest,
+  WriteDecisionResult,
+} from './writeRequest';
 import {
   ContractValidationError,
   parseArray,
@@ -79,6 +95,8 @@ const CLARIFICATION_REASONS = [
 ] as const;
 const CLARIFICATION_MODES = ['single', 'batch'] as const;
 const WRITE_DECISIONS = ['confirmed', 'rejected'] as const;
+const WRITE_ACTIONS = ['create', 'update', 'delete', 'feedback', 'replan', 'goal_split'] as const;
+const WRITE_TARGET_TYPES = ['task_item', 'long_goal', 'feedback', 'profile'] as const;
 const WRITE_REQUEST_STATUSES = ['confirmed', 'rejected', 'applied', 'expired'] as const;
 const CLIENT_EVENT_TYPES = [
   'selection.submit',
@@ -121,6 +139,21 @@ function parseOptionalNullable<T>(
 
 function parseStringArray(value: unknown, path: string): string[] {
   return parseArray(value, path, parseString);
+}
+
+function parsePositiveInteger(value: unknown, path: string): number {
+  const parsed = parseInteger(value, path);
+  if (parsed < 1) {
+    throw new ContractValidationError(path, '必须是正整数');
+  }
+  return parsed;
+}
+
+function parseBlob(value: unknown, path: string): Blob {
+  if (!(value instanceof Blob)) {
+    throw new ContractValidationError(path, '必须是 Blob 文件');
+  }
+  return value;
 }
 
 function parseEmptyObject(value: unknown, path: string): Record<string, never> {
@@ -277,6 +310,174 @@ function parseConversationMessageMetadata(
     }
   }
   return result;
+}
+
+/** 注册请求发送前校验，拒绝缺字段和 Wiki 未声明字段。 */
+export function parseRegisterRequest(value: unknown, path = 'request'): RegisterRequest {
+  const object = parseObject(value, path, ['email', 'password', 'display_name']);
+  return {
+    email: parseNonEmptyString(object.email, `${path}.email`),
+    password: parseNonEmptyString(object.password, `${path}.password`),
+    display_name: parseString(object.display_name, `${path}.display_name`),
+  };
+}
+
+/** 登录请求发送前校验。 */
+export function parseLoginRequest(value: unknown, path = 'request'): LoginRequest {
+  const object = parseObject(value, path, ['email', 'password']);
+  return {
+    email: parseNonEmptyString(object.email, `${path}.email`),
+    password: parseNonEmptyString(object.password, `${path}.password`),
+  };
+}
+
+/** 文本输入请求发送前校验，确保 raw_content 与 text 模态同时存在。 */
+export function parseTextConversationInputRequest(
+  value: unknown,
+  path = 'request',
+): TextConversationInputRequest {
+  const object = parseObject(
+    value,
+    path,
+    ['client_message_id', 'modality', 'raw_content'],
+    ['reply_to_question_id'],
+  );
+  return stripUndefined({
+    client_message_id: parseNonEmptyString(object.client_message_id, `${path}.client_message_id`),
+    modality: parseEnum(object.modality, `${path}.modality`, ['text'] as const),
+    raw_content: parseNonEmptyString(object.raw_content, `${path}.raw_content`),
+    reply_to_question_id: parseOptional(
+      object.reply_to_question_id,
+      `${path}.reply_to_question_id`,
+      parseNonEmptyString,
+    ),
+  });
+}
+
+/** 图片或音频请求发送前校验；file_name 仅供 FormData 文件名使用。 */
+export function parseMediaConversationInputRequest(
+  value: unknown,
+  path = 'request',
+): MediaConversationInputRequest {
+  const object = parseObject(
+    value,
+    path,
+    ['client_message_id', 'modality', 'file', 'file_name'],
+    ['reply_to_question_id'],
+  );
+  return stripUndefined({
+    client_message_id: parseNonEmptyString(object.client_message_id, `${path}.client_message_id`),
+    modality: parseEnum(object.modality, `${path}.modality`, ['image', 'audio'] as const),
+    file: parseBlob(object.file, `${path}.file`),
+    file_name: parseNonEmptyString(object.file_name, `${path}.file_name`),
+    reply_to_question_id: parseOptional(
+      object.reply_to_question_id,
+      `${path}.reply_to_question_id`,
+      parseNonEmptyString,
+    ),
+  });
+}
+
+/** 会话历史查询参数发送前校验。 */
+export function parseConversationMessagesRequest(
+  value: unknown,
+  path = 'request',
+): ConversationMessagesRequest {
+  const object = parseObject(value, path, ['user_id'], ['before_message_id', 'limit']);
+  return stripUndefined({
+    user_id: parseUuid(object.user_id, `${path}.user_id`),
+    before_message_id: parseOptional(
+      object.before_message_id,
+      `${path}.before_message_id`,
+      parseUuid,
+    ),
+    limit: parseOptional(object.limit, `${path}.limit`, parsePositiveInteger),
+  });
+}
+
+/** 页面静态快照查询参数发送前校验。 */
+export function parseConversationSnapshotRequest(
+  value: unknown,
+  path = 'request',
+): ConversationSnapshotRequest {
+  const object = parseObject(value, path, ['user_id'], ['last_seen_message_id']);
+  return stripUndefined({
+    user_id: parseUuid(object.user_id, `${path}.user_id`),
+    last_seen_message_id: parseOptional(
+      object.last_seen_message_id,
+      `${path}.last_seen_message_id`,
+      parseUuid,
+    ),
+  });
+}
+
+/** 时间线查询参数发送前校验。 */
+export function parseTimelineItemsRequest(value: unknown, path = 'request'): TimelineItemsRequest {
+  const object = parseObject(value, path, ['user_id', 'start_at', 'end_at'], ['item_type']);
+  return stripUndefined({
+    user_id: parseUuid(object.user_id, `${path}.user_id`),
+    start_at: parseIsoDateTime(object.start_at, `${path}.start_at`),
+    end_at: parseIsoDateTime(object.end_at, `${path}.end_at`),
+    item_type: parseOptional(object.item_type, `${path}.item_type`, (item, itemPath) =>
+      parseEnum(item, itemPath, ITEM_TYPES),
+    ),
+  });
+}
+
+/** 长目标列表查询参数发送前校验。 */
+export function parseLongGoalListRequest(value: unknown, path = 'request'): LongGoalListRequest {
+  const object = parseObject(value, path, ['user_id'], ['status']);
+  return stripUndefined({
+    user_id: parseUuid(object.user_id, `${path}.user_id`),
+    status: parseOptional(object.status, `${path}.status`, (item, itemPath) =>
+      parseEnum(item, itemPath, LONG_GOAL_STATUSES),
+    ),
+  });
+}
+
+/** 长目标详情查询参数发送前校验。 */
+export function parseLongGoalDetailRequest(
+  value: unknown,
+  path = 'request',
+): LongGoalDetailRequest {
+  const object = parseObject(value, path, ['user_id']);
+  return {
+    user_id: parseUuid(object.user_id, `${path}.user_id`),
+  };
+}
+
+/** 用户画像查询参数发送前校验。 */
+export function parseUserProfileRequest(value: unknown, path = 'request'): UserProfileRequest {
+  const object = parseObject(value, path, ['user_id']);
+  return {
+    user_id: parseUuid(object.user_id, `${path}.user_id`),
+  };
+}
+
+/** 创建写入确认门禁的请求发送前校验。 */
+export function parseCreateWriteRequest(value: unknown, path = 'request'): CreateWriteRequest {
+  const object = parseObject(
+    value,
+    path,
+    ['action', 'target_type', 'payload', 'preview_text'],
+    ['target_id'],
+  );
+  return stripUndefined({
+    action: parseEnum(object.action, `${path}.action`, WRITE_ACTIONS),
+    target_type: parseEnum(object.target_type, `${path}.target_type`, WRITE_TARGET_TYPES),
+    target_id: parseOptional(object.target_id, `${path}.target_id`, parseUuid),
+    payload: parseJsonObject(object.payload, `${path}.payload`),
+    preview_text: parseNonEmptyString(object.preview_text, `${path}.preview_text`),
+  });
+}
+
+/** 确认或拒绝写入的请求发送前校验。 */
+export function parseDecideWriteRequest(value: unknown, path = 'request'): DecideWriteRequest {
+  const object = parseObject(value, path, ['decision', 'idempotency_key']);
+  return {
+    decision: parseEnum(object.decision, `${path}.decision`, WRITE_DECISIONS),
+    idempotency_key: parseNonEmptyString(object.idempotency_key, `${path}.idempotency_key`),
+  };
 }
 
 export function parseAuthSession(value: unknown, path = 'response'): AuthSession {
@@ -437,12 +638,39 @@ export function parseLongGoalListResult(value: unknown, path = 'response'): Long
   };
 }
 
+/** 校验长任务创建时固化的任务画像快照。 */
+export function parseTaskProfileSnapshot(
+  value: unknown,
+  path = 'response.task_profile',
+): TaskProfileSnapshot {
+  const object = parseObject(value, path, [
+    'id',
+    'user_id',
+    'long_goal_id',
+    'profile_summary',
+    'source_message_id',
+    'version',
+  ]);
+  return {
+    id: parseUuid(object.id, `${path}.id`),
+    user_id: parseUuid(object.user_id, `${path}.user_id`),
+    long_goal_id: parseUuid(object.long_goal_id, `${path}.long_goal_id`),
+    profile_summary: parseNonEmptyString(object.profile_summary, `${path}.profile_summary`),
+    source_message_id: parseUuid(object.source_message_id, `${path}.source_message_id`),
+    version: parseInteger(object.version, `${path}.version`),
+  };
+}
+
 export function parseLongGoalDetailResult(value: unknown, path = 'response'): LongGoalDetailResult {
   const object = parseObject(value, path, ['goal', 'subtasks', 'task_profile']);
   return {
     goal: parseLongGoal(object.goal, `${path}.goal`),
     subtasks: parseArray(object.subtasks, `${path}.subtasks`, parseTaskItem),
-    task_profile: parseNullable(object.task_profile, `${path}.task_profile`, parseJsonObject),
+    task_profile: parseNullable(
+      object.task_profile,
+      `${path}.task_profile`,
+      parseTaskProfileSnapshot,
+    ),
   };
 }
 

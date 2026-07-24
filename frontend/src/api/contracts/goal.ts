@@ -1,4 +1,4 @@
-import type { ISODateTime, JsonObject, UUID } from './common';
+import type { ISODateTime, UUID } from './common';
 import type { TaskItem } from './item';
 
 export type LongGoalStatus = 'active' | 'completed' | 'cancelled';
@@ -32,14 +32,21 @@ export interface LongGoalDetailRequest {
   user_id: UUID;
 }
 
+/** 长任务创建时确认落盘的任务级画像快照。 */
+export interface TaskProfileSnapshot {
+  id: UUID;
+  user_id: UUID;
+  long_goal_id: UUID;
+  profile_summary: string;
+  source_message_id: UUID;
+  version: number;
+}
+
 /**
  * `GET /long-goals/{goal_id}` 的完整响应。
- *
- * 最新 Wiki 只命名了 `task_profile`，未冻结 UserProfileDTO 的内部字段，
- * 因此该字段保持 JSON 对象，不把 Mock 内容升级成正式契约。
  */
 export interface LongGoalDetailResult {
   goal: LongGoal;
   subtasks: TaskItem[];
-  task_profile: JsonObject | null;
+  task_profile: TaskProfileSnapshot | null;
 }

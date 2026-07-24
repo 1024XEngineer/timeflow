@@ -1,6 +1,6 @@
 import type { UserProfile, UserProfileRequest } from '../contracts/profile';
-import { parseUserProfile } from '../contracts/validators';
-import { HttpClient, httpClient } from '../core/http';
+import { parseUserProfile, parseUserProfileRequest } from '../contracts/validators';
+import { HttpClient, httpClient, validateRequest } from '../core/http';
 
 /** 负责个人主页的全局用户画像只读查询。 */
 export class ProfileApi {
@@ -11,10 +11,11 @@ export class ProfileApi {
    * 画像写入统一通过 WriteRequestApi 的确认门禁完成。
    */
   getUserProfile(request: UserProfileRequest): Promise<UserProfile> {
+    const validatedRequest = validateRequest(request, parseUserProfileRequest);
     return this.http.request<UserProfile>(
       '/user/profile',
       {
-        query: { ...request },
+        query: { ...validatedRequest },
       },
       parseUserProfile,
     );
