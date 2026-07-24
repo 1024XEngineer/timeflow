@@ -2,5 +2,6 @@
   "extends": "./node_modules/expo/tsconfig.base.json",
   "compilerOptions": {
     "strict": true
-  }
+  },
+  "exclude": [".contract-test-dist", "tests"]
 }

@@ -1,4 +1,5 @@
 node_modules/
+.contract-test-dist/
 .expo/
 dist/
 web-build/
