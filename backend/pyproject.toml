@@ -1,50 +1,45 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27,<2"]
 build-backend = "hatchling.build"
 
 [project]
-name = "timeapp"
+name = "timeflow-backend"
 version = "0.1.0"
-description = "Timeflow API service"
+description = "TimeFlow backend service"
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
-    "alembic>=1.18,<2",
-    "fastapi>=0.139,<1",
+    "alembic>=1.16,<2",
+    "fastapi>=0.140.7,<1",
     "psycopg[binary]>=3.2,<4",
-    "pydantic-settings>=2.14,<3",
+    "python-dotenv>=1.1,<2",
     "sqlalchemy>=2.0,<3",
-    "uvicorn[standard]>=0.51,<1",
+    "uvicorn>=0.51,<1",
 ]
 
 [dependency-groups]
 dev = [
-    "httpx2>=2.7,<3",
-    "mypy>=2.3,<3",
+    "httpx2>=2,<3",
+    "mypy>=1.19,<2",
     "pytest>=9,<10",
     "ruff>=0.15,<1",
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/timeflow"]
+
 [tool.pytest.ini_options]
-addopts = "-q"
 testpaths = ["tests"]
+addopts = ["-q"]
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-src = ["src", "tests"]
-extend-exclude = ["alembic.ini", "alembic/script.py.mako"]
 
 [tool.ruff.lint]
-select = ["E", "W", "F", "I", "N", "UP", "B", "S", "C4", "SIM", "T20", "RUF"]
-ignore = ["RUF001", "RUF002", "RUF003"]
-
-[tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
 
 [tool.mypy]
 python_version = "3.11"
 strict = true
-mypy_path = "src"
-files = ["src", "tests"]
-plugins = ["pydantic.mypy"]
+packages = ["timeflow"]

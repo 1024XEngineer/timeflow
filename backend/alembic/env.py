@@ -1,16 +1,15 @@
-"""Alembic 运行环境：从 Settings 读取库连接，并对齐 SQLAlchemy Base.metadata。"""
+"""Alembic runtime configuration."""
 
 from logging.config import fileConfig
 
+from sqlalchemy import engine_from_config, pool
+
 from alembic import context
-from sqlalchemy import create_engine, pool
-
-from timeapp.core.config import get_settings
-from timeapp.core.db import Base
-
-# 新增 ORM 模型后在此导入，确保 metadata 注册进 autogenerate。
+from timeflow.data.database import Base
+from timeflow.infrastructure.settings import get_settings
 
 config = context.config
+config.set_main_option("sqlalchemy.url", get_settings().database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -18,21 +17,13 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
-def get_database_url() -> str:
-    """使用应用 Settings 中的数据库 URL，避免在 ini 中硬编码密钥。"""
-
-    return get_settings().database_url
-
-
 def run_migrations_offline() -> None:
-    """离线模式：只输出 SQL，不实际连接数据库。"""
-
+    """Run migrations without creating a database connection."""
     context.configure(
-        url=get_database_url(),
+        url=config.get_main_option("sqlalchemy.url"),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        compare_type=True,
     )
 
     with context.begin_transaction():
@@ -40,16 +31,15 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """在线模式：连接数据库并执行迁移。"""
-
-    connectable = create_engine(get_database_url(), poolclass=pool.NullPool)
+    """Run migrations using the configured database connection."""
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
 
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-            compare_type=True,
-        )
+        context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():
             context.run_migrations()
