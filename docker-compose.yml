@@ -1,3 +1,5 @@
+name: timeflow
+
 services:
   db:
     image: postgres:16.4-alpine
@@ -19,13 +21,24 @@ services:
     build:
       context: ./backend
     environment:
-      TIMEAPP_ENVIRONMENT: ${TIMEAPP_ENVIRONMENT:-docker}
-      TIMEAPP_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-timeapp}:${POSTGRES_PASSWORD:-timeapp}@db:5432/${POSTGRES_DB:-timeapp}
+      TIMEFLOW_ENVIRONMENT: ${TIMEFLOW_ENVIRONMENT:-docker}
+      TIMEFLOW_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-timeapp}:${POSTGRES_PASSWORD:-timeapp}@db:5432/${POSTGRES_DB:-timeapp}
     depends_on:
       db:
         condition: service_healthy
     ports:
       - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          ".venv/bin/python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health')",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
 volumes:
   timeflow-postgres-data:

@@ -1,8 +1,45 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
 [project]
-name = "backend"
+name = "timeflow-backend"
 version = "0.1.0"
-requires-python = ">=3.11"
+description = "TimeFlow backend service"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
 dependencies = [
-    "fastapi>=0.140.7",
-    "uvicorn>=0.51.0",
+    "alembic>=1.16,<2",
+    "fastapi>=0.140.7,<1",
+    "psycopg[binary]>=3.2,<4",
+    "python-dotenv>=1.1,<2",
+    "sqlalchemy>=2.0,<3",
+    "uvicorn>=0.51,<1",
 ]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2,<3",
+    "mypy>=1.19,<2",
+    "pytest>=9,<10",
+    "ruff>=0.15,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/timeflow"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-q"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["timeflow"]

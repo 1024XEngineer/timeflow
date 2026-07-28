@@ -1,7 +1,14 @@
 .DS_Store
 .idea/
+.env
 .venv/
 node_modules/
 __pycache__/
 *.py[cod]
 *.log
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+coverage.xml
+dist/
+htmlcov/
