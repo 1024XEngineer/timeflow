@@ -1,7 +1,8 @@
 {
-  "extends": "./node_modules/expo/tsconfig.base.json",
+  "extends": "@react-native/typescript-config",
   "compilerOptions": {
-    "strict": true
+    "types": ["jest"]
   },
-  "exclude": [".contract-test-dist", "tests"]
+  "include": ["**/*.ts", "**/*.tsx"],
+  "exclude": ["**/node_modules", "**/Pods"]
 }

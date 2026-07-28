@@ -1,7 +1,0 @@
-node_modules/
-.contract-test-dist/
-.expo/
-dist/
-web-build/
-package-lock.json
-assets/
