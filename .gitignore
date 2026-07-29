@@ -17,33 +17,18 @@ env/
 .coverage
 .coverage.*
 coverage.xml
+coverage/
 htmlcov/
 .cache/
 *.db
 *.sqlite
 *.sqlite3
 
-# Node / Expo / React Native
+# Node
 node_modules/
-.expo/
 dist/
 build/
-web-build/
-expo-env.d.ts
-.metro-health-check*
 *.tsbuildinfo
-.kotlin/
-ios/
-android/
-
-# Native signing / secrets
-*.orig.*
-*.jks
-*.p8
-*.p12
-*.key
-*.mobileprovision
-*.pem
 
 # Env (keep .env.example)
 .env
@@ -63,5 +48,6 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+*.pem
 .claude/
 .cursor/
