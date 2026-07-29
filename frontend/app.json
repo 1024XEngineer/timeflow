@@ -7,16 +7,33 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "允许 Timeflow 获取当前位置，以便在地图选点时显示你的位置。"
+      },
       "supportsTablet": true
     },
     "android": {
+      "package": "com.timeflow",
+      "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
+      "softwareKeyboardLayoutMode": "resize",
       "predictiveBackGestureEnabled": false
-    }
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": false,
+          "microphonePermission": false,
+          "photosPermission": "允许 Timeflow 访问照片，以便向智能助手发送图片。"
+        }
+      ],
+      "@react-native-community/datetimepicker"
+    ]
   }
 }
