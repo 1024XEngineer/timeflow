@@ -4,3 +4,6 @@ dist/
 web-build/
 package-lock.json
 assets/
+android/
+ios/
+modules/**/android/build/

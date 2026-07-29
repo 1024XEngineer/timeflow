@@ -22,13 +22,24 @@ expo-env.d.ts
 .metro-health-check*
 
 # debug
+*.log
 npm-debug.*
 yarn-debug.*
 yarn-error.*
 
-# macOS
+# test coverage
+coverage/
+
+# macOS / Windows
 .DS_Store
+Thumbs.db
 *.pem
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
 
 # local env files
 .env*.local
@@ -38,6 +49,8 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 
-# generated native folders
+# generated native folders — the repo root does not cover these
+# Leading slash is required: a bare `android/` matches a directory of that
+# name at any depth, not just the prebuild output sitting here.
 /ios
 /android
