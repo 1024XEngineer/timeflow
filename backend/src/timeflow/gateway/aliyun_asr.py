@@ -59,6 +59,7 @@ class AliyunASRClient(SpeechRecognitionPort):
                 await websocket.send(json.dumps(self._build_audio_append_event(chunk)))
 
             await websocket.send(json.dumps(self._build_commit_event()))
+            await websocket.send(json.dumps(self._build_session_finish_event()))
 
             transcript: str | None = None
             async for raw_message in websocket:
@@ -73,15 +74,6 @@ class AliyunASRClient(SpeechRecognitionPort):
                     "asr.completed",
                 }:
                     transcript = self._extract_text(event) or transcript
-                    if (
-                        event_type == "conversation.item.input_audio_transcription.text"
-                        and transcript
-                        and self._looks_like_final_text(transcript)
-                    ):
-                        return SpeechRecognitionResult(
-                            text=transcript,
-                            raw_events=tuple(collected_events),
-                        )
                     if (
                         event_type
                         in {
@@ -145,6 +137,12 @@ class AliyunASRClient(SpeechRecognitionPort):
         return {
             "event_id": self._next_event_id("input_audio_buffer.commit"),
             "type": "input_audio_buffer.commit",
+        }
+
+    def _build_session_finish_event(self) -> dict[str, Any]:
+        return {
+            "event_id": self._next_event_id("session.finish"),
+            "type": "session.finish",
         }
 
     def _next_event_id(self, event_type: str) -> str:
@@ -230,10 +228,5 @@ class AliyunASRClient(SpeechRecognitionPort):
             combined = "".join(parts).strip()
             return combined or None
         return None
-
-    @staticmethod
-    def _looks_like_final_text(text: str) -> bool:
-        return len(text) >= 4 and text.endswith(("。", "！", "?", "？", ".", "!", "；", ";"))
-
 
 __all__ = ["AliyunASRClient", "AliyunASRClientError", "AliyunASRSettings"]

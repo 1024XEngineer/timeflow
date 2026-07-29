@@ -78,6 +78,20 @@ def test_aliyun_asr_builds_doc_aligned_session_update_event() -> None:
     }
 
 
+def test_aliyun_asr_builds_session_finish_event() -> None:
+    """Manual mode must explicitly close the session after commit."""
+
+    class SettingsStub:
+        ws_url = "wss://example.com/api-ws/v1/realtime"
+        api_key = "key"
+        model = "new-model"
+
+    client = AliyunASRClient(SettingsStub())
+    event = client._build_session_finish_event()
+
+    assert event == {"event_id": "session.finish_1", "type": "session.finish"}
+
+
 def test_openai_builds_responses_api_input() -> None:
     """The wrapper uses Responses API message input format."""
     messages = OpenAILLMClient._build_input(
