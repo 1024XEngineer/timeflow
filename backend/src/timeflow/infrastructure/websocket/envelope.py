@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from timeflow.infrastructure.websocket.messages.envelope import ErrorDetail
+
 
 def build_error_envelope(
     message_type: str,
@@ -10,21 +12,13 @@ def build_error_envelope(
     message: str,
     details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """构造所有 `*.error` 消息共用的信封。"""
+    """构造所有 `*.error` 消息共用的信封,`error` 字段复用 `ErrorDetail` 的形状。"""
+    error = ErrorDetail(code=code, message=message, details=details)
     envelope: dict[str, Any] = {
         "type": message_type,
         "ok": False,
-        "error": {"code": code, "message": message, "details": details},
+        "error": error.model_dump(),
     }
     if request_id is not None:
         envelope["request_id"] = request_id
     return envelope
-
-
-def build_result_envelope(
-    message_type: str,
-    request_id: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    """构造所有 `*.result` 消息共用的信封。"""
-    return {"type": message_type, "request_id": request_id, "ok": True, "payload": payload}

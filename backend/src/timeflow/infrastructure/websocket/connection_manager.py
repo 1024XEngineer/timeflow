@@ -8,7 +8,7 @@ class _Sendable(Protocol):
 
 
 class ConnectionManager:
-    """注册活跃设备连接,并向指定设备或全部设备推送消息。"""
+    """注册活跃设备连接,并向指定设备推送消息。"""
 
     def __init__(self) -> None:
         self._connections: dict[str, _Sendable] = {}
@@ -32,8 +32,3 @@ class ConnectionManager:
             return False
         await connection.send_json(message)
         return True
-
-    async def broadcast(self, message: dict[str, Any]) -> None:
-        """向所有当前在线的设备推送同一条消息。"""
-        for connection in list(self._connections.values()):
-            await connection.send_json(message)

@@ -5,7 +5,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from timeflow.infrastructure.websocket.connection_manager import ConnectionManager
 from timeflow.infrastructure.websocket.envelope import build_error_envelope
 from timeflow.infrastructure.websocket.router import MessageRouter
-from timeflow.infrastructure.websocket.session import handle_session_hello
+from timeflow.infrastructure.websocket.session import handle_session_hello, invalid_device_id_error
 
 
 async def run_websocket_session(
@@ -18,9 +18,7 @@ async def run_websocket_session(
     await websocket.accept()
 
     if not device_id:
-        await websocket.send_json(
-            build_error_envelope("session.error", None, "INVALID_DEVICE_ID", "设备 ID 不合法")
-        )
+        await websocket.send_json(invalid_device_id_error())
         await websocket.close()
         return
 

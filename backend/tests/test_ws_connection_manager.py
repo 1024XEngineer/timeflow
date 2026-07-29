@@ -57,20 +57,3 @@ def test_unregister_stops_further_delivery() -> None:
         assert delivered is False
 
     asyncio.run(scenario())
-
-
-def test_broadcast_sends_to_all_connections() -> None:
-    """broadcast() 把同一条消息推给所有在线设备。"""
-
-    async def scenario() -> None:
-        manager = ConnectionManager()
-        first, second = _FakeConnection(), _FakeConnection()
-        manager.register("device_1", first)
-        manager.register("device_2", second)
-
-        await manager.broadcast({"type": "reminder.control"})
-
-        assert first.sent == [{"type": "reminder.control"}]
-        assert second.sent == [{"type": "reminder.control"}]
-
-    asyncio.run(scenario())
