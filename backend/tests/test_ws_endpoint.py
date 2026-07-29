@@ -81,12 +81,22 @@ def test_hello_then_routed_message_and_disconnect_cleanup() -> None:
     assert connections.is_connected("device_1") is False
 
 
-def test_hello_without_device_id_field_uses_connection_device_id() -> None:
-    """`session.hello` 消息体没带 device_id 时,以连接查询参数的 device_id 为准。"""
+def test_hello_missing_device_id_is_rejected() -> None:
+    """`session.hello` 缺少必填的 device_id 字段时,按 SessionHello 类型校验拒绝。"""
     response = handle_session_hello({"type": "session.hello", "app_version": "1.0.0"}, "device_1")
 
-    assert response["type"] == "session.ready"
-    assert response["device_id"] == "device_1"
+    assert response["type"] == "session.error"
+    assert response["error"]["code"] == "INVALID_MESSAGE"
+
+
+def test_hello_missing_app_version_is_rejected() -> None:
+    """`session.hello` 缺少必填的 app_version 字段时,按 SessionHello 类型校验拒绝。"""
+    response = handle_session_hello(
+        {"type": "session.hello", "device_id": "device_1"}, "device_1"
+    )
+
+    assert response["type"] == "session.error"
+    assert response["error"]["code"] == "INVALID_MESSAGE"
 
 
 def test_hello_with_matching_device_id_is_accepted() -> None:
@@ -106,3 +116,59 @@ def test_hello_with_mismatched_device_id_is_rejected() -> None:
 
     assert response["type"] == "session.error"
     assert response["error"]["code"] == "INVALID_DEVICE_ID"
+
+
+def test_malformed_json_before_hello_is_rejected() -> None:
+    """握手前收到非法 JSON 文本时返回 MALFORMED_MESSAGE 并关闭连接。"""
+    client = TestClient(_build_app(MessageRouter(), ConnectionManager()))
+
+    with client.websocket_connect("/ws?device_id=device_3") as websocket:
+        websocket.send_text("not valid json")
+        response = websocket.receive_json()
+
+    assert response["type"] == "protocol.error"
+    assert response["error"]["code"] == "MALFORMED_MESSAGE"
+
+
+def test_malformed_json_after_hello_does_not_kill_session() -> None:
+    """握手成功后收到非法 JSON 帧只报错,连接继续可用。"""
+    router = MessageRouter()
+
+    async def echo_handler(raw_message: dict[str, Any], device_id: str) -> dict[str, Any]:
+        return {"type": "echo.result", "request_id": raw_message["request_id"], "ok": True}
+
+    router.register("echo.command", echo_handler)
+    connections = ConnectionManager()
+    client = TestClient(_build_app(router, connections))
+
+    with client.websocket_connect("/ws?device_id=device_4") as websocket:
+        websocket.send_json(
+            {"type": "session.hello", "device_id": "device_4", "app_version": "1.0.0"}
+        )
+        assert websocket.receive_json()["type"] == "session.ready"
+
+        websocket.send_text("{not json")
+        malformed_response = websocket.receive_json()
+        assert malformed_response["error"]["code"] == "MALFORMED_MESSAGE"
+
+        assert connections.is_connected("device_4") is True
+        websocket.send_json({"type": "echo.command", "request_id": "req_1"})
+        echo_response = websocket.receive_json()
+        assert echo_response["type"] == "echo.result"
+
+
+def test_non_object_json_frame_is_rejected() -> None:
+    """合法 JSON 但不是对象(比如数组)时同样返回 MALFORMED_MESSAGE,不抛异常。"""
+    connections = ConnectionManager()
+    client = TestClient(_build_app(MessageRouter(), connections))
+
+    with client.websocket_connect("/ws?device_id=device_5") as websocket:
+        websocket.send_json(
+            {"type": "session.hello", "device_id": "device_5", "app_version": "1.0.0"}
+        )
+        assert websocket.receive_json()["type"] == "session.ready"
+
+        websocket.send_json([1, 2, 3])
+        response = websocket.receive_json()
+
+    assert response["error"]["code"] == "MALFORMED_MESSAGE"

@@ -17,9 +17,13 @@ class ConnectionManager:
         """注册某个设备当前的活跃连接,替换掉之前的连接(如果有)。"""
         self._connections[device_id] = connection
 
-    def unregister(self, device_id: str) -> None:
-        """移除某个设备的连接记录(如果存在)。"""
-        self._connections.pop(device_id, None)
+    def unregister(self, device_id: str, connection: _Sendable) -> None:
+        """移除某个设备的连接记录,仅当当前记录确实是这个连接实例时才移除。
+
+        避免旧连接晚于新连接退出时,把重连之后已经生效的新连接误删掉。
+        """
+        if self._connections.get(device_id) is connection:
+            self._connections.pop(device_id, None)
 
     def is_connected(self, device_id: str) -> bool:
         """返回某个设备当前是否有活跃连接。"""
