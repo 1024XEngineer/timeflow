@@ -117,7 +117,12 @@ class ScheduleDraftParser:
             longitude=None,
             geofence_radius_meters=DEFAULT_GEOFENCE_RADIUS_METERS,
             time_remind_offset_minutes=DEFAULT_TIME_REMIND_OFFSET_MINUTES,
-            missing_fields=cls._derive_missing_fields(schedule_type, start_time),
+            missing_fields=cls._derive_missing_fields(
+                schedule_type,
+                start_time,
+                latitude=None,
+                longitude=None,
+            ),
             ambiguous_fields=(),
             needs_confirmation=True,
         )
@@ -154,10 +159,17 @@ class ScheduleDraftParser:
     def _derive_missing_fields(
         schedule_type: str,
         start_time: str | None,
+        latitude: float | None,
+        longitude: float | None,
     ) -> tuple[str, ...]:
         missing: list[str] = []
         if schedule_type == "time" and start_time is None:
             missing.append("start_time")
+        if schedule_type == "location":
+            if latitude is None:
+                missing.append("latitude")
+            if longitude is None:
+                missing.append("longitude")
         return tuple(missing)
 
 

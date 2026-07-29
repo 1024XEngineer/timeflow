@@ -87,7 +87,7 @@ def test_schedule_parser_builds_structured_draft() -> None:
 
 
 def test_schedule_parser_fills_location_must_have_fields() -> None:
-    """Location schedules still expose missing coordinates for frontend completion."""
+    """Location drafts must expose missing coordinates for frontend selection."""
     client = FakeLLMClient(
         {
             "title": "拜访客户",
@@ -101,7 +101,7 @@ def test_schedule_parser_fills_location_must_have_fields() -> None:
     result = asyncio.run(parser.parse("去上海中心拜访客户"))
 
     assert result.draft.schedule_type == "location"
-    assert result.draft.missing_fields == ()
+    assert result.draft.missing_fields == ("latitude", "longitude")
     assert result.draft.geofence_radius_meters == DEFAULT_GEOFENCE_RADIUS_METERS
     assert result.draft.time_remind_offset_minutes == DEFAULT_TIME_REMIND_OFFSET_MINUTES
     assert result.draft.timezone == "Asia/Shanghai"
