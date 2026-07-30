@@ -1,10 +1,71 @@
 """Tests for external model gateway helpers."""
 
+import asyncio
+import json
+from collections.abc import AsyncIterator
+
 import pytest
 
-from timeflow.business.voice import SpeechRecognitionConfig
-from timeflow.gateway.aliyun_asr import AliyunASRClient
+from timeflow.business.voice import SpeechRecognitionConfig, SpeechRecognitionResult
+from timeflow.gateway.aliyun_asr import ASR_CLOSE_TIMEOUT_SECONDS, AliyunASRClient
 from timeflow.gateway.openai_llm import OpenAILLMClient, OpenAIResponseError
+
+
+class FakeAliyunWebSocket:
+    """Minimal provider socket that proves send and receive run concurrently."""
+
+    def __init__(self) -> None:
+        self.sent_events: list[dict[str, object]] = []
+        self.incoming: asyncio.Queue[str] = asyncio.Queue()
+        self.partial_consumed = asyncio.Event()
+
+    async def send(self, raw_message: str) -> None:
+        event = json.loads(raw_message)
+        self.sent_events.append(event)
+        event_type = event["type"]
+        if event_type == "session.update":
+            await self.incoming.put(json.dumps({"type": "session.updated"}))
+        elif event_type == "input_audio_buffer.append" and not self.partial_consumed.is_set():
+            await self.incoming.put(
+                json.dumps(
+                    {
+                        "type": "conversation.item.input_audio_transcription.text",
+                        "stash": "明天",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        elif event_type == "session.finish":
+            await self.incoming.put(
+                json.dumps(
+                    {
+                        "type": "conversation.item.input_audio_transcription.completed",
+                        "transcript": "明天下午三点开会",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            await self.incoming.put(json.dumps({"type": "session.finished"}))
+
+    def __aiter__(self) -> "FakeAliyunWebSocket":
+        return self
+
+    async def __anext__(self) -> str:
+        message = await self.incoming.get()
+        if "input_audio_transcription.text" in message:
+            self.partial_consumed.set()
+        return message
+
+
+class FakeAliyunConnection:
+    def __init__(self, websocket: FakeAliyunWebSocket) -> None:
+        self.websocket = websocket
+
+    async def __aenter__(self) -> FakeAliyunWebSocket:
+        return self.websocket
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
 
 
 def test_aliyun_asr_extracts_transcript_from_nested_event() -> None:
@@ -71,15 +132,33 @@ def test_aliyun_asr_builds_doc_aligned_session_update_event() -> None:
 
     assert event["type"] == "session.update"
     assert event["session"] == {
+        "modalities": ["text"],
         "input_audio_format": "pcm",
         "sample_rate": 16000,
         "input_audio_transcription": {"language": "zh"},
-        "turn_detection": None,
+        "turn_detection": {
+            "type": "server_vad",
+            "threshold": 0.2,
+            "silence_duration_ms": 400,
+        },
     }
 
 
+def test_aliyun_asr_omits_language_when_auto_detection_is_requested() -> None:
+    class SettingsStub:
+        ws_url = "wss://example.com/api-ws/v1/realtime"
+        api_key = "key"
+        model = "new-model"
+
+    client = AliyunASRClient(SettingsStub())
+
+    event = client._build_session_update_event(SpeechRecognitionConfig(language=None))
+
+    assert event["session"]["input_audio_transcription"] == {}
+
+
 def test_aliyun_asr_builds_session_finish_event() -> None:
-    """Manual mode must explicitly close the session after commit."""
+    """Every mode must explicitly close the session after audio input ends."""
 
     class SettingsStub:
         ws_url = "wss://example.com/api-ws/v1/realtime"
@@ -90,6 +169,54 @@ def test_aliyun_asr_builds_session_finish_event() -> None:
     event = client._build_session_finish_event()
 
     assert event == {"event_id": "session.finish_1", "type": "session.finish"}
+
+
+def test_aliyun_asr_builds_manual_turn_detection() -> None:
+    """Manual endpointing disables server VAD and relies on an explicit commit."""
+
+    assert (
+        AliyunASRClient._build_turn_detection(SpeechRecognitionConfig(endpointing_mode="manual"))
+        is None
+    )
+
+
+def test_aliyun_asr_streams_vad_audio_while_consuming_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A partial provider event is consumed before the next input chunk is produced."""
+
+    class SettingsStub:
+        ws_url = "wss://example.com/api-ws/v1/realtime"
+        api_key = "key"
+        model = "qwen3-asr-flash-realtime"
+
+    websocket = FakeAliyunWebSocket()
+    connect_options: dict[str, object] = {}
+
+    def fake_connect(*_: object, **__: object) -> FakeAliyunConnection:
+        connect_options.update(__)
+        return FakeAliyunConnection(websocket)
+
+    monkeypatch.setattr("timeflow.gateway.aliyun_asr.connect", fake_connect)
+
+    async def audio_chunks() -> AsyncIterator[bytes]:
+        yield b"first"
+        await asyncio.wait_for(websocket.partial_consumed.wait(), timeout=1)
+        yield b"second"
+
+    async def scenario() -> SpeechRecognitionResult:
+        client = AliyunASRClient(SettingsStub())
+        return await asyncio.wait_for(client.recognize(audio_chunks()), timeout=1)
+
+    result = asyncio.run(scenario())
+    sent_types = [event["type"] for event in websocket.sent_events]
+
+    assert result.text == "明天下午三点开会"
+    assert sent_types.count("input_audio_buffer.append") == 2
+    assert "input_audio_buffer.commit" not in sent_types
+    assert sent_types[-1] == "session.finish"
+    assert result.raw_events[-1]["type"] == "session.finished"
+    assert connect_options["close_timeout"] == ASR_CLOSE_TIMEOUT_SECONDS
 
 
 def test_openai_builds_responses_api_input() -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from collections.abc import AsyncIterable
@@ -17,13 +18,20 @@ from timeflow.business.voice import (
     SpeechRecognitionResult,
 )
 
+ASR_CLOSE_TIMEOUT_SECONDS = 0.1
+
 
 class AliyunASRSettings(Protocol):
     """Shape required by the ASR client."""
 
-    ws_url: str
-    api_key: str
-    model: str
+    @property
+    def ws_url(self) -> str: ...
+
+    @property
+    def api_key(self) -> str: ...
+
+    @property
+    def model(self) -> str: ...
 
 
 class AliyunASRClientError(RuntimeError):
@@ -52,50 +60,102 @@ class AliyunASRClient(SpeechRecognitionPort):
             additional_headers=self._build_headers(),
             ping_interval=20,
             ping_timeout=20,
+            close_timeout=ASR_CLOSE_TIMEOUT_SECONDS,
         ) as websocket:
             await websocket.send(json.dumps(self._build_session_update_event(speech_config)))
 
-            async for chunk in audio_chunks:
-                await websocket.send(json.dumps(self._build_audio_append_event(chunk)))
+            session_updated = asyncio.Event()
+            sender = asyncio.create_task(
+                self._send_audio(
+                    websocket,
+                    audio_chunks,
+                    speech_config,
+                    session_updated,
+                )
+            )
+            receiver = asyncio.create_task(
+                self._receive_result(
+                    websocket,
+                    collected_events,
+                    session_updated,
+                )
+            )
+            try:
+                _, result = await asyncio.gather(sender, receiver)
+            finally:
+                for task in (sender, receiver):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(sender, receiver, return_exceptions=True)
 
+        return result
+
+    async def _send_audio(
+        self,
+        websocket: Any,
+        audio_chunks: AsyncIterable[bytes],
+        speech_config: SpeechRecognitionConfig,
+        session_updated: asyncio.Event,
+    ) -> None:
+        """Forward chunks while the receive task consumes provider events."""
+        try:
+            await asyncio.wait_for(session_updated.wait(), timeout=10)
+        except TimeoutError as exc:
+            raise AliyunASRClientError("ASR session update timed out") from exc
+
+        async for chunk in audio_chunks:
+            await websocket.send(json.dumps(self._build_audio_append_event(chunk)))
+
+        if speech_config.endpointing_mode == "manual":
             await websocket.send(json.dumps(self._build_commit_event()))
-            await websocket.send(json.dumps(self._build_session_finish_event()))
+        await websocket.send(json.dumps(self._build_session_finish_event()))
 
-            transcript: str | None = None
-            async for raw_message in websocket:
-                event = self._parse_event(raw_message)
-                collected_events.append(event)
-                event_type = event.get("type")
+    async def _receive_result(
+        self,
+        websocket: Any,
+        collected_events: list[dict[str, Any]],
+        session_updated: asyncio.Event,
+    ) -> SpeechRecognitionResult:
+        """Consume realtime provider events and combine all completed VAD segments."""
+        completed_transcripts: list[str] = []
+        latest_partial: str | None = None
 
-                if event_type in {
-                    "conversation.item.input_audio_transcription.text",
-                    "conversation.item.input_audio_transcription.completed",
-                    "transcription.completed",
-                    "asr.completed",
-                }:
-                    transcript = self._extract_text(event) or transcript
-                    if (
-                        event_type
-                        in {
-                            "conversation.item.input_audio_transcription.completed",
-                            "transcription.completed",
-                            "asr.completed",
-                        }
-                        and transcript
-                    ):
-                        return SpeechRecognitionResult(
-                            text=transcript,
-                            raw_events=tuple(collected_events),
-                        )
-                    continue
+        async for raw_message in websocket:
+            event = self._parse_event(raw_message)
+            collected_events.append(event)
+            event_type = event.get("type")
 
-                if event_type == "session.finished":
-                    if transcript:
-                        return SpeechRecognitionResult(
-                            text=transcript,
-                            raw_events=tuple(collected_events),
-                        )
-                    raise AliyunASRClientError("ASR session finished without a transcript")
+            if event_type == "session.updated":
+                session_updated.set()
+                continue
+
+            if event_type in {"error", "session.error"}:
+                raise AliyunASRClientError(self._extract_error_message(event))
+
+            if event_type == "conversation.item.input_audio_transcription.text":
+                extracted = self._extract_text(event)
+                latest_partial = extracted or latest_partial
+                continue
+
+            if event_type in {
+                "conversation.item.input_audio_transcription.completed",
+                "transcription.completed",
+                "asr.completed",
+            }:
+                transcript = self._extract_text(event)
+                if transcript:
+                    completed_transcripts.append(transcript)
+                    latest_partial = transcript
+                continue
+
+            if event_type == "session.finished":
+                transcript = "".join(completed_transcripts).strip() or latest_partial
+                if transcript:
+                    return SpeechRecognitionResult(
+                        text=transcript,
+                        raw_events=tuple(collected_events),
+                    )
+                raise AliyunASRClientError("ASR session finished without a transcript")
 
         raise AliyunASRClientError("ASR stream ended without a transcript")
 
@@ -113,17 +173,30 @@ class AliyunASRClient(SpeechRecognitionPort):
         return urlunparse(parsed._replace(query=urlencode(query)))
 
     def _build_session_update_event(self, speech_config: SpeechRecognitionConfig) -> dict[str, Any]:
+        transcription: dict[str, Any] = {}
+        language = self._normalize_language(speech_config.language)
+        if language is not None:
+            transcription["language"] = language
         return {
             "event_id": self._next_event_id("session.update"),
             "type": "session.update",
             "session": {
+                "modalities": ["text"],
                 "input_audio_format": self._normalize_audio_format(speech_config.audio_format),
                 "sample_rate": speech_config.sample_rate_hz,
-                "input_audio_transcription": {
-                    "language": self._normalize_language(speech_config.language),
-                },
-                "turn_detection": None,
+                "input_audio_transcription": transcription,
+                "turn_detection": self._build_turn_detection(speech_config),
             },
+        }
+
+    @staticmethod
+    def _build_turn_detection(speech_config: SpeechRecognitionConfig) -> dict[str, Any] | None:
+        if speech_config.endpointing_mode == "manual":
+            return None
+        return {
+            "type": "server_vad",
+            "threshold": speech_config.vad_threshold,
+            "silence_duration_ms": speech_config.vad_silence_duration_ms,
         }
 
     def _build_audio_append_event(self, chunk: bytes) -> dict[str, Any]:
@@ -213,7 +286,7 @@ class AliyunASRClient(SpeechRecognitionPort):
             stripped = value.strip()
             return stripped or None
         if isinstance(value, dict):
-            for key in ("transcript", "text", "value", "content"):
+            for key in ("message", "transcript", "text", "value", "content"):
                 candidate = value.get(key)
                 extracted = cls._extract_string(candidate)
                 if extracted:
@@ -229,4 +302,16 @@ class AliyunASRClient(SpeechRecognitionPort):
             return combined or None
         return None
 
-__all__ = ["AliyunASRClient", "AliyunASRClientError", "AliyunASRSettings"]
+    @classmethod
+    def _extract_error_message(cls, event: dict[str, Any]) -> str:
+        error = event.get("error")
+        extracted = cls._extract_string(error)
+        return extracted or "ASR provider returned an error"
+
+
+__all__ = [
+    "ASR_CLOSE_TIMEOUT_SECONDS",
+    "AliyunASRClient",
+    "AliyunASRClientError",
+    "AliyunASRSettings",
+]

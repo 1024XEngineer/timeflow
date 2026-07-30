@@ -13,6 +13,7 @@ from timeflow.business.voice import (
     SpeechRecognitionResult,
     StructuredLLMResult,
     VoiceScheduleParsingService,
+    VoiceScheduleProcessingError,
 )
 from timeflow.intelligence.schedule_parser import ScheduleDraftParser
 
@@ -118,3 +119,23 @@ def test_voice_service_can_parse_existing_text() -> None:
     assert speech_client.chunks == []
     assert result.draft.schedule_type == "location"
     assert result.draft.title == "取文件"
+
+
+def test_voice_service_maps_speech_provider_failure_to_asr_stage() -> None:
+    class FailingSpeechClient(FakeSpeechClient):
+        async def recognize(
+            self,
+            audio_chunks: AsyncIterable[bytes],
+            config: SpeechRecognitionConfig | None = None,
+        ) -> SpeechRecognitionResult:
+            del audio_chunks, config
+            raise RuntimeError("provider unavailable")
+
+    service = VoiceScheduleParsingService(FailingSpeechClient(""), FakeLLMClient({}))
+
+    try:
+        asyncio.run(service.parse_audio(audio_stream()))
+    except VoiceScheduleProcessingError as exc:
+        assert exc.stage == "asr"
+    else:
+        raise AssertionError("VoiceScheduleProcessingError was not raised")

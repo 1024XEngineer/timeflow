@@ -13,9 +13,14 @@ from timeflow.business.voice import StructuredLLMPort, StructuredLLMResult
 class OpenAISettings(Protocol):
     """Shape required by the OpenAI client."""
 
-    base_url: str
-    api_key: str
-    model: str
+    @property
+    def base_url(self) -> str: ...
+
+    @property
+    def api_key(self) -> str: ...
+
+    @property
+    def model(self) -> str: ...
 
 
 class OpenAIResponseError(RuntimeError):
