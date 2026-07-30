@@ -242,3 +242,17 @@ def test_openai_response_error_is_runtime_error() -> None:
     """Callers can catch provider failures through one gateway exception."""
     with pytest.raises(OpenAIResponseError):
         raise OpenAIResponseError("OpenAI returned empty JSON text")
+
+
+def test_openai_client_defers_missing_credentials_until_first_request() -> None:
+    class SettingsStub:
+        base_url = "https://api.openai.com/v1"
+        api_key = ""
+        model = "gpt-4.1-mini"
+
+    client = OpenAILLMClient(SettingsStub())
+
+    with pytest.raises(OpenAIResponseError, match="API key is not configured"):
+        client._get_client()
+
+    asyncio.run(client.aclose())

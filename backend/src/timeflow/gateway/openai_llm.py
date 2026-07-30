@@ -32,7 +32,7 @@ class OpenAILLMClient(StructuredLLMPort):
 
     def __init__(self, settings: OpenAISettings) -> None:
         self._settings = settings
-        self._client = AsyncOpenAI(api_key=settings.api_key, base_url=settings.base_url)
+        self._client: AsyncOpenAI | None = None
 
     async def generate_text(
         self,
@@ -42,7 +42,7 @@ class OpenAILLMClient(StructuredLLMPort):
         temperature: float | None = None,
     ) -> str:
         """Generate free-form text from a single prompt."""
-        response = await self._client.responses.create(
+        response = await self._get_client().responses.create(
             model=self._settings.model,
             input=cast(Any, self._build_input(prompt, system_prompt)),
             temperature=temperature,
@@ -62,7 +62,7 @@ class OpenAILLMClient(StructuredLLMPort):
         temperature: float | None = None,
     ) -> StructuredLLMResult:
         """Generate structured JSON that follows the provided schema."""
-        response = await self._client.responses.create(
+        response = await self._get_client().responses.create(
             model=self._settings.model,
             input=cast(Any, self._build_input(prompt, system_prompt)),
             temperature=temperature,
@@ -94,7 +94,21 @@ class OpenAILLMClient(StructuredLLMPort):
 
     async def aclose(self) -> None:
         """Release the underlying HTTP resources."""
+        if self._client is None:
+            return
         await self._client.close()
+        self._client = None
+
+    def _get_client(self) -> AsyncOpenAI:
+        if self._client is not None:
+            return self._client
+        if not self._settings.api_key.strip():
+            raise OpenAIResponseError("OpenAI API key is not configured")
+        self._client = AsyncOpenAI(
+            api_key=self._settings.api_key,
+            base_url=self._settings.base_url,
+        )
+        return self._client
 
     @staticmethod
     def _build_input(prompt: str, system_prompt: str | None) -> list[dict[str, Any]]:
