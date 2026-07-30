@@ -126,7 +126,7 @@ class ScheduleDeleted(BaseModel):
 
     type: Literal["schedule.deleted"] = "schedule.deleted"
     schedule_id: str
-    deleted: bool
+    deleted: Literal[True]
     timestamp: str
 
 

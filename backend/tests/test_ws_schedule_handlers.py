@@ -314,3 +314,47 @@ def test_schedule_deleted_handler_returns_validation_error() -> None:
     assert response["schedule_id"] == "schedule_1"
     assert response["ok"] is False
     assert response["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_schedule_deleted_handler_rejects_deleted_false() -> None:
+    """`deleted: false` 不能被当成合法请求处理并误删日程,必须走校验失败分支。"""
+    handlers = _handlers()
+
+    response = asyncio.run(
+        handlers.handle_deleted(
+            {
+                "type": "schedule.deleted",
+                "schedule_id": "schedule_1",
+                "deleted": False,
+                "timestamp": "2026-07-30T15:00:00+08:00",
+            },
+            "device_1",
+        )
+    )
+
+    assert response["type"] == "schedule.deleted.ack"
+    assert response["ok"] is False
+    assert response["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_schedule_deleted_handler_returns_validation_error_for_blank_schedule_id() -> None:
+    """空白 schedule_id 能通过 pydantic(仍是 str),但业务层 `_require_text` 会拒绝;
+    这里要落到 schedule.deleted.ack 的 VALIDATION_ERROR 分支,而不是路由器兜底的 INTERNAL_ERROR。"""
+    handlers = _handlers()
+
+    response = asyncio.run(
+        handlers.handle_deleted(
+            {
+                "type": "schedule.deleted",
+                "schedule_id": "   ",
+                "deleted": True,
+                "timestamp": "2026-07-30T15:00:00+08:00",
+            },
+            "device_1",
+        )
+    )
+
+    assert response["type"] == "schedule.deleted.ack"
+    assert response["ok"] is False
+    assert response["error"]["code"] == "VALIDATION_ERROR"
+    assert response["error"]["details"]["field"] == "schedule_id"

@@ -187,6 +187,16 @@ class ScheduleWebSocketHandlers:
                     details={"reason": "schedule_not_found"},
                 ),
             ).model_dump()
+        except ScheduleValidationError as exc:
+            return ScheduleDeletedAck(
+                schedule_id=message.schedule_id,
+                ok=False,
+                error=ErrorDetail(
+                    code="VALIDATION_ERROR",
+                    message="请求参数不合法",
+                    details={"field": exc.field, "reason": exc.reason},
+                ),
+            ).model_dump()
 
         return ScheduleDeletedAck(schedule_id=message.schedule_id, ok=True).model_dump()
 
