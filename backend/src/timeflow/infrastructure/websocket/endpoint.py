@@ -101,12 +101,14 @@ async def run_websocket_session(
         while True:
             raw_message = await _receive_message(websocket)
             if raw_message is None:
-                await websocket.send_json(malformed_message_error())
+                async with connections.lock_for(device_id):
+                    await websocket.send_json(malformed_message_error())
                 continue
 
             reply = await router.dispatch(raw_message, device_id)
             if reply is not None:
-                await websocket.send_json(reply)
+                async with connections.lock_for(device_id):
+                    await websocket.send_json(reply)
     except WebSocketDisconnect:
         pass
     finally:
