@@ -173,7 +173,7 @@ class ScheduleWebSocketHandlers:
                 schedule_id=raw_schedule_id if isinstance(raw_schedule_id, str) else "",
                 ok=False,
                 error=ErrorDetail(code="VALIDATION_ERROR", message="请求参数不合法"),
-            ).model_dump()
+            ).model_dump(exclude_none=True)
 
         try:
             self._service.delete(message.schedule_id)
@@ -186,7 +186,7 @@ class ScheduleWebSocketHandlers:
                     message="日程删除失败",
                     details={"reason": "schedule_not_found"},
                 ),
-            ).model_dump()
+            ).model_dump(exclude_none=True)
         except ScheduleValidationError as exc:
             return ScheduleDeletedAck(
                 schedule_id=message.schedule_id,
@@ -196,9 +196,11 @@ class ScheduleWebSocketHandlers:
                     message="请求参数不合法",
                     details={"field": exc.field, "reason": exc.reason},
                 ),
-            ).model_dump()
+            ).model_dump(exclude_none=True)
 
-        return ScheduleDeletedAck(schedule_id=message.schedule_id, ok=True).model_dump()
+        return ScheduleDeletedAck(schedule_id=message.schedule_id, ok=True).model_dump(
+            exclude_none=True
+        )
 
     @staticmethod
     def _extract_request_id(raw_message: dict[str, Any]) -> str | None:

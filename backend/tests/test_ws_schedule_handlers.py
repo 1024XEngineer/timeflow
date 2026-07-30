@@ -270,7 +270,6 @@ def test_schedule_deleted_handler_marks_schedule_deleted() -> None:
         "type": "schedule.deleted.ack",
         "schedule_id": schedule_id,
         "ok": True,
-        "error": None,
     }
 
 
