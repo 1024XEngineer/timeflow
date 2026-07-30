@@ -7,6 +7,16 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
 ScheduleType = Literal["time", "location"]
+VoiceProcessingStage = Literal["asr", "llm"]
+SpeechEndpointingMode = Literal["manual", "server_vad"]
+
+
+class VoiceScheduleProcessingError(RuntimeError):
+    """Represent a provider-independent failure in the voice parsing pipeline."""
+
+    def __init__(self, stage: VoiceProcessingStage) -> None:
+        super().__init__(f"voice schedule processing failed at {stage} stage")
+        self.stage = stage
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,7 +26,10 @@ class SpeechRecognitionConfig:
     audio_format: str = "pcm_s16le"
     sample_rate_hz: int = 16000
     channels: int = 1
-    language: str | None = None
+    language: str | None = "zh"
+    endpointing_mode: SpeechEndpointingMode = "server_vad"
+    vad_threshold: float = 0.2
+    vad_silence_duration_ms: int = 400
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,13 +157,23 @@ class VoiceScheduleParsingService:
         config: SpeechRecognitionConfig | None = None,
     ) -> VoiceScheduleParseResult:
         """Transcribe the audio stream and parse the resulting transcript."""
-        speech = await self._speech_client.recognize(audio_chunks, config)
-        parsed = await self._draft_interpreter.parse(speech.text)
+        try:
+            speech = await self._speech_client.recognize(audio_chunks, config)
+        except Exception as exc:
+            raise VoiceScheduleProcessingError("asr") from exc
+
+        try:
+            parsed = await self._draft_interpreter.parse(speech.text)
+        except Exception as exc:
+            raise VoiceScheduleProcessingError("llm") from exc
         return VoiceScheduleParseResult(speech=speech, parsed=parsed)
 
     async def parse_text(self, asr_text: str) -> ScheduleParseResult:
         """Parse already recognized text without calling ASR again."""
-        return await self._draft_interpreter.parse(asr_text)
+        try:
+            return await self._draft_interpreter.parse(asr_text)
+        except Exception as exc:
+            raise VoiceScheduleProcessingError("llm") from exc
 
 
 __all__ = [
@@ -158,6 +181,7 @@ __all__ = [
     "ScheduleDraftInterpreterPort",
     "ScheduleParseResult",
     "ScheduleType",
+    "SpeechEndpointingMode",
     "SpeechRecognitionConfig",
     "SpeechRecognitionPort",
     "SpeechRecognitionResult",
@@ -165,4 +189,6 @@ __all__ = [
     "StructuredLLMResult",
     "VoiceScheduleParseResult",
     "VoiceScheduleParsingService",
+    "VoiceScheduleProcessingError",
+    "VoiceProcessingStage",
 ]

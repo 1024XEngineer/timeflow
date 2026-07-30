@@ -29,6 +29,7 @@ from timeflow.business.voice import (
     StructuredLLMResult,
     VoiceScheduleParseResult,
     VoiceScheduleParsingService,
+    VoiceScheduleProcessingError,
 )
 
 __all__ = [
@@ -58,4 +59,5 @@ __all__ = [
     "StructuredLLMResult",
     "VoiceScheduleParseResult",
     "VoiceScheduleParsingService",
+    "VoiceScheduleProcessingError",
 ]

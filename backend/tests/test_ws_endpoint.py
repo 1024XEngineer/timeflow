@@ -1,5 +1,6 @@
 """端到端集成测试:连接 → 握手 → 路由 → 断连,走真实的 WebSocket。"""
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import FastAPI, WebSocket
@@ -10,12 +11,21 @@ from timeflow.infrastructure.websocket.endpoint import handle_session_hello, run
 from timeflow.infrastructure.websocket.router import MessageRouter
 
 
-def _build_app(router: MessageRouter, connections: ConnectionManager) -> FastAPI:
+def _build_app(
+    router: MessageRouter,
+    connections: ConnectionManager,
+    binary_handler: Callable[[bytes, str], Awaitable[dict[str, Any] | None]] | None = None,
+) -> FastAPI:
     app = FastAPI()
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:
-        await run_websocket_session(websocket, router, connections)
+        await run_websocket_session(
+            websocket,
+            router,
+            connections,
+            binary_handler=binary_handler,
+        )
 
     return app
 
@@ -91,9 +101,7 @@ def test_hello_missing_device_id_is_rejected() -> None:
 
 def test_hello_missing_app_version_is_rejected() -> None:
     """`session.hello` 缺少必填的 app_version 字段时,按 SessionHello 类型校验拒绝。"""
-    response = handle_session_hello(
-        {"type": "session.hello", "device_id": "device_1"}, "device_1"
-    )
+    response = handle_session_hello({"type": "session.hello", "device_id": "device_1"}, "device_1")
 
     assert response["type"] == "session.error"
     assert response["error"]["code"] == "INVALID_MESSAGE"
@@ -172,3 +180,29 @@ def test_non_object_json_frame_is_rejected() -> None:
         response = websocket.receive_json()
 
     assert response["error"]["code"] == "MALFORMED_MESSAGE"
+
+
+def test_binary_frame_is_dispatched_after_session_hello() -> None:
+    received: list[tuple[bytes, str]] = []
+
+    async def binary_handler(audio: bytes, device_id: str) -> dict[str, Any]:
+        received.append((audio, device_id))
+        return {"type": "binary.accepted", "ok": True}
+
+    connections = ConnectionManager()
+    client = TestClient(_build_app(MessageRouter(), connections, binary_handler))
+
+    with client.websocket_connect("/ws?device_id=device_binary") as websocket:
+        websocket.send_json(
+            {
+                "type": "session.hello",
+                "device_id": "device_binary",
+                "app_version": "1.0.0",
+            }
+        )
+        assert websocket.receive_json()["type"] == "session.ready"
+        websocket.send_bytes(b"audio-chunk")
+        response = websocket.receive_json()
+
+    assert response == {"type": "binary.accepted", "ok": True}
+    assert received == [(b"audio-chunk", "device_binary")]
