@@ -2,5 +2,14 @@
   "extends": "./node_modules/expo/tsconfig.base.json",
   "compilerOptions": {
     "strict": true
-  }
+  },
+  "exclude": [
+    "${configDir}/node_modules",
+    "${configDir}/babel.config.js",
+    "${configDir}/metro.config.js",
+    "${configDir}/jest.config.js",
+    "${configDir}/dist",
+    "${configDir}/android",
+    "${configDir}/ios"
+  ]
 }
