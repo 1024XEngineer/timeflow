@@ -13,6 +13,7 @@ from timeflow.business.schedules import (
     DEFAULT_TIME_REMIND_OFFSET_MINUTES,
     ScheduleConflict,
     ScheduleListQuery,
+    ScheduleNotFoundError,
     ScheduleRecord,
     ScheduleService,
     ScheduleStatus,
@@ -238,3 +239,29 @@ def test_schedule_service_requires_include_deleted_for_deleted_status() -> None:
     result = service.list(ScheduleListQuery(status="deleted", include_deleted=False))
 
     assert result.schedules == ()
+
+
+def test_schedule_service_delete_marks_status_and_clears_refs() -> None:
+    repository = MemoryScheduleRepository()
+    service = _service(repository)
+    service.upsert(_time_command())
+    created = repository.records["schedule_new"]
+    repository.records["schedule_new"] = replace(
+        created,
+        system_schedule_ref_id="calendar_ref_1",
+        system_alarm_ref_id="alarm_ref_1",
+    )
+
+    service.delete("schedule_new")
+
+    deleted = repository.records["schedule_new"]
+    assert deleted.status == "deleted"
+    assert deleted.system_schedule_ref_id is None
+    assert deleted.system_alarm_ref_id is None
+
+
+def test_schedule_service_delete_raises_when_not_found() -> None:
+    service = _service(MemoryScheduleRepository())
+
+    with pytest.raises(ScheduleNotFoundError):
+        service.delete("schedule_missing")
