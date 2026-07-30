@@ -52,6 +52,7 @@ export type Schedule = {
   time_triggered_at: string | null;
   geo_triggered_at: string | null;
   system_schedule_ref_id: string | null;
+  system_alarm_ref_id: string | null;
   created_at: string;
   updated_at: string;
 };
