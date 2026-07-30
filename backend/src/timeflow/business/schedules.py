@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, Protocol
 from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 DEFAULT_USER_ID = "default_user"
 DEFAULT_GEOFENCE_RADIUS_METERS = 100
@@ -166,16 +167,25 @@ class ScheduleService:
         source_mode = self._validate_source_mode(command.source_mode)
         schedule_type = self._validate_schedule_type(command.schedule_type)
         title = self._require_text(command.title, "title")
-        start_time = self._optional_text(command.start_time)
-        end_time = self._optional_text(command.end_time)
+        timezone = self._validate_timezone(command.timezone)
+        start_time, start_datetime = self._normalize_datetime(
+            command.start_time,
+            timezone,
+            "start_time",
+        )
+        end_time, end_datetime = self._normalize_datetime(
+            command.end_time,
+            timezone,
+            "end_time",
+        )
         latitude = self._validate_latitude(command.latitude)
         longitude = self._validate_longitude(command.longitude)
         self._validate_type_requirements(schedule_type, start_time, latitude, longitude)
-        self._validate_end_time(start_time, end_time)
+        self._validate_time_range(start_datetime, end_datetime)
 
         existing = self._load_existing(command.schedule_id)
         schedule_id = existing.id if existing is not None else self._id_factory()
-        now = self._now_provider().isoformat()
+        now = self._normalize_system_time(self._now_provider())
         geofence_armed = (
             command.geofence_armed
             if command.geofence_armed is not None
@@ -203,7 +213,7 @@ class ScheduleService:
             notes=self._optional_text(command.notes),
             start_time=start_time,
             end_time=end_time,
-            timezone=self._optional_text(command.timezone),
+            timezone=timezone,
             location_name=self._optional_text(command.location_name),
             location_address=self._optional_text(command.location_address),
             latitude=latitude,
@@ -309,9 +319,69 @@ class ScheduleService:
             )
 
     @staticmethod
-    def _validate_end_time(start_time: str | None, end_time: str | None) -> None:
+    def _validate_time_range(
+        start_time: datetime | None,
+        end_time: datetime | None,
+    ) -> None:
         if end_time is not None and start_time is None:
             raise ScheduleValidationError("end_time", "end_time requires start_time")
+        if start_time is not None and end_time is not None and end_time < start_time:
+            raise ScheduleValidationError(
+                "end_time",
+                "end_time must be greater than or equal to start_time",
+            )
+
+    @classmethod
+    def _validate_timezone(cls, value: str | None) -> str | None:
+        timezone = cls._optional_text(value)
+        if timezone is None:
+            return None
+        try:
+            ZoneInfo(timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise ScheduleValidationError(
+                "timezone",
+                "timezone must be a valid IANA timezone",
+            ) from exc
+        return timezone
+
+    @classmethod
+    def _normalize_datetime(
+        cls,
+        value: str | None,
+        timezone: str | None,
+        field: str,
+    ) -> tuple[str | None, datetime | None]:
+        normalized = cls._optional_text(value)
+        if normalized is None:
+            return None, None
+        if "T" not in normalized:
+            raise ScheduleValidationError(field, f"{field} must be an ISO-8601 datetime")
+
+        try:
+            parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ScheduleValidationError(
+                field,
+                f"{field} must be an ISO-8601 datetime",
+            ) from exc
+
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            if timezone is None:
+                raise ScheduleValidationError(
+                    "timezone",
+                    f"timezone is required when {field} has no UTC offset",
+                )
+            parsed = parsed.replace(tzinfo=ZoneInfo(timezone))
+
+        utc_value = parsed.astimezone(UTC)
+        return utc_value.isoformat(timespec="seconds"), utc_value
+
+    @staticmethod
+    def _normalize_system_time(value: datetime) -> str:
+        if value.tzinfo is None or value.utcoffset() is None:
+            value = value.replace(tzinfo=UTC)
+        return value.astimezone(UTC).isoformat(timespec="seconds")
 
     @staticmethod
     def _require_text(value: str | None, field: str) -> str:

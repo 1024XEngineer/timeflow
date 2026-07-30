@@ -133,6 +133,33 @@ def test_schedule_upsert_handler_returns_validation_error() -> None:
     assert response["error"]["details"]["field"] == "start_time"
 
 
+def test_schedule_upsert_handler_maps_invalid_time_to_validation_error() -> None:
+    handlers = _handlers()
+
+    response = asyncio.run(
+        handlers.handle_upsert(
+            {
+                "type": "schedule.upsert.command",
+                "request_id": "req_invalid_time_001",
+                "payload": {
+                    "schedule_id": None,
+                    "source_mode": "manual",
+                    "schedule_type": "time",
+                    "title": "开会",
+                    "start_time": "not-a-time",
+                    "timezone": "Asia/Shanghai",
+                },
+            },
+            "device_1",
+        )
+    )
+
+    assert response["type"] == "schedule.upsert.error"
+    assert response["ok"] is False
+    assert response["error"]["code"] == "VALIDATION_ERROR"
+    assert response["error"]["details"]["field"] == "start_time"
+
+
 def test_schedule_list_handler_returns_contract_result() -> None:
     repository = MemoryScheduleRepository()
     service = ScheduleService(

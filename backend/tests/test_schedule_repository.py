@@ -2,7 +2,12 @@
 
 from datetime import UTC, datetime
 
-from timeflow.business.schedules import ScheduleRecord
+from timeflow.business.schedules import (
+    ScheduleListQuery,
+    ScheduleRecord,
+    ScheduleService,
+    ScheduleUpsertCommand,
+)
 from timeflow.data.database import Base, build_engine, build_session_factory
 from timeflow.data.schedule_repository import SQLAlchemyScheduleRepository
 
@@ -53,7 +58,7 @@ def test_schedule_repository_saves_and_gets_record() -> None:
     record = _record(
         "schedule_1",
         title="开会",
-        start_time="2026-07-30T15:00:00+08:00",
+        start_time="2026-07-30T07:00:00+00:00",
         created_at="2026-07-30T09:00:00+00:00",
     )
 
@@ -79,7 +84,7 @@ def test_schedule_repository_lists_start_time_first_and_excludes_deleted() -> No
         _record(
             "schedule_time",
             title="开会",
-            start_time="2026-07-30T15:00:00+08:00",
+            start_time="2026-07-30T07:00:00+00:00",
             created_at="2026-07-30T10:00:00+00:00",
         )
     )
@@ -87,7 +92,7 @@ def test_schedule_repository_lists_start_time_first_and_excludes_deleted() -> No
         _record(
             "schedule_deleted",
             title="删除项",
-            start_time="2026-07-30T14:00:00+08:00",
+            start_time="2026-07-30T06:00:00+00:00",
             created_at="2026-07-30T09:00:00+00:00",
             status="deleted",
         )
@@ -104,17 +109,56 @@ def test_schedule_repository_finds_overlapping_time_conflicts() -> None:
         _record(
             "schedule_existing",
             title="已有日程",
-            start_time="2026-07-30T15:00:00+08:00",
+            start_time="2026-07-30T07:00:00+00:00",
             created_at="2026-07-30T09:00:00+00:00",
         )
     )
 
     conflicts = repository.find_time_conflicts(
         user_id="default_user",
-        start_time="2026-07-30T15:00:00+08:00",
+        start_time="2026-07-30T07:00:00+00:00",
         end_time=None,
         exclude_schedule_id=None,
     )
 
     assert len(conflicts) == 1
     assert conflicts[0].schedule_id == "schedule_existing"
+
+
+def test_schedule_repository_lists_different_offsets_by_absolute_time() -> None:
+    repository = _repository()
+    schedule_ids = iter(("schedule_earlier", "schedule_later"))
+    service = ScheduleService(repository, id_factory=lambda: next(schedule_ids))
+
+    def command(title: str, start_time: str) -> ScheduleUpsertCommand:
+        return ScheduleUpsertCommand(
+            schedule_id=None,
+            source_mode="manual",
+            schedule_type="time",
+            title=title,
+            notes=None,
+            start_time=start_time,
+            end_time=None,
+            timezone=None,
+            location_name=None,
+            location_address=None,
+            latitude=None,
+            longitude=None,
+            geofence_radius_meters=None,
+            geofence_armed=None,
+            time_remind_offset_minutes=None,
+        )
+
+    service.upsert(command("较早日程", "2026-07-31T00:30:00+14:00"))
+    service.upsert(command("较晚日程", "2026-07-30T23:00:00-12:00"))
+
+    result = service.list(ScheduleListQuery(status=None, include_deleted=False))
+
+    assert [schedule.id for schedule in result.schedules] == [
+        "schedule_earlier",
+        "schedule_later",
+    ]
+    assert [schedule.start_time for schedule in result.schedules] == [
+        "2026-07-30T10:30:00+00:00",
+        "2026-07-31T11:00:00+00:00",
+    ]

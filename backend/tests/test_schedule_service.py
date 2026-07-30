@@ -117,6 +117,7 @@ def test_schedule_service_creates_time_schedule_with_defaults() -> None:
     assert result.conflicts == ()
     assert saved.user_id == "default_user"
     assert saved.status == "scheduled"
+    assert saved.start_time == "2026-07-30T07:00:00+00:00"
     assert saved.geofence_radius_meters == DEFAULT_GEOFENCE_RADIUS_METERS
     assert saved.geofence_armed is False
     assert saved.time_remind_offset_minutes == DEFAULT_TIME_REMIND_OFFSET_MINUTES
@@ -147,6 +148,55 @@ def test_schedule_service_requires_time_for_time_schedule() -> None:
         service.upsert(_time_command(start_time=None))
 
     assert exc_info.value.field == "start_time"
+
+
+def test_schedule_service_normalizes_local_time_with_iana_timezone() -> None:
+    repository = MemoryScheduleRepository()
+    service = _service(repository)
+
+    result = service.upsert(
+        _time_command(
+            start_time="2026-07-31T15:00",
+            end_time="2026-07-31T16:00",
+            timezone="Asia/Shanghai",
+        )
+    )
+
+    saved = repository.records[result.schedule_id]
+    assert saved.start_time == "2026-07-31T07:00:00+00:00"
+    assert saved.end_time == "2026-07-31T08:00:00+00:00"
+
+
+def test_schedule_service_rejects_malformed_time() -> None:
+    service = _service(MemoryScheduleRepository())
+
+    with pytest.raises(ScheduleValidationError) as exc_info:
+        service.upsert(_time_command(start_time="tomorrow at three"))
+
+    assert exc_info.value.field == "start_time"
+
+
+def test_schedule_service_requires_timezone_for_local_time() -> None:
+    service = _service(MemoryScheduleRepository())
+
+    with pytest.raises(ScheduleValidationError) as exc_info:
+        service.upsert(_time_command(start_time="2026-07-31T15:00", timezone=None))
+
+    assert exc_info.value.field == "timezone"
+
+
+def test_schedule_service_rejects_end_time_before_start_time() -> None:
+    service = _service(MemoryScheduleRepository())
+
+    with pytest.raises(ScheduleValidationError) as exc_info:
+        service.upsert(
+            _time_command(
+                start_time="2026-07-31T15:00:00+08:00",
+                end_time="2026-07-31T14:59:00+08:00",
+            )
+        )
+
+    assert exc_info.value.field == "end_time"
 
 
 def test_schedule_service_requires_coordinates_for_location_schedule() -> None:
