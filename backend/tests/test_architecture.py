@@ -23,6 +23,14 @@ WEBSOCKET_FORBIDDEN_IMPORTS = {
     "timeflow.intelligence",
 }
 
+WORKERS_FORBIDDEN_IMPORTS = {
+    "sqlalchemy",
+    "timeflow.api",
+    "timeflow.data",
+    "timeflow.gateway",
+    "timeflow.intelligence",
+}
+
 
 def _find_forbidden_imports(root: Path, forbidden: set[str]) -> list[str]:
     """Return `path:line imports name` for every import outside the allowed set."""
@@ -58,6 +66,15 @@ def test_websocket_layer_does_not_depend_on_data_gateway_or_intelligence() -> No
     """`infrastructure/websocket` may only reach `business`, FastAPI, and Pydantic."""
     violations = _find_forbidden_imports(
         SRC_ROOT / "infrastructure" / "websocket", WEBSOCKET_FORBIDDEN_IMPORTS
+    )
+
+    assert violations == []
+
+
+def test_workers_layer_does_not_depend_on_data_gateway_or_intelligence() -> None:
+    """`infrastructure/workers` may only reach `business` and sibling `infrastructure` code."""
+    violations = _find_forbidden_imports(
+        SRC_ROOT / "infrastructure" / "workers", WORKERS_FORBIDDEN_IMPORTS
     )
 
     assert violations == []

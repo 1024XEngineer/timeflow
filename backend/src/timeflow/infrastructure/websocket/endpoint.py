@@ -147,12 +147,14 @@ async def run_websocket_session(
 
             raw_message = frame.message
             if raw_message is None:
-                await websocket.send_json(malformed_message_error())
+                async with connections.lock_for(device_id):
+                    await websocket.send_json(malformed_message_error())
                 continue
 
             text_reply = await router.dispatch(raw_message, device_id)
             if text_reply is not None:
-                await websocket.send_json(text_reply)
+                async with connections.lock_for(device_id):
+                    await websocket.send_json(text_reply)
                 if reply_sent_handler is not None:
                     await reply_sent_handler(text_reply, device_id)
     except WebSocketDisconnect:

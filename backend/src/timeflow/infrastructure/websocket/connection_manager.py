@@ -1,5 +1,6 @@
 """按 device_id 追踪活跃 WS 连接,支持服务端主动推送(尽力而为,不保证送达)。"""
 
+import asyncio
 from typing import Any, Protocol
 
 
@@ -12,6 +13,7 @@ class ConnectionManager:
 
     def __init__(self) -> None:
         self._connections: dict[str, _Sendable] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
 
     def register(self, device_id: str, connection: _Sendable) -> None:
         """注册某个设备当前的活跃连接,替换掉之前的连接(如果有)。"""
@@ -29,10 +31,19 @@ class ConnectionManager:
         """返回某个设备当前是否有活跃连接。"""
         return device_id in self._connections
 
+    def lock_for(self, device_id: str) -> asyncio.Lock:
+        """返回该 device_id 专属的发送锁,不存在时惰性创建;跨重连复用同一把锁。
+
+        WebSocket.send() 底层没有并发保护,worker 和收发循环自己都可能往同一条
+        连接发消息,任何写入方都必须先拿到这把锁再发送。
+        """
+        return self._locks.setdefault(device_id, asyncio.Lock())
+
     async def send(self, device_id: str, message: dict[str, Any]) -> bool:
         """向指定设备推送一条消息。设备不在线时返回 False,不抛异常。"""
         connection = self._connections.get(device_id)
         if connection is None:
             return False
-        await connection.send_json(message)
+        async with self.lock_for(device_id):
+            await connection.send_json(message)
         return True
