@@ -17,6 +17,8 @@ from timeflow.business.voice import (
 DEFAULT_GEOFENCE_RADIUS_METERS = 100
 DEFAULT_TIME_REMIND_OFFSET_MINUTES = 15
 DEFAULT_TIMEZONE = "Asia/Shanghai"
+LLM_DATETIME_FORMAT = "%Y-%m-%dT%H:%M"
+LLM_DATETIME_PATTERN = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$"
 
 SCHEDULE_DRAFT_SYSTEM_PROMPT = """
 你是日程结构化抽取器。
@@ -35,8 +37,14 @@ SCHEDULE_DRAFT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
     "properties": {
         "title": {"type": "string"},
-        "start_time": {"type": ["string", "null"]},
-        "end_time": {"type": ["string", "null"]},
+        "start_time": {
+            "type": ["string", "null"],
+            "pattern": LLM_DATETIME_PATTERN,
+        },
+        "end_time": {
+            "type": ["string", "null"],
+            "pattern": LLM_DATETIME_PATTERN,
+        },
         "location_name": {"type": ["string", "null"]},
     },
     "required": [
@@ -100,8 +108,9 @@ class ScheduleDraftParser:
     @classmethod
     def _normalize_draft(cls, data: dict[str, Any]) -> ScheduleDraft:
         title = cls._required_string(data.get("title"), "title")
-        start_time = cls._optional_string(data.get("start_time"))
-        end_time = cls._optional_string(data.get("end_time"))
+        start_time = cls._optional_datetime_string(data.get("start_time"), "start_time")
+        end_time = cls._optional_datetime_string(data.get("end_time"), "end_time")
+        cls._validate_time_range(start_time, end_time)
         location_name = cls._optional_string(data.get("location_name"))
         schedule_type = cls._derive_schedule_type(start_time, end_time, location_name)
         draft = ScheduleDraft(
@@ -155,6 +164,30 @@ class ScheduleDraftParser:
         stripped = value.strip()
         return stripped or None
 
+    @classmethod
+    def _optional_datetime_string(cls, value: Any, field: str) -> str | None:
+        normalized = cls._optional_string(value)
+        if normalized is None:
+            return None
+        try:
+            parsed = datetime.strptime(normalized, LLM_DATETIME_FORMAT)
+        except ValueError as exc:
+            raise ScheduleDraftParseError(
+                f"{field} must use YYYY-MM-DDTHH:mm format"
+            ) from exc
+        if parsed.strftime(LLM_DATETIME_FORMAT) != normalized:
+            raise ScheduleDraftParseError(f"{field} must use YYYY-MM-DDTHH:mm format")
+        return normalized
+
+    @staticmethod
+    def _validate_time_range(start_time: str | None, end_time: str | None) -> None:
+        if start_time is None or end_time is None:
+            return
+        start = datetime.strptime(start_time, LLM_DATETIME_FORMAT)
+        end = datetime.strptime(end_time, LLM_DATETIME_FORMAT)
+        if end < start:
+            raise ScheduleDraftParseError("end_time must not be earlier than start_time")
+
     @staticmethod
     def _derive_missing_fields(
         schedule_type: str,
@@ -176,6 +209,8 @@ class ScheduleDraftParser:
 __all__ = [
     "DEFAULT_GEOFENCE_RADIUS_METERS",
     "DEFAULT_TIME_REMIND_OFFSET_MINUTES",
+    "LLM_DATETIME_FORMAT",
+    "LLM_DATETIME_PATTERN",
     "SCHEDULE_DRAFT_SCHEMA",
     "SCHEDULE_DRAFT_SYSTEM_PROMPT",
     "ScheduleDraftParseError",

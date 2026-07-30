@@ -129,3 +129,41 @@ def test_schedule_parser_rejects_empty_text() -> None:
 
     with pytest.raises(ScheduleDraftParseError):
         asyncio.run(parser.parse("   "))
+
+
+@pytest.mark.parametrize(
+    "invalid_time",
+    [
+        "2026-02-30T15:00",
+        "2026-07-30 15:00",
+        "2026-07-30T15:00:00+08:00",
+    ],
+)
+def test_schedule_parser_rejects_noncanonical_model_time(invalid_time: str) -> None:
+    client = FakeLLMClient(
+        {
+            "title": "开会",
+            "start_time": invalid_time,
+            "end_time": None,
+            "location_name": None,
+        }
+    )
+    parser = ScheduleDraftParser(client)
+
+    with pytest.raises(ScheduleDraftParseError, match="YYYY-MM-DDTHH:mm"):
+        asyncio.run(parser.parse("明天下午开会"))
+
+
+def test_schedule_parser_rejects_end_time_before_start_time() -> None:
+    client = FakeLLMClient(
+        {
+            "title": "开会",
+            "start_time": "2026-07-30T16:00",
+            "end_time": "2026-07-30T15:00",
+            "location_name": None,
+        }
+    )
+    parser = ScheduleDraftParser(client)
+
+    with pytest.raises(ScheduleDraftParseError, match="end_time"):
+        asyncio.run(parser.parse("下午四点到三点开会"))
