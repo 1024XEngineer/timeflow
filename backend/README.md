@@ -37,6 +37,12 @@ uv run pytest
 uv run alembic heads
 ```
 
+Smoke test for the structured LLM parser:
+
+```bash
+uv run python scripts/test_llm_extraction.py
+```
+
 ## Module boundaries
 
 - `api`: inbound HTTP routes, request/response models, and dependency wiring.
