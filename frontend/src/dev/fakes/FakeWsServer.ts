@@ -13,7 +13,6 @@ import type {
   SessionHello,
   SessionReady,
   VoiceParseResultMessage,
-  VoiceStreamCancelCommand,
   VoiceStreamEndCommand,
   VoiceStreamStartCommand,
   VoiceStreamStartResponse,
@@ -87,9 +86,6 @@ export class FakeWsServer {
         return;
       case 'voice.stream.end':
         this.handleVoiceEnd(message as VoiceStreamEndCommand);
-        return;
-      case 'voice.stream.cancel':
-        this.handleVoiceCancel(message as VoiceStreamCancelCommand);
         return;
       default:
         return;
@@ -205,9 +201,7 @@ export class FakeWsServer {
   private handleLocationReport(_message: LocationReport): void {
     const ack: LocationReportAck = {
       type: 'location.report.ack',
-      request_id: _message.request_id,
       ok: true,
-      payload: null,
     };
     this.reply(ack);
   }
@@ -257,14 +251,5 @@ export class FakeWsServer {
       needs_confirmation: true,
     };
     setTimeout(() => this.reply(parseResult), 0);
-  }
-
-  private handleVoiceCancel(message: VoiceStreamCancelCommand): void {
-    this.reply({
-      type: 'voice.stream.cancelled',
-      request_id: message.request_id,
-      ok: true,
-      payload: { stream_id: message.payload.stream_id },
-    });
   }
 }
