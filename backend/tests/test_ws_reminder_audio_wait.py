@@ -178,6 +178,39 @@ def test_reminder_gives_up_waiting_after_timeout_and_sends_text_only() -> None:
     asyncio.run(scenario())
 
 
+def test_cancelled_generation_still_sends_the_reminder() -> None:
+    """生成任务被取消(日程被更新或删除)时,提醒必须照常发出去。
+
+    `CancelledError` 是 BaseException,接不住的话会一路冲出 `send_reminder` 和
+    `dispatch`,而这时触发时间戳已经写死,这条提醒就永远丢了。
+    """
+
+    async def scenario() -> None:
+        storage = _FakeStorage()
+        connections = _RecordingConnections()
+        tracker = ReminderAudioGenerationTracker(_SlowGenerationService(storage, delay=10.0))
+        sender = ReminderAudioSender(
+            connections,  # type: ignore[arg-type]
+            storage,  # type: ignore[arg-type]
+            generation_tracker=tracker,
+            audio_wait_seconds=30.0,
+        )
+
+        tracker.submit(_record())
+        send_task = asyncio.create_task(
+            sender.send_reminder("device_1", "schedule_1", reason="geofence_entered")
+        )
+        await asyncio.sleep(0)  # 让 send_reminder 跑到等待音频的地方
+
+        await tracker.discard("schedule_1")  # 模拟:日程此刻被删除,生成任务被取消
+
+        await send_task  # 不应该抛 CancelledError
+        assert connections.audio_calls == []
+        assert connections.sent[0]["type"] == "reminder.control"
+
+    asyncio.run(scenario())
+
+
 def test_failed_generation_does_not_block_the_reminder() -> None:
     """生成任务抛异常时,等待要正常结束并退回纯文本,不能把异常传播出去。"""
 

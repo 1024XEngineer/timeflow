@@ -107,7 +107,12 @@ def create_app() -> FastAPI:
         return results
 
     def mark_schedule_done(schedule_id: str, updated_at: datetime) -> bool:
-        """Close a schedule once its reminder was acknowledged (架构设计.md §8.4)。"""
+        """Close a schedule once its reminder was acknowledged (架构设计.md §8.4)。
+
+        写失败时**向上抛出**而不是吞成 `False`:调用方要靠异常区分「没有匹配的行」
+        (返回 `False`,终态,不必重试)和「数据库写失败」(可重试),否则一次抖动
+        就会让这条日程永远停在 `scheduled`。
+        """
         with session_factory() as session:
             try:
                 marked = SqlAlchemyScheduleDispatchAdapter(session).mark_done(
@@ -116,8 +121,7 @@ def create_app() -> FastAPI:
                 session.commit()
             except Exception:
                 session.rollback()
-                logger.exception("failed to mark schedule %s as done", schedule_id)
-                return False
+                raise
         return marked
 
     health_service = HealthService()

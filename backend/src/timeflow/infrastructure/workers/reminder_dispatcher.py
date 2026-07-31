@@ -98,14 +98,22 @@ class ReminderDispatcher:
         pending = self._pending.get(schedule_id)
         if pending is None or pending.schedule.user_id != device_id:
             return
+        if self._mark_done is not None:
+            try:
+                await asyncio.to_thread(self._mark_done, schedule_id, datetime.now(UTC))
+            except Exception:
+                # 写失败时**保留**待确认登记,让既有的超时重发路径再给一次机会。
+                # 如果这里直接清掉,日程会永远停在 `scheduled`——触发时间戳已经写死,
+                # 两条候选查询都不会再选中它,没有任何补救路径。
+                # 代价是数据库故障期间客户端可能收到重复提醒(受 max_attempts 约束)。
+                logger.exception(
+                    "failed to mark schedule %s as done; keeping it pending for retry",
+                    schedule_id,
+                )
+                return
+        # 写成功,或者返回 False(没有匹配的行:日程已删除/已是 done)都属于终态,
+        # 不需要再重试,可以安全清除待确认登记。
         self._pending.pop(schedule_id, None)
-        if self._mark_done is None:
-            return
-        try:
-            await asyncio.to_thread(self._mark_done, schedule_id, datetime.now(UTC))
-        except Exception:
-            # 状态写入失败不影响"这条提醒已确认"这个事实,记日志即可,不要打断 WS 消息循环
-            logger.exception("failed to mark schedule %s as done", schedule_id)
 
     async def _send(self, schedule: TriggeredSchedule, now: datetime, attempt: int) -> None:
         # 发送前先登记,而不是发送成功后再登记:_connections.send() 内部有真正的 await,

@@ -63,6 +63,13 @@ class ReminderAudioGenerationTracker:
                 "reminder audio still generating, sending without audio",
                 extra={"schedule_id": schedule_id},
             )
+        except asyncio.CancelledError:
+            # `CancelledError` 是 BaseException,接不住的话会一路冲出 send_reminder 和
+            # dispatch,而这时触发时间戳已经写死,这条提醒就彻底丢了。
+            # 内层生成任务被取消(日程被更新/删除)只是"没有音频",继续把提醒发出去;
+            # 如果是调用方自己被取消(应用关闭),必须原样向上传播,不能吞掉。
+            if not task.cancelled():
+                raise
         except Exception:
             # 生成失败的日志已经由 done callback 记过,这里不重复记
             return
