@@ -18,6 +18,7 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.0",
+    "react-native-calendars": "^1.1314.0",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-svg": "15.15.4",
     "react-native-web": "^0.21.2",
@@ -69,7 +70,7 @@
       "^@test/(.*)$": "<rootDir>/__tests__/$1"
     },
     "transformIgnorePatterns": [
-      "/node_modules/(?!(.pnpm|react-native|@react-native|@react-native-community|expo|@expo|@expo-google-fonts|react-navigation|@react-navigation|@sentry/react-native|native-base|standard-navigation|lucide-react-native|react-native-svg|react-native-swipe-gestures))"
+      "/node_modules/(?!(.pnpm|react-native|@react-native|@react-native-community|expo|@expo|@expo-google-fonts|react-navigation|@react-navigation|@sentry/react-native|native-base|standard-navigation|lucide-react-native|react-native-svg|react-native-calendars|react-native-swipe-gestures))"
     ]
   },
   "private": true
