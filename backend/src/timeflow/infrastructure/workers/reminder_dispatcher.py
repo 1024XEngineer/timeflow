@@ -54,9 +54,11 @@ class ReminderDispatcher:
         ack_timeout_seconds: float = DEFAULT_ACK_TIMEOUT_SECONDS,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         reminder_sender: _ReminderSender | None = None,
+        mark_done: Callable[[str, datetime], bool] | None = None,
     ) -> None:
         self._connections = connections
         self._reminder_sender = reminder_sender
+        self._mark_done = mark_done
         self._run_tick = run_tick
         self._poll_interval_seconds = poll_interval_seconds
         self._ack_timeout_seconds = ack_timeout_seconds
@@ -88,10 +90,29 @@ class ReminderDispatcher:
     async def handle_ack(self, schedule_id: str, device_id: str) -> None:
         """客户端确认执行完成后调用;不在登记表里(未知或已处理过)则直接丢弃。
         必须来自当初收到这条提醒的设备——否则任意连接只要猜到 schedule_id
-        就能清除别的设备的待确认状态。"""
+        就能清除别的设备的待确认状态。
+
+        确认通过后把日程置为 `done`,结束后续监听(架构设计.md §8.4)。
+        这一步放在设备校验之后,伪造的 ack 不能把别人的日程标记成已完成。
+        """
         pending = self._pending.get(schedule_id)
         if pending is None or pending.schedule.user_id != device_id:
             return
+        if self._mark_done is not None:
+            try:
+                await asyncio.to_thread(self._mark_done, schedule_id, datetime.now(UTC))
+            except Exception:
+                # 写失败时**保留**待确认登记,让既有的超时重发路径再给一次机会。
+                # 如果这里直接清掉,日程会永远停在 `scheduled`——触发时间戳已经写死,
+                # 两条候选查询都不会再选中它,没有任何补救路径。
+                # 代价是数据库故障期间客户端可能收到重复提醒(受 max_attempts 约束)。
+                logger.exception(
+                    "failed to mark schedule %s as done; keeping it pending for retry",
+                    schedule_id,
+                )
+                return
+        # 写成功,或者返回 False(没有匹配的行:日程已删除/已是 done)都属于终态,
+        # 不需要再重试,可以安全清除待确认登记。
         self._pending.pop(schedule_id, None)
 
     async def _send(self, schedule: TriggeredSchedule, now: datetime, attempt: int) -> None:

@@ -16,7 +16,8 @@ from timeflow.data.models import Schedule
 
 
 class SqlAlchemyScheduleDispatchAdapter:
-    """Implements `ScheduleQueryPort` and `ScheduleDispatchCommandPort` against `schedules`."""
+    """Implements the reminders module's Query/Command ports against `schedules`
+    (time-window trigger, geofence trigger)."""
 
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -39,6 +40,57 @@ class SqlAlchemyScheduleDispatchAdapter:
                 update(Schedule)
                 .where(Schedule.id == schedule_id, Schedule.time_triggered_at.is_(None))
                 .values(time_triggered_at=triggered_at.isoformat())
+            ),
+        )
+        return result.rowcount > 0
+
+    def mark_done(self, schedule_id: str, updated_at: datetime) -> bool:
+        """Mark an acknowledged schedule as done; only affects still-scheduled rows."""
+        result = cast(
+            CursorResult[object],
+            self._session.execute(
+                update(Schedule)
+                .where(Schedule.id == schedule_id, Schedule.status == "scheduled")
+                .values(status="done", updated_at=updated_at.isoformat())
+            ),
+        )
+        return result.rowcount > 0
+
+    def list_geofence_schedules(self, user_id: str) -> Iterable[ScheduleRecord]:
+        """Return this user's scheduled, not-yet-geo-triggered, location-only rows.
+
+        带 `start_time` 的日程(既有时间又有地点)一律走时间维度,不参与地理围栏判定——
+        否则同一条日程会被两条链路各推一次提醒(`time_triggered_at`/`geo_triggered_at`
+        是两个独立字段,各自的幂等保护互不干涉)。跟 `time_window_trigger` 里
+        "没有 start_time 的纯地点日程不参与时间维度判定" 正好对称。
+        """
+        statement = select(Schedule).where(
+            Schedule.user_id == user_id,
+            Schedule.status == "scheduled",
+            Schedule.start_time.is_(None),
+            Schedule.latitude.is_not(None),
+            Schedule.longitude.is_not(None),
+            Schedule.geo_triggered_at.is_(None),
+        )
+        rows = self._session.execute(statement).scalars().all()
+        return [_to_record(row) for row in rows]
+
+    def set_geofence_armed(self, schedule_id: str, armed: bool) -> None:
+        """Update the armed flag after detecting the user has left the geofence."""
+        self._session.execute(
+            update(Schedule)
+            .where(Schedule.id == schedule_id)
+            .values(geofence_armed=1 if armed else 0)
+        )
+
+    def mark_geo_triggered(self, schedule_id: str, triggered_at: datetime) -> bool:
+        """Record the geofence-reminder hit; only the first call for a schedule writes."""
+        result = cast(
+            CursorResult[object],
+            self._session.execute(
+                update(Schedule)
+                .where(Schedule.id == schedule_id, Schedule.geo_triggered_at.is_(None))
+                .values(geo_triggered_at=triggered_at.isoformat())
             ),
         )
         return result.rowcount > 0

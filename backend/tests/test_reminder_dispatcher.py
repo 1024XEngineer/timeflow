@@ -118,6 +118,113 @@ def test_handle_ack_clears_pending() -> None:
     asyncio.run(scenario())
 
 
+def test_valid_ack_marks_schedule_done() -> None:
+    """ack 通过设备校验后,把日程置为 done,结束后续监听(架构设计.md §8.4)。"""
+
+    async def scenario() -> None:
+        connections, _ = _connections_with("user_1")
+        done_calls: list[str] = []
+
+        def mark_done(schedule_id: str, updated_at: datetime) -> bool:
+            del updated_at
+            done_calls.append(schedule_id)
+            return True
+
+        dispatcher = ReminderDispatcher(
+            connections, run_tick=lambda now: [_triggered()], mark_done=mark_done
+        )
+        await dispatcher.tick(datetime(2026, 7, 29, 15, 0, tzinfo=UTC))
+
+        await dispatcher.handle_ack("schedule_1", "user_1")
+
+        assert done_calls == ["schedule_1"]
+
+    asyncio.run(scenario())
+
+
+def test_ack_from_wrong_device_does_not_mark_done() -> None:
+    """伪造的 ack 既不能清除待确认状态,也不能把别人的日程标记成已完成。"""
+
+    async def scenario() -> None:
+        connections, _ = _connections_with("user_1")
+        done_calls: list[str] = []
+
+        def mark_done(schedule_id: str, updated_at: datetime) -> bool:
+            del updated_at
+            done_calls.append(schedule_id)
+            return True
+
+        dispatcher = ReminderDispatcher(
+            connections, run_tick=lambda now: [_triggered()], mark_done=mark_done
+        )
+        await dispatcher.tick(datetime(2026, 7, 29, 15, 0, tzinfo=UTC))
+
+        await dispatcher.handle_ack("schedule_1", "someone_elses_device")
+
+        assert done_calls == []
+
+    asyncio.run(scenario())
+
+
+def test_mark_done_failure_keeps_pending_for_retry() -> None:
+    """状态写入失败时不能把异常抛回 WS 消息循环,而且要保留待确认登记——
+    否则触发时间戳已写死、两条候选查询都不会再选中它,日程会永远停在 scheduled。"""
+
+    async def scenario() -> None:
+        connections, connection = _connections_with("user_1")
+        batches: list[list[TriggeredSchedule]] = [[_triggered()], []]
+
+        def run_tick(now: datetime) -> list[TriggeredSchedule]:
+            return batches.pop(0)
+
+        def mark_done(schedule_id: str, updated_at: datetime) -> bool:
+            raise RuntimeError("db down")
+
+        dispatcher = ReminderDispatcher(
+            connections, run_tick=run_tick, ack_timeout_seconds=30.0, mark_done=mark_done
+        )
+        sent_at = datetime(2026, 7, 29, 15, 0, tzinfo=UTC)
+        await dispatcher.tick(sent_at)
+        connection.sent.clear()
+
+        await dispatcher.handle_ack("schedule_1", "user_1")  # 不应该抛出
+
+        assert "schedule_1" in dispatcher._pending, "写失败后应保留 pending 以便重试"
+        await dispatcher.tick(sent_at + timedelta(seconds=31))
+        assert len(connection.sent) == 1, "保留的 pending 应该走既有的超时重发路径"
+
+    asyncio.run(scenario())
+
+
+def test_mark_done_returning_false_is_terminal() -> None:
+    """返回 False(日程已删除/已是 done)属于终态,不该留着反复重试。"""
+
+    async def scenario() -> None:
+        connections, connection = _connections_with("user_1")
+        batches: list[list[TriggeredSchedule]] = [[_triggered()], []]
+
+        def run_tick(now: datetime) -> list[TriggeredSchedule]:
+            return batches.pop(0)
+
+        def mark_done(schedule_id: str, updated_at: datetime) -> bool:
+            return False  # 没有匹配的行
+
+        dispatcher = ReminderDispatcher(
+            connections, run_tick=run_tick, ack_timeout_seconds=30.0, mark_done=mark_done
+        )
+        sent_at = datetime(2026, 7, 29, 15, 0, tzinfo=UTC)
+        await dispatcher.tick(sent_at)
+        connection.sent.clear()
+
+        await dispatcher.handle_ack("schedule_1", "user_1")
+
+        assert "schedule_1" not in dispatcher._pending
+        await dispatcher.tick(sent_at + timedelta(seconds=31))
+        assert connection.sent == [], "终态不应该重发"
+
+    asyncio.run(scenario())
+
+
 def test_handle_ack_for_unknown_schedule_is_noop() -> None:
     """从未登记过的 schedule_id 收到 ack(或者已经被超时清理过),直接丢弃,不报错。"""
 

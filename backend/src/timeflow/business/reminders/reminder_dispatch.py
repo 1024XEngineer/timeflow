@@ -24,3 +24,11 @@ class ScheduleDispatchCommandPort(Protocol):
     def mark_time_triggered(self, schedule_id: str, triggered_at: datetime) -> bool:
         """记录该日程本轮时间提醒已经命中;仅在此前未记录时真正写入,返回是否发生了写入。"""
         ...
+
+    def mark_done(self, schedule_id: str, updated_at: datetime) -> bool:
+        """提醒已被客户端确认后,把日程置为 `done`,结束后续监听。
+
+        仅对仍处于 `scheduled` 的日程生效,返回是否发生了写入——已经是 `done`
+        或已被删除的日程不应该被这条路径改回去。
+        """
+        ...
