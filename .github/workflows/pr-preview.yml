@@ -1,22 +1,33 @@
-name: PR Preview
+name: PR Preview (same-repository branches)
 
 on:
   pull_request:
     types: [opened, reopened, synchronize, closed]
 
-permissions:
-  contents: write
-  deployments: read
-  pull-requests: write
+permissions: {}
 
 concurrency:
   group: pr-preview-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
+  explain-fork-limit:
+    name: Explain fork preview limitation
+    if: github.event.pull_request.head.repo.full_name != github.repository
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Record why deployment is skipped
+        run: echo "Fork preview deployment is intentionally disabled because pull_request workflows cannot safely grant write credentials to untrusted fork code."
+
   deploy-preview:
-    name: Deploy web preview
+    name: Deploy same-repository web preview
     if: github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: write
+      deployments: read
+      pull-requests: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
