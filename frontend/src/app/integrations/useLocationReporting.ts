@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from 'react';
+import { AppState, type AppStateStatus } from 'react-native';
 
 import type { ConnectionStatus } from '@/contracts';
 import type { Schedule } from '@/features/schedule';
@@ -15,7 +16,7 @@ export function useLocationReporting(options: {
   client: LocationTransport | null;
   connectionStatus: ConnectionStatus;
   items: Schedule[];
-  /** Tests and native hosts may provide a concrete background-aware provider. */
+  /** Tests and native hosts may provide a concrete foreground provider. */
   provider?: LocationProvider;
 }) {
   const { client, connectionStatus, items, provider } = options;
@@ -25,11 +26,21 @@ export function useLocationReporting(options: {
   );
 
   useEffect(() => {
-    if (!reporter || connectionStatus !== 'ready') {
-      reporter?.stop();
-      return;
-    }
-    reporter.syncArmedSchedules(items);
-    return () => reporter.stop();
+    if (!reporter) return;
+
+    const syncForState = (state: AppStateStatus) => {
+      if (connectionStatus !== 'ready' || state !== 'active') {
+        reporter.stop();
+        return;
+      }
+      reporter.syncArmedSchedules(items);
+    };
+
+    syncForState(AppState.currentState);
+    const subscription = AppState.addEventListener('change', syncForState);
+    return () => {
+      subscription.remove();
+      reporter.stop();
+    };
   }, [connectionStatus, items, reporter]);
 }
