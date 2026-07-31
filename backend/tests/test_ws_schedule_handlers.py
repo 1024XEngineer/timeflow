@@ -53,6 +53,15 @@ class MemoryScheduleRepository:
         return tuple(record for record in self.records.values() if record.user_id == user_id)
 
 
+class FakeReminderAudioService:
+    def __init__(self) -> None:
+        self.generated: list[str] = []
+
+    async def generate(self, schedule: ScheduleRecord) -> bool:
+        self.generated.append(schedule.id)
+        return True
+
+
 def _handlers() -> ScheduleWebSocketHandlers:
     repository = MemoryScheduleRepository()
     service = ScheduleService(
@@ -105,6 +114,46 @@ def test_schedule_upsert_handler_returns_contract_result() -> None:
             "geofence_armed": True,
         },
     }
+
+
+def test_schedule_upsert_handler_triggers_audio_generation() -> None:
+    repository = MemoryScheduleRepository()
+    service = ScheduleService(
+        repository,
+        id_factory=lambda: "schedule_new",
+        now_provider=lambda: datetime(2026, 7, 30, 9, 0, tzinfo=UTC),
+    )
+    reminder_audio_service = FakeReminderAudioService()
+    handlers = ScheduleWebSocketHandlers(service, reminder_audio_service)
+
+    asyncio.run(
+        handlers.handle_upsert(
+            {
+                "type": "schedule.upsert.command",
+                "request_id": "req_schedule_001",
+                "payload": {
+                    "schedule_id": None,
+                    "source_mode": "voice",
+                    "schedule_type": "time",
+                    "title": "开会",
+                    "notes": None,
+                    "start_time": "2026-07-30T15:00:00+08:00",
+                    "end_time": None,
+                    "timezone": "Asia/Shanghai",
+                    "location_name": "陆家嘴",
+                    "location_address": None,
+                    "latitude": 31.2451,
+                    "longitude": 121.5067,
+                    "geofence_radius_meters": 100,
+                    "geofence_armed": True,
+                    "time_remind_offset_minutes": 15,
+                },
+            },
+            "device_1",
+        )
+    )
+
+    assert reminder_audio_service.generated == ["schedule_new"]
 
 
 def test_schedule_upsert_handler_returns_validation_error() -> None:

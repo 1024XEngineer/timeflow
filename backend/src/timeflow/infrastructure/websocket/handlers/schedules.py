@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import ValidationError
 
+from timeflow.business.reminders import ReminderAudioGenerationPort
 from timeflow.business.schedules import (
     ScheduleListQuery as BusinessScheduleListQuery,
 )
 from timeflow.business.schedules import (
     ScheduleNotFoundError,
+    ScheduleRecord,
     ScheduleService,
     ScheduleValidationError,
 )
@@ -32,12 +37,20 @@ from timeflow.infrastructure.websocket.messages.schedule import (
     ScheduleUpsertResultPayload,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class ScheduleWebSocketHandlers:
     """Adapt schedule WS messages to business service calls."""
 
-    def __init__(self, service: ScheduleService) -> None:
+    def __init__(
+        self,
+        service: ScheduleService,
+        reminder_audio_service: ReminderAudioGenerationPort | None = None,
+    ) -> None:
         self._service = service
+        self._reminder_audio_service = reminder_audio_service
+        self._audio_generation_tasks: dict[str, asyncio.Task[bool]] = {}
 
     async def handle_upsert(
         self,
@@ -81,6 +94,8 @@ class ScheduleWebSocketHandlers:
                 "日程不存在",
             )
 
+        self._submit_audio_generation(result.schedule)
+
         response = ScheduleUpsertResult(
             request_id=message.request_id,
             payload=ScheduleUpsertResultPayload(
@@ -100,6 +115,47 @@ class ScheduleWebSocketHandlers:
             ),
         )
         return response.model_dump()
+
+    async def aclose(self) -> None:
+        """Cancel pending TTS generation tasks during application shutdown."""
+        tasks = tuple(self._audio_generation_tasks.values())
+        self._audio_generation_tasks.clear()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _submit_audio_generation(self, schedule: ScheduleRecord) -> None:
+        if self._reminder_audio_service is None:
+            return
+        previous = self._audio_generation_tasks.get(schedule.id)
+        if previous is not None and not previous.done():
+            previous.cancel()
+        task = asyncio.create_task(
+            self._reminder_audio_service.generate(schedule),
+            name=f"tts-schedule-{schedule.id}",
+        )
+        self._audio_generation_tasks[schedule.id] = task
+        task.add_done_callback(self._audio_generation_callback(schedule.id))
+
+    def _audio_generation_callback(
+        self,
+        schedule_id: str,
+    ) -> Callable[[asyncio.Task[bool]], None]:
+        def callback(completed: asyncio.Task[bool]) -> None:
+            self._audio_generation_done(schedule_id, completed)
+
+        return callback
+
+    def _audio_generation_done(self, schedule_id: str, task: asyncio.Task[bool]) -> None:
+        if self._audio_generation_tasks.get(schedule_id) is task:
+            self._audio_generation_tasks.pop(schedule_id, None)
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception:  # noqa: BLE001 - background generation must not break the WS loop
+            logger.exception("Reminder audio generation failed", extra={"schedule_id": schedule_id})
 
     async def handle_list(
         self,

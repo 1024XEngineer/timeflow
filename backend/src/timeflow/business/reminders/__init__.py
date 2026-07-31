@@ -3,3 +3,21 @@
 不做日程本体的创建/编辑/查询(那是 `business.schedules` 的职责),只读取触发判定
 需要的字段、窄范围地写回触发状态(如 `time_triggered_at`)。
 """
+
+from timeflow.business.reminders.audio import (
+    ReminderAudio,
+    ReminderAudioGenerationPort,
+    ReminderAudioGenerationService,
+    ReminderAudioStoragePort,
+    ReminderTextRenderer,
+    TextToSpeechPort,
+)
+
+__all__ = [
+    "ReminderAudio",
+    "ReminderAudioGenerationPort",
+    "ReminderAudioGenerationService",
+    "ReminderAudioStoragePort",
+    "ReminderTextRenderer",
+    "TextToSpeechPort",
+]
