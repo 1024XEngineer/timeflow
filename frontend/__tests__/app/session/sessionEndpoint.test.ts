@@ -4,9 +4,9 @@ import { buildSessionWebSocketUrl, resolveSessionUserId } from '@/app/session/se
 
 describe('session endpoint compatibility', () => {
   it('adds the persisted device id to the backend WebSocket URL', () => {
-    expect(buildSessionWebSocketUrl('ws://127.0.0.1:8000/ws', 'device 1')).toBe(
-      'ws://127.0.0.1:8000/ws?device_id=device+1',
-    );
+    expect(
+      buildSessionWebSocketUrl('ws://127.0.0.1:8000/ws', 'device 1', { allowInsecure: true }),
+    ).toBe('ws://127.0.0.1:8000/ws?device_id=device+1');
   });
 
   it('replaces a stale device id while preserving other query parameters', () => {
@@ -19,6 +19,14 @@ describe('session endpoint compatibility', () => {
     expect(() => buildSessionWebSocketUrl('http://127.0.0.1:8000/ws', 'device_1')).toThrow(
       '必须使用 ws:// 或 wss://',
     );
+  });
+
+  it('rejects plaintext WebSocket endpoints in release mode', () => {
+    expect(() =>
+      buildSessionWebSocketUrl('ws://api.example.com/ws', 'device_1', {
+        allowInsecure: false,
+      }),
+    ).toThrow('发布构建的 EXPO_PUBLIC_WS_URL 必须使用 wss://');
   });
 
   it('uses the MVP backend user when session.ready omits user_id', () => {

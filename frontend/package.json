@@ -12,6 +12,7 @@
     "@expo/metro-runtime": "~57.0.7",
     "expo": "~57.0.8",
     "expo-image-picker": "~57.0.6",
+    "expo-location": "~57.0.7",
     "expo-status-bar": "~57.0.1",
     "lucide-react-native": "^1.27.0",
     "react": "19.2.3",

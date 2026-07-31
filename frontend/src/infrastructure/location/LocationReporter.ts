@@ -1,4 +1,4 @@
-import { requireOptionalNativeModule } from 'expo';
+import * as ExpoLocation from 'expo-location';
 import { Platform } from 'react-native';
 
 import type { LocationReport, LocationReportAck, Schedule, WsJsonMessage } from '@/contracts';
@@ -73,12 +73,10 @@ function isGranted(permission: ExpoLocationPermission | null | undefined): boole
   return permission?.granted === true || permission?.status === 'granted';
 }
 
-/** Native Expo location provider. The module must be linked by the host build. */
+/** Native foreground location provider backed by the linked Expo module. */
 export class ExpoLocationProvider implements LocationProvider {
   constructor(
-    private readonly module: ExpoLocationModule | null = requireOptionalNativeModule<ExpoLocationModule>(
-      'ExpoLocation',
-    ),
+    private readonly module: ExpoLocationModule | null = ExpoLocation as unknown as ExpoLocationModule,
   ) {}
 
   async getCurrentSample(): Promise<LocationSample | null> {
