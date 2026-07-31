@@ -44,7 +44,7 @@ class ReminderAudioSender:
         ).model_dump()
         audio = await self._storage.read(schedule_id)
         if audio is None:
-            return False
+            return await self._connections.send(device_id, control)
 
         stream_id = self._stream_id_factory()
         start = ReminderAudioStart(

@@ -96,3 +96,32 @@ def test_sender_returns_false_for_offline_device() -> None:
         assert delivered is False
 
     asyncio.run(scenario())
+
+
+def test_sender_delivers_control_when_audio_is_unavailable() -> None:
+    async def scenario() -> None:
+        connections = ConnectionManager()
+        connection = FakeConnection()
+        connections.register("device_1", connection)
+        sender = ReminderAudioSender(connections, FakeStorage())
+
+        delivered = await sender.send_reminder(
+            "device_1",
+            "schedule_without_audio",
+            reason="time_window_reached",
+        )
+
+        assert delivered is True
+        assert connection.frames == [
+            (
+                "json",
+                {
+                    "type": "reminder.control",
+                    "schedule_id": "schedule_without_audio",
+                    "reason": "time_window_reached",
+                    "action": "show",
+                },
+            )
+        ]
+
+    asyncio.run(scenario())
