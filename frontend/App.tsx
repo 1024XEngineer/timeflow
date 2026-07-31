@@ -1,5 +1,16 @@
-import { HomeScreen } from './src/screens/HomeScreen';
+import { AppRoot } from '@/app/AppRoot';
+import { AppProviders } from '@/app/providers';
+import { useAlarmPermissionsOnLaunch } from '@/features/reminder';
+
+function Root() {
+  useAlarmPermissionsOnLaunch();
+  return <AppRoot />;
+}
 
 export default function App() {
-  return <HomeScreen />;
+  return (
+    <AppProviders>
+      <Root />
+    </AppProviders>
+  );
 }
