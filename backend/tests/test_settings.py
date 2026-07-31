@@ -15,6 +15,14 @@ def test_settings_use_timeflow_environment(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("TIMEFLOW_ALIYUN_ASR_WS_URL", "wss://asr.example.test")
     monkeypatch.setenv("TIMEFLOW_ALIYUN_ASR_API_KEY", "asr-key")
     monkeypatch.setenv("TIMEFLOW_ALIYUN_ASR_MODEL", "qwen-asr-realtime")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_TTS_API_URL", "https://tts.example.test/generation")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_TTS_API_KEY", "tts-key")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_TTS_MODEL", "qwen-audio-3.0-tts-flash")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_TTS_VOICE", "longanhuan_v3.6")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_TTS_FORMAT", "wav")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_TTS_SAMPLE_RATE_HZ", "24000")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_TTS_TIMEOUT_SECONDS", "12")
+    monkeypatch.setenv("TIMEFLOW_REMINDER_AUDIO_DIR", "/tmp/timeflow-reminders")
     monkeypatch.setenv("TIMEFLOW_OPENAI_BASE_URL", "https://llm.example.test/v1")
     monkeypatch.setenv("TIMEFLOW_OPENAI_API_KEY", "openai-key")
     monkeypatch.setenv("TIMEFLOW_OPENAI_MODEL", "gpt-test")
@@ -28,6 +36,14 @@ def test_settings_use_timeflow_environment(monkeypatch: MonkeyPatch) -> None:
     assert settings.aliyun_asr.ws_url == "wss://asr.example.test"
     assert settings.aliyun_asr.api_key == "asr-key"
     assert settings.aliyun_asr.model == "qwen-asr-realtime"
+    assert settings.aliyun_tts.api_url == "https://tts.example.test/generation"
+    assert settings.aliyun_tts.api_key == "tts-key"
+    assert settings.aliyun_tts.model == "qwen-audio-3.0-tts-flash"
+    assert settings.aliyun_tts.voice == "longanhuan_v3.6"
+    assert settings.aliyun_tts.audio_format == "wav"
+    assert settings.aliyun_tts.sample_rate_hz == 24000
+    assert settings.aliyun_tts.timeout_seconds == 12
+    assert settings.reminder_audio_dir == Path("/tmp/timeflow-reminders")
     assert settings.openai.base_url == "https://llm.example.test/v1"
     assert settings.openai.api_key == "openai-key"
     assert settings.openai.model == "gpt-test"
@@ -41,6 +57,14 @@ def test_settings_load_dotenv_file(tmp_path: Path, monkeypatch: MonkeyPatch) -> 
     monkeypatch.delenv("TIMEFLOW_ALIYUN_ASR_WS_URL", raising=False)
     monkeypatch.delenv("TIMEFLOW_ALIYUN_ASR_API_KEY", raising=False)
     monkeypatch.delenv("TIMEFLOW_ALIYUN_ASR_MODEL", raising=False)
+    monkeypatch.delenv("TIMEFLOW_ALIYUN_TTS_API_URL", raising=False)
+    monkeypatch.delenv("TIMEFLOW_ALIYUN_TTS_API_KEY", raising=False)
+    monkeypatch.delenv("TIMEFLOW_ALIYUN_TTS_MODEL", raising=False)
+    monkeypatch.delenv("TIMEFLOW_ALIYUN_TTS_VOICE", raising=False)
+    monkeypatch.delenv("TIMEFLOW_ALIYUN_TTS_FORMAT", raising=False)
+    monkeypatch.delenv("TIMEFLOW_ALIYUN_TTS_SAMPLE_RATE_HZ", raising=False)
+    monkeypatch.delenv("TIMEFLOW_ALIYUN_TTS_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("TIMEFLOW_REMINDER_AUDIO_DIR", raising=False)
     monkeypatch.delenv("TIMEFLOW_OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("TIMEFLOW_OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("TIMEFLOW_OPENAI_MODEL", raising=False)
@@ -52,6 +76,7 @@ def test_settings_load_dotenv_file(tmp_path: Path, monkeypatch: MonkeyPatch) -> 
                 "TIMEFLOW_ENVIRONMENT=dotenv-test",
                 "TIMEFLOW_DATABASE_URL=sqlite+pysqlite:///:memory:",
                 "TIMEFLOW_ALIYUN_ASR_API_KEY=dotenv-asr-key",
+                "TIMEFLOW_ALIYUN_TTS_API_KEY=dotenv-tts-key",
                 "TIMEFLOW_OPENAI_API_KEY=dotenv-openai-key",
             ]
         ),
@@ -65,4 +90,18 @@ def test_settings_load_dotenv_file(tmp_path: Path, monkeypatch: MonkeyPatch) -> 
     assert settings.database_url == "sqlite+pysqlite:///:memory:"
     assert settings.aliyun_asr.api_key == "dotenv-asr-key"
     assert settings.aliyun_asr.model == "qwen3-asr-flash-realtime-2026-02-10"
-    assert settings.openai.api_key == "dotenv-openai-key"
+    assert settings.aliyun_tts.api_key == "dotenv-tts-key"
+    assert settings.aliyun_tts.model == "qwen-audio-3.0-tts-flash"
+
+
+def test_settings_resolve_relative_audio_dir_next_to_env_file(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TIMEFLOW_REMINDER_AUDIO_DIR", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text("TIMEFLOW_REMINDER_AUDIO_DIR=.data/reminder-audio\n", encoding="utf-8")
+
+    settings = Settings.from_environment(env_file)
+
+    assert settings.reminder_audio_dir == tmp_path / ".data" / "reminder-audio"
