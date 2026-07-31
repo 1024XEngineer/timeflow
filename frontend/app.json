@@ -8,13 +8,30 @@
     "userInterfaceStyle": "light",
     "ios": {
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "允许 Timeflow 获取当前位置，以便在地图选点时显示你的位置。"
+        "NSLocationWhenInUseUsageDescription": "允许 Timeflow 获取当前位置，以便在地图选点和地点提醒时使用。",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "允许 Timeflow 在后台获取当前位置，以便触发地点提醒。",
+        "NSMicrophoneUsageDescription": "允许 Timeflow 录制语音，以便将语音整理成日程。",
+        "UIBackgroundModes": ["location"]
       },
       "supportsTablet": true
     },
     "android": {
       "package": "com.timeflow",
-      "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"],
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "RECORD_AUDIO",
+        "SCHEDULE_EXACT_ALARM",
+        "POST_NOTIFICATIONS",
+        "USE_FULL_SCREEN_INTENT",
+        "SYSTEM_ALERT_WINDOW",
+        "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
+        "FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "VIBRATE"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -25,15 +42,16 @@
       "predictiveBackGestureEnabled": false
     },
     "plugins": [
+      "./plugins/withTimeflowAlarm",
+      "./plugins/withTimeflowVoiceRecorder",
       [
         "expo-image-picker",
         {
           "cameraPermission": false,
-          "microphonePermission": false,
+          "microphonePermission": "允许 Timeflow 使用麦克风录制语音。",
           "photosPermission": "允许 Timeflow 访问照片，以便向智能助手发送图片。"
         }
-      ],
-      "@react-native-community/datetimepicker"
+      ]
     ]
   }
 }

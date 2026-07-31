@@ -10,7 +10,6 @@
   "dependencies": {
     "@baidumap/jsapi-loader": "^1.0.0",
     "@expo/metro-runtime": "~57.0.7",
-    "@react-native-community/datetimepicker": "9.1.0",
     "expo": "~57.0.8",
     "expo-image-picker": "~57.0.6",
     "expo-status-bar": "~57.0.1",
@@ -22,11 +21,13 @@
     "react-native-safe-area-context": "~5.7.0",
     "react-native-svg": "15.15.4",
     "react-native-web": "^0.21.2",
-    "react-native-webview": "13.16.1"
+    "react-native-webview": "13.16.1",
+    "timeflow-alarm": "file:modules/timeflow-alarm",
+    "timeflow-voice-recorder": "file:modules/timeflow-voice-recorder"
   },
   "devDependencies": {
     "@baidumap/jsapi-v4-types": "^4.0.2",
-    "@react-native/jest-preset": "0.86.0",
+    "@react-native/jest-preset": "^0.86.2",
     "@testing-library/react-native": "^13.2.0",
     "@types/jest": "29.5.14",
     "@types/react": "~19.2.2",
@@ -34,9 +35,8 @@
     "eslint-config-expo": "^57.0.0",
     "eslint-config-prettier": "^10.1.8",
     "jest": "~29.7.0",
-    "jest-expo": "57.0.2",
+    "jest-expo": "~57.0.2",
     "prettier": "^3.9.5",
-    "react-test-renderer": "19.2.3",
     "typescript": "~6.0.3"
   },
   "overrides": {
@@ -69,8 +69,23 @@
       "^@/(.*)$": "<rootDir>/src/$1",
       "^@test/(.*)$": "<rootDir>/__tests__/$1"
     },
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/_backup_"
+    ],
     "transformIgnorePatterns": [
       "/node_modules/(?!(.pnpm|react-native|@react-native|@react-native-community|expo|@expo|@expo-google-fonts|react-navigation|@react-navigation|@sentry/react-native|native-base|standard-navigation|lucide-react-native|react-native-svg|react-native-calendars|react-native-swipe-gestures))"
+    ],
+    "collectCoverageFrom": [
+      "src/**/*.{ts,tsx}",
+      "!src/**/*.d.ts",
+      "!src/types/**",
+      "!src/contracts/**",
+      "!src/features/assistant/types.ts",
+      "!src/features/schedule/location/types.ts",
+      "!src/features/schedule/location/MapPicker/types.ts",
+      "!src/features/schedule/location/MapPicker/index.ts",
+      "!src/features/schedule/location/MapPicker/MapPicker.tsx"
     ]
   },
   "private": true
