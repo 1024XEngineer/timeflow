@@ -59,4 +59,31 @@ describe('MonthView', () => {
     );
     expect(screen.getByText('这一天暂无详细安排')).toBeTruthy();
   });
+
+  it('renders an undated location reminder and lets the user open it', () => {
+    const onOpenSchedule = jest.fn();
+    render(
+      <MonthView
+        now={now}
+        selectedDate={now}
+        visibleMonth={month}
+        onMonthChange={jest.fn()}
+        onOpenSchedule={onOpenSchedule}
+        onSelectDate={jest.fn()}
+        scheduleIndex={buildScheduleIndex([
+          makeSchedule({
+            id: 'location-1',
+            schedule_type: 'location',
+            start_time: null,
+            title: '到公司提醒',
+            location_name: '办公室',
+          }),
+        ])}
+      />,
+    );
+
+    expect(screen.getByText('地点提醒')).toBeTruthy();
+    fireEvent.press(screen.getByText('到公司提醒'));
+    expect(onOpenSchedule).toHaveBeenCalledWith('location-1');
+  });
 });

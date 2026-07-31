@@ -9,6 +9,7 @@ import { ScheduleRow } from './ScheduleRow';
 import type { ScheduleIndex } from './scheduleIndex';
 import { schedulesOnDate } from './scheduleIndex';
 import { monthStyles as styles } from './MonthView.styles';
+import { scheduleDate } from '../presentation/scheduleFormat';
 
 export function MonthView({
   now,
@@ -39,6 +40,9 @@ export function MonthView({
   const selectedKey = dateKey(selectedDate);
   const todayKey = dateKey(now);
   const selectedItems = schedulesOnDate(scheduleIndex, selectedDate);
+  const undatedLocationItems = scheduleIndex.locationSchedules.filter(
+    (item) => scheduleDate(item) === null,
+  );
   const dateItems = scheduleIndex.byDateKey;
 
   return (
@@ -153,6 +157,23 @@ export function MonthView({
       ) : (
         <Text style={styles.scheduleEmpty}>这一天暂无详细安排</Text>
       )}
+      {undatedLocationItems.length > 0 ? (
+        <>
+          <View style={styles.locationHeading}>
+            <Text style={styles.monthSelectedTitle}>地点提醒</Text>
+          </View>
+          {undatedLocationItems.map((item, index) => (
+            <ScheduleRow
+              compact
+              item={item}
+              key={item.id}
+              onPress={() => onOpenSchedule(item.id)}
+              onToggle={onToggleSchedule ? () => onToggleSchedule(item) : undefined}
+              showConnector={index < undatedLocationItems.length - 1}
+            />
+          ))}
+        </>
+      ) : null}
     </ScrollView>
   );
 }

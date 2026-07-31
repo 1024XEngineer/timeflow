@@ -9,14 +9,23 @@ export type BaiduMapBridgeMessage =
   | { results: MapLocation[]; type: 'search-results' }
   | { type: 'search-error' };
 
+function serializeForInlineScript(value: unknown) {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
 export function buildBaiduMapDocument(ak: string, initialLocation: MapLocation | null) {
   const center = initialLocation ?? {
     address: '上海市 · 默认地图中心',
     latitude: 31.236305,
     longitude: 121.480237,
   };
-  const initialJson = JSON.stringify(initialLocation);
-  const centerJson = JSON.stringify(center);
+  const initialJson = serializeForInlineScript(initialLocation);
+  const centerJson = serializeForInlineScript(center);
 
   return `<!doctype html>
 <html lang="zh-CN">

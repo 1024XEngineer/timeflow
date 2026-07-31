@@ -87,6 +87,15 @@ export const monthStyles = StyleSheet.create({
     paddingBottom: 6,
   },
   monthSelectedTitle: { color: colors.ink, fontSize: 16, fontWeight: '600' },
+  locationHeading: {
+    borderBottomColor: colors.line,
+    borderBottomWidth: 1,
+    justifyContent: 'center',
+    marginBottom: 10,
+    marginTop: 18,
+    minHeight: 35,
+    paddingBottom: 6,
+  },
   scheduleEmpty: {
     backgroundColor: colors.surface,
     borderColor: colors.line,
