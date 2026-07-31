@@ -125,6 +125,15 @@ class ScheduleWebSocketHandlers:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
+    async def _delete_audio(self, schedule_id: str) -> None:
+        if self._reminder_audio_service is None:
+            return
+        task = self._audio_generation_tasks.pop(schedule_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await self._reminder_audio_service.delete(schedule_id)
+
     def _submit_audio_generation(self, schedule: ScheduleRecord) -> None:
         if self._reminder_audio_service is None:
             return
@@ -254,6 +263,7 @@ class ScheduleWebSocketHandlers:
                 ),
             ).model_dump(exclude_none=True)
 
+        await self._delete_audio(message.schedule_id)
         return ScheduleDeletedAck(schedule_id=message.schedule_id, ok=True).model_dump(
             exclude_none=True
         )

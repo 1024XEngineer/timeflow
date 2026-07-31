@@ -56,20 +56,26 @@ class MemoryScheduleRepository:
 class FakeReminderAudioService:
     def __init__(self) -> None:
         self.generated: list[str] = []
+        self.deleted: list[str] = []
 
     async def generate(self, schedule: ScheduleRecord) -> bool:
         self.generated.append(schedule.id)
         return True
 
+    async def delete(self, schedule_id: str) -> None:
+        self.deleted.append(schedule_id)
 
-def _handlers() -> ScheduleWebSocketHandlers:
+
+def _handlers(
+    reminder_audio_service: FakeReminderAudioService | None = None,
+) -> ScheduleWebSocketHandlers:
     repository = MemoryScheduleRepository()
     service = ScheduleService(
         repository,
         id_factory=lambda: "schedule_new",
         now_provider=lambda: datetime(2026, 7, 30, 9, 0, tzinfo=UTC),
     )
-    return ScheduleWebSocketHandlers(service)
+    return ScheduleWebSocketHandlers(service, reminder_audio_service)
 
 
 def test_schedule_upsert_handler_returns_contract_result() -> None:
@@ -274,7 +280,8 @@ def test_schedule_list_handler_returns_validation_error() -> None:
 
 
 def test_schedule_deleted_handler_marks_schedule_deleted() -> None:
-    handlers = _handlers()
+    reminder_audio_service = FakeReminderAudioService()
+    handlers = _handlers(reminder_audio_service)
     await_upsert = asyncio.run(
         handlers.handle_upsert(
             {
@@ -320,6 +327,7 @@ def test_schedule_deleted_handler_marks_schedule_deleted() -> None:
         "schedule_id": schedule_id,
         "ok": True,
     }
+    assert reminder_audio_service.deleted == [schedule_id]
 
 
 def test_schedule_deleted_handler_returns_not_found_error() -> None:
