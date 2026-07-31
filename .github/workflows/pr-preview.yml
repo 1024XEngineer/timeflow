@@ -1,0 +1,58 @@
+name: PR Preview
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+
+permissions:
+  contents: write
+  deployments: read
+  pull-requests: write
+
+concurrency:
+  group: pr-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-preview:
+    name: Deploy web preview
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.action == 'closed' && github.event.pull_request.base.sha || github.event.pull_request.head.sha }}
+
+      - name: Set up Node.js
+        if: github.event.action != 'closed'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.20.2
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        if: github.event.action != 'closed'
+        working-directory: frontend
+        run: npm ci
+
+      - name: Export interactive web preview
+        if: github.event.action != 'closed'
+        working-directory: frontend
+        env:
+          EXPO_PUBLIC_USE_FAKE_WS: 'true'
+          EXPO_PUBLIC_WS_URL: ''
+          TIMEFLOW_PREVIEW_BASE_URL: /${{ github.event.repository.name }}/pr-preview/pr-${{ github.event.number }}
+        run: npx expo export --platform web --dev --output-dir dist
+
+      - name: Deploy preview and comment on PR
+        uses: rossjrw/pr-preview-action@ffa7509e91a3ec8dfc2e5536c4d5c1acdf7a6de9 # v1.8.1
+        with:
+          source-dir: frontend/dist
+          preview-branch: gh-pages
+          umbrella-dir: pr-preview
+          action: auto
+          wait-for-pages-deployment: true
+          comment: true
+          qr-code: true
