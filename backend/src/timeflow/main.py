@@ -11,6 +11,7 @@ from fastapi import FastAPI, WebSocket
 
 from timeflow.business.health import HealthService
 from timeflow.business.reminders import ReminderAudioGenerationService
+from timeflow.business.reminders.geofence_trigger import GeofenceTransition, GeofenceTriggerService
 from timeflow.business.reminders.reminder_dispatch import TriggeredSchedule
 from timeflow.business.reminders.time_window_trigger import TimeWindowTriggerService
 from timeflow.business.schedules import ScheduleService
@@ -25,6 +26,7 @@ from timeflow.gateway.openai_llm import OpenAILLMClient
 from timeflow.infrastructure.settings import get_settings
 from timeflow.infrastructure.websocket.connection_manager import ConnectionManager
 from timeflow.infrastructure.websocket.endpoint import run_websocket_session
+from timeflow.infrastructure.websocket.handlers.location import LocationWebSocketHandlers
 from timeflow.infrastructure.websocket.handlers.reminders import ReminderWebSocketHandlers
 from timeflow.infrastructure.websocket.handlers.schedules import ScheduleWebSocketHandlers
 from timeflow.infrastructure.websocket.handlers.voice import VoiceWebSocketHandlers
@@ -70,6 +72,37 @@ def create_app() -> FastAPI:
                     )
         return results
 
+    def run_geofence_report(
+        user_id: str, latitude: float, longitude: float, now: datetime
+    ) -> list[TriggeredSchedule]:
+        """Judge this location report's geofence transitions and stamp hits as triggered."""
+        results: list[TriggeredSchedule] = []
+        with session_factory() as session:
+            dispatch_adapter = SqlAlchemyScheduleDispatchAdapter(session)
+            transitions = GeofenceTriggerService(dispatch_adapter).find_geofence_transitions(
+                user_id, latitude, longitude
+            )
+            for schedule, transition in transitions:
+                try:
+                    if transition is GeofenceTransition.ARMED:
+                        dispatch_adapter.set_geofence_armed(schedule.id, True)
+                        session.commit()
+                    elif transition is GeofenceTransition.TRIGGERED:
+                        marked = dispatch_adapter.mark_geo_triggered(schedule.id, now)
+                        session.commit()
+                        if marked:
+                            results.append(
+                                TriggeredSchedule(
+                                    schedule_id=schedule.id,
+                                    user_id=schedule.user_id,
+                                    reason="geofence_entered",
+                                )
+                            )
+                except Exception:
+                    session.rollback()
+                    logger.exception("geofence report failed for schedule %s", schedule.id)
+        return results
+
     health_service = HealthService()
     connections = ConnectionManager()
     router = MessageRouter()
@@ -88,6 +121,7 @@ def create_app() -> FastAPI:
         reminder_sender=audio_sender,
     )
     reminder_handlers = ReminderWebSocketHandlers(dispatcher)
+    location_handlers = LocationWebSocketHandlers(run_geofence_report, dispatcher, connections)
     schedule_handlers = ScheduleWebSocketHandlers(
         ScheduleService(schedule_repository),
         reminder_audio_service,
@@ -100,6 +134,7 @@ def create_app() -> FastAPI:
 
     router.register("reminder.control.ack", reminder_handlers.handle_control_ack)
     router.register("reminder.audio.ack", reminder_handlers.handle_audio_ack)
+    router.register("location.report", location_handlers.handle_report)
     router.register("schedule.upsert.command", schedule_handlers.handle_upsert)
     router.register("schedule.list.query", schedule_handlers.handle_list)
     router.register("schedule.deleted", schedule_handlers.handle_deleted)
