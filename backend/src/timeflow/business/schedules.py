@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Literal, Protocol
 from uuid import uuid4
@@ -256,6 +256,23 @@ class ScheduleService:
             include_deleted=query.include_deleted,
         )
         return ScheduleListResult(schedules=tuple(schedules))
+
+    def delete(self, schedule_id: str) -> None:
+        """标记日程为已删除,清空系统日历/闹钟关联;不做取消监听/终止提醒的特殊处理——
+        状态一变,现有的 status == "scheduled" 过滤条件自然会排除它。"""
+        normalized_id = self._require_text(schedule_id, "schedule_id")
+        existing = self._repository.get(normalized_id, self._user_id)
+        if existing is None:
+            raise ScheduleNotFoundError(f"schedule not found: {normalized_id}")
+        now = self._normalize_system_time(self._now_provider())
+        deleted = replace(
+            existing,
+            status="deleted",
+            system_schedule_ref_id=None,
+            system_alarm_ref_id=None,
+            updated_at=now,
+        )
+        self._repository.save(deleted)
 
     def _load_existing(self, schedule_id: str | None) -> ScheduleRecord | None:
         if schedule_id is None:

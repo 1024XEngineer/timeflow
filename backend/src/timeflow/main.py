@@ -51,6 +51,7 @@ def create_app() -> FastAPI:
     voice_handlers = VoiceWebSocketHandlers(voice_service, connections)
     router.register("schedule.upsert.command", schedule_handlers.handle_upsert)
     router.register("schedule.list.query", schedule_handlers.handle_list)
+    router.register("schedule.deleted", schedule_handlers.handle_deleted)
     router.register("voice.stream.start", voice_handlers.handle_start)
     router.register("voice.stream.end", voice_handlers.handle_end)
 

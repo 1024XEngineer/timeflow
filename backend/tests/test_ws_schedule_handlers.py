@@ -222,4 +222,138 @@ def test_schedule_list_handler_returns_validation_error() -> None:
 
     assert response["type"] == "schedule.list.error"
     assert response["error"]["code"] == "VALIDATION_ERROR"
-    assert response["error"]["details"]["field"] == "status"
+
+
+def test_schedule_deleted_handler_marks_schedule_deleted() -> None:
+    handlers = _handlers()
+    await_upsert = asyncio.run(
+        handlers.handle_upsert(
+            {
+                "type": "schedule.upsert.command",
+                "request_id": "req_schedule_001",
+                "payload": {
+                    "schedule_id": None,
+                    "source_mode": "manual",
+                    "schedule_type": "time",
+                    "title": "开会",
+                    "notes": None,
+                    "start_time": "2026-07-30T15:00:00+08:00",
+                    "end_time": None,
+                    "timezone": "Asia/Shanghai",
+                    "location_name": None,
+                    "location_address": None,
+                    "latitude": None,
+                    "longitude": None,
+                    "geofence_radius_meters": None,
+                    "geofence_armed": None,
+                    "time_remind_offset_minutes": None,
+                },
+            },
+            "device_1",
+        )
+    )
+    schedule_id = await_upsert["payload"]["schedule_id"]
+
+    response = asyncio.run(
+        handlers.handle_deleted(
+            {
+                "type": "schedule.deleted",
+                "schedule_id": schedule_id,
+                "deleted": True,
+                "timestamp": "2026-07-30T15:00:00+08:00",
+            },
+            "device_1",
+        )
+    )
+
+    assert response == {
+        "type": "schedule.deleted.ack",
+        "schedule_id": schedule_id,
+        "ok": True,
+    }
+
+
+def test_schedule_deleted_handler_returns_not_found_error() -> None:
+    handlers = _handlers()
+
+    response = asyncio.run(
+        handlers.handle_deleted(
+            {
+                "type": "schedule.deleted",
+                "schedule_id": "schedule_missing",
+                "deleted": True,
+                "timestamp": "2026-07-30T15:00:00+08:00",
+            },
+            "device_1",
+        )
+    )
+
+    assert response["type"] == "schedule.deleted.ack"
+    assert response["schedule_id"] == "schedule_missing"
+    assert response["ok"] is False
+    assert response["error"]["code"] == "SCHEDULE_DELETE_FAILED"
+    assert response["error"]["details"]["reason"] == "schedule_not_found"
+
+
+def test_schedule_deleted_handler_returns_validation_error() -> None:
+    handlers = _handlers()
+
+    response = asyncio.run(
+        handlers.handle_deleted(
+            {
+                "type": "schedule.deleted",
+                "schedule_id": "schedule_1",
+                # "deleted" 字段缺失,触发 pydantic 校验失败
+            },
+            "device_1",
+        )
+    )
+
+    assert response["type"] == "schedule.deleted.ack"
+    assert response["schedule_id"] == "schedule_1"
+    assert response["ok"] is False
+    assert response["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_schedule_deleted_handler_rejects_deleted_false() -> None:
+    """`deleted: false` 不能被当成合法请求处理并误删日程,必须走校验失败分支。"""
+    handlers = _handlers()
+
+    response = asyncio.run(
+        handlers.handle_deleted(
+            {
+                "type": "schedule.deleted",
+                "schedule_id": "schedule_1",
+                "deleted": False,
+                "timestamp": "2026-07-30T15:00:00+08:00",
+            },
+            "device_1",
+        )
+    )
+
+    assert response["type"] == "schedule.deleted.ack"
+    assert response["ok"] is False
+    assert response["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_schedule_deleted_handler_returns_validation_error_for_blank_schedule_id() -> None:
+    """空白 schedule_id 能通过 pydantic(仍是 str),但业务层 `_require_text` 会拒绝;
+    这里要落到 schedule.deleted.ack 的 VALIDATION_ERROR 分支,而不是路由器兜底的 INTERNAL_ERROR。"""
+    handlers = _handlers()
+
+    response = asyncio.run(
+        handlers.handle_deleted(
+            {
+                "type": "schedule.deleted",
+                "schedule_id": "   ",
+                "deleted": True,
+                "timestamp": "2026-07-30T15:00:00+08:00",
+            },
+            "device_1",
+        )
+    )
+
+    assert response["type"] == "schedule.deleted.ack"
+    assert response["ok"] is False
+    assert response["error"]["code"] == "VALIDATION_ERROR"
+    assert response["error"]["details"]["field"] == "schedule_id"

@@ -16,10 +16,13 @@ from timeflow.business.schedules import (
 )
 from timeflow.business.schedules import ScheduleUpsertCommand as BusinessScheduleUpsertCommand
 from timeflow.infrastructure.websocket.envelope import build_error_envelope
+from timeflow.infrastructure.websocket.messages.envelope import ErrorDetail
 from timeflow.infrastructure.websocket.messages.schedule import (
     ScheduleConflict as ScheduleConflictMessage,
 )
 from timeflow.infrastructure.websocket.messages.schedule import (
+    ScheduleDeleted,
+    ScheduleDeletedAck,
     ScheduleListQuery,
     ScheduleListResult,
     ScheduleListResultPayload,
@@ -153,6 +156,51 @@ class ScheduleWebSocketHandlers:
             ),
         )
         return response.model_dump()
+
+    async def handle_deleted(
+        self,
+        raw_message: dict[str, Any],
+        device_id: str,
+    ) -> dict[str, Any]:
+        """Handle `schedule.deleted`。成功/失败共用同一个响应类型,靠 `ok` 区分,
+        不像 upsert/list 那样走 request_id 关联的 result/error 分支。"""
+        del device_id
+        try:
+            message = ScheduleDeleted.model_validate(raw_message)
+        except ValidationError:
+            raw_schedule_id = raw_message.get("schedule_id")
+            return ScheduleDeletedAck(
+                schedule_id=raw_schedule_id if isinstance(raw_schedule_id, str) else "",
+                ok=False,
+                error=ErrorDetail(code="VALIDATION_ERROR", message="请求参数不合法"),
+            ).model_dump(exclude_none=True)
+
+        try:
+            self._service.delete(message.schedule_id)
+        except ScheduleNotFoundError:
+            return ScheduleDeletedAck(
+                schedule_id=message.schedule_id,
+                ok=False,
+                error=ErrorDetail(
+                    code="SCHEDULE_DELETE_FAILED",
+                    message="日程删除失败",
+                    details={"reason": "schedule_not_found"},
+                ),
+            ).model_dump(exclude_none=True)
+        except ScheduleValidationError as exc:
+            return ScheduleDeletedAck(
+                schedule_id=message.schedule_id,
+                ok=False,
+                error=ErrorDetail(
+                    code="VALIDATION_ERROR",
+                    message="请求参数不合法",
+                    details={"field": exc.field, "reason": exc.reason},
+                ),
+            ).model_dump(exclude_none=True)
+
+        return ScheduleDeletedAck(schedule_id=message.schedule_id, ok=True).model_dump(
+            exclude_none=True
+        )
 
     @staticmethod
     def _extract_request_id(raw_message: dict[str, Any]) -> str | None:

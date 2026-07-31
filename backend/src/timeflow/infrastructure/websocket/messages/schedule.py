@@ -119,3 +119,21 @@ class ScheduleListError(BaseModel):
     request_id: str
     ok: Literal[False] = False
     error: ErrorDetail
+
+
+class ScheduleDeleted(BaseModel):
+    """客户端主动告知服务端:用户删除了这条日程。"""
+
+    type: Literal["schedule.deleted"] = "schedule.deleted"
+    schedule_id: str
+    deleted: Literal[True]
+    timestamp: str
+
+
+class ScheduleDeletedAck(BaseModel):
+    """`schedule.deleted` 的响应;成功/失败共用同一个消息类型,靠 `ok` 区分。"""
+
+    type: Literal["schedule.deleted.ack"] = "schedule.deleted.ack"
+    schedule_id: str
+    ok: bool
+    error: ErrorDetail | None = None
