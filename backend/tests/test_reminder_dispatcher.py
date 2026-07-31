@@ -1,12 +1,13 @@
 """ReminderDispatcher 的单元测试。"""
 
 import asyncio
+import contextlib
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from timeflow.business.reminders.reminder_dispatch import TriggeredSchedule
 from timeflow.infrastructure.websocket.connection_manager import ConnectionManager
-from timeflow.infrastructure.workers.reminder_dispatcher import ReminderDispatcher
+from timeflow.infrastructure.workers.reminder_dispatcher import ReminderDispatcher, _PendingAck
 
 
 class _FakeConnection:
@@ -14,6 +15,18 @@ class _FakeConnection:
         self.sent: list[dict[str, Any]] = []
 
     async def send_json(self, data: dict[str, Any]) -> None:
+        self.sent.append(data)
+
+
+class _BlockingConnection:
+    """发送时卡在 `gate` 上,用来模拟 send_json 的 await 期间真的有别的协程在跑。"""
+
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+        self.gate = asyncio.Event()
+
+    async def send_json(self, data: dict[str, Any]) -> None:
+        await self.gate.wait()
         self.sent.append(data)
 
 
@@ -97,7 +110,7 @@ def test_handle_ack_clears_pending() -> None:
         await dispatcher.tick(sent_at)
         connection.sent.clear()
 
-        await dispatcher.handle_ack("schedule_1")
+        await dispatcher.handle_ack("schedule_1", "user_1")
         await dispatcher.tick(sent_at + timedelta(seconds=31))
 
         assert connection.sent == []
@@ -112,7 +125,30 @@ def test_handle_ack_for_unknown_schedule_is_noop() -> None:
         connections, _ = _connections_with("user_1")
         dispatcher = ReminderDispatcher(connections, run_tick=lambda now: [])
 
-        await dispatcher.handle_ack("schedule_unknown")
+        await dispatcher.handle_ack("schedule_unknown", "user_1")
+
+    asyncio.run(scenario())
+
+
+def test_handle_ack_from_wrong_device_is_ignored() -> None:
+    """ack 必须来自当初收到这条提醒的设备;别的设备猜到 schedule_id 也不能清除待确认状态。"""
+
+    async def scenario() -> None:
+        connections, connection = _connections_with("user_1")
+        batches: list[list[TriggeredSchedule]] = [[_triggered()], []]
+
+        def run_tick(now: datetime) -> list[TriggeredSchedule]:
+            return batches.pop(0)
+
+        dispatcher = ReminderDispatcher(connections, run_tick=run_tick, ack_timeout_seconds=30.0)
+        sent_at = datetime(2026, 7, 29, 15, 0, tzinfo=UTC)
+        await dispatcher.tick(sent_at)
+        connection.sent.clear()
+
+        await dispatcher.handle_ack("schedule_1", "someone_elses_device")
+        await dispatcher.tick(sent_at + timedelta(seconds=31))
+
+        assert len(connection.sent) == 1  # 伪造的 ack 没有生效,超时后依然正常重发
 
     asyncio.run(scenario())
 
@@ -159,6 +195,100 @@ def test_within_ack_timeout_window_does_not_resend_yet() -> None:
         await dispatcher.tick(sent_at + timedelta(seconds=10))
 
         assert connection.sent == []
+
+    asyncio.run(scenario())
+
+
+def test_run_forever_survives_tick_exception() -> None:
+    """单轮 tick 抛异常(比如数据库临时故障)不能让轮询永久停下,下一轮应该正常继续。"""
+
+    async def scenario() -> None:
+        connections = ConnectionManager()
+        calls: list[int] = []
+
+        def run_tick(now: datetime) -> list[TriggeredSchedule]:
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("boom")
+            return []
+
+        dispatcher = ReminderDispatcher(connections, run_tick=run_tick, poll_interval_seconds=0.01)
+        task = asyncio.create_task(dispatcher.run_forever())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        assert len(calls) >= 2
+
+    asyncio.run(scenario())
+
+
+def test_ack_arriving_during_resend_is_not_dropped() -> None:
+    """超时重发的 send_json 还在 await 时,如果这条日程真正的 ack 恰好到达,
+    不应该被丢弃,重发完成后也不应该又把它重新登记成待确认。"""
+
+    async def scenario() -> None:
+        connections = ConnectionManager()
+        connections.register("user_1", _FakeConnection())
+        batches: list[list[TriggeredSchedule]] = [[_triggered()], []]
+
+        def run_tick(now: datetime) -> list[TriggeredSchedule]:
+            return batches.pop(0)
+
+        dispatcher = ReminderDispatcher(connections, run_tick=run_tick, ack_timeout_seconds=30.0)
+        sent_at = datetime(2026, 7, 29, 15, 0, tzinfo=UTC)
+        await dispatcher.tick(sent_at)  # attempt 1,登记进 _pending
+
+        blocking_connection = _BlockingConnection()
+        connections.register("user_1", blocking_connection)  # 换成会卡住的连接,模拟重发耗时
+
+        sweep_task = asyncio.create_task(dispatcher.tick(sent_at + timedelta(seconds=31)))
+        await asyncio.sleep(0)  # 让出控制权,使 tick 跑到卡在 send_json 里的地方(重发进行中)
+
+        await dispatcher.handle_ack("schedule_1", "user_1")  # 真实 ack 恰好在这个窗口到达
+
+        blocking_connection.gate.set()
+        await sweep_task
+
+        assert "schedule_1" not in dispatcher._pending
+
+    asyncio.run(scenario())
+
+
+def test_sweep_does_not_crash_when_ack_removes_other_expired_entry_concurrently() -> None:
+    """超时扫描处理一条(还在 await 发送)时,如果 handle_ack 并发把队列里另一条也
+    清除了,不应该抛 KeyError,应该跳过继续处理。"""
+
+    async def scenario() -> None:
+        connections = ConnectionManager()
+        blocking_connection = _BlockingConnection()
+        connections.register("user_1", blocking_connection)
+        connections.register("user_2", _FakeConnection())
+
+        dispatcher = ReminderDispatcher(connections, run_tick=lambda now: [], ack_timeout_seconds=30.0)
+        sent_at = datetime(2026, 7, 29, 15, 0, tzinfo=UTC)
+        dispatcher._pending["schedule_1"] = _PendingAck(
+            schedule=_triggered(schedule_id="schedule_1", user_id="user_1"),
+            sent_at=sent_at,
+            attempt=1,
+        )
+        dispatcher._pending["schedule_2"] = _PendingAck(
+            schedule=_triggered(schedule_id="schedule_2", user_id="user_2"),
+            sent_at=sent_at,
+            attempt=1,
+        )
+
+        sweep_task = asyncio.create_task(
+            dispatcher._sweep_ack_timeouts(sent_at + timedelta(seconds=31))
+        )
+        await asyncio.sleep(0)  # 让 sweep 处理 schedule_1,卡在它的 send_json 里
+        await dispatcher.handle_ack("schedule_2", "user_2")  # 并发把 schedule_2 也清掉
+
+        blocking_connection.gate.set()  # 放行 schedule_1 的发送,让 sweep 继续
+        await sweep_task  # 不应该抛 KeyError
+
+        assert "schedule_2" not in dispatcher._pending
 
     asyncio.run(scenario())
 

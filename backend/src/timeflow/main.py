@@ -49,18 +49,20 @@ def create_app() -> FastAPI:
             ).find_schedules_entering_window(now)
             for schedule in due_schedules:
                 try:
-                    if dispatch_adapter.mark_time_triggered(schedule.id, now):
-                        results.append(
-                            TriggeredSchedule(
-                                schedule_id=schedule.id,
-                                user_id=schedule.user_id,
-                                reason="time_window_reached",
-                            )
-                        )
+                    marked = dispatch_adapter.mark_time_triggered(schedule.id, now)
                     session.commit()
                 except Exception:
                     session.rollback()
                     logger.exception("dispatch tick failed for schedule %s", schedule.id)
+                    continue
+                if marked:
+                    results.append(
+                        TriggeredSchedule(
+                            schedule_id=schedule.id,
+                            user_id=schedule.user_id,
+                            reason="time_window_reached",
+                        )
+                    )
         return results
 
     health_service = HealthService()

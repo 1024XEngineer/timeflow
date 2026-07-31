@@ -50,9 +50,12 @@ class ReminderDispatcher:
         self._pending: dict[str, _PendingAck] = {}
 
     async def run_forever(self) -> None:
-        """周期性 tick,直到外部取消这个协程。"""
+        """周期性 tick,直到外部取消这个协程。单轮 tick 异常不能中止后续轮次。"""
         while True:
-            await self.tick(datetime.now(UTC))
+            try:
+                await self.tick(datetime.now(UTC))
+            except Exception:
+                logger.exception("reminder dispatcher tick failed")
             await asyncio.sleep(self._poll_interval_seconds)
 
     async def tick(self, now: datetime) -> None:
@@ -68,11 +71,23 @@ class ReminderDispatcher:
         for schedule in schedules:
             await self._send(schedule, now, attempt=1)
 
-    async def handle_ack(self, schedule_id: str) -> None:
-        """客户端确认执行完成后调用;不在登记表里(未知或已处理过)则直接丢弃。"""
+    async def handle_ack(self, schedule_id: str, device_id: str) -> None:
+        """客户端确认执行完成后调用;不在登记表里(未知或已处理过)则直接丢弃。
+        必须来自当初收到这条提醒的设备——否则任意连接只要猜到 schedule_id
+        就能清除别的设备的待确认状态。"""
+        pending = self._pending.get(schedule_id)
+        if pending is None or pending.schedule.user_id != device_id:
+            return
         self._pending.pop(schedule_id, None)
 
     async def _send(self, schedule: TriggeredSchedule, now: datetime, attempt: int) -> None:
+        # 发送前先登记,而不是发送成功后再登记:_connections.send() 内部有真正的 await,
+        # 如果先发后登记,并发到达的 handle_ack 会因为这时候 _pending 里还没有这一条而被
+        # 静默丢弃,发送完成后又被无条件重新登记成待确认——把一条已经确认过的提醒错误地
+        # 变回"待确认"状态。先登记可以保证 handle_ack 在任意时刻并发进来都能找到并清除它。
+        self._pending[schedule.schedule_id] = _PendingAck(
+            schedule=schedule, sent_at=now, attempt=attempt
+        )
         sent = await self._connections.send(
             schedule.user_id,
             ReminderControl(
@@ -83,10 +98,7 @@ class ReminderDispatcher:
         )
         if not sent:
             # 设备离线:客户端根据自身能力降级为普通通知,不需要服务端等待 ack
-            return
-        self._pending[schedule.schedule_id] = _PendingAck(
-            schedule=schedule, sent_at=now, attempt=attempt
-        )
+            self._pending.pop(schedule.schedule_id, None)
 
     async def _sweep_ack_timeouts(self, now: datetime) -> None:
         expired = [
@@ -95,12 +107,17 @@ class ReminderDispatcher:
             if (now - pending.sent_at).total_seconds() >= self._ack_timeout_seconds
         ]
         for schedule_id in expired:
-            pending = self._pending.pop(schedule_id)
+            # 用 get 而不是不带默认值的 pop:上一个 schedule_id 的 _send() await 期间,
+            # handle_ack 可能已经并发处理过(甚至清除过)这一条,直接跳过而不是抛 KeyError。
+            pending = self._pending.get(schedule_id)
+            if pending is None:
+                continue
             if pending.attempt >= self._max_attempts:
                 logger.warning(
                     "reminder.control ack timed out after %d attempts for schedule %s",
                     pending.attempt,
                     schedule_id,
                 )
+                self._pending.pop(schedule_id, None)
                 continue
             await self._send(pending.schedule, now, attempt=pending.attempt + 1)

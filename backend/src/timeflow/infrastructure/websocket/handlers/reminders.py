@@ -6,7 +6,7 @@ from timeflow.infrastructure.websocket.messages.reminder import ReminderControlA
 
 
 class _AckReceiver(Protocol):
-    async def handle_ack(self, schedule_id: str) -> None: ...
+    async def handle_ack(self, schedule_id: str, device_id: str) -> None: ...
 
 
 class ReminderWebSocketHandlers:
@@ -16,10 +16,15 @@ class ReminderWebSocketHandlers:
         self._dispatcher = dispatcher
 
     async def handle_control_ack(self, raw_message: dict[str, Any], device_id: str) -> None:
-        """Handle `reminder.control.ack`; only parses and forwards."""
-        del device_id
+        """Handle `reminder.control.ack`; only parses and forwards.
+
+        `ok=False`(客户端明确表示没能展示成功)不清除待确认状态,交给
+        dispatcher 自身的超时重试/放弃逻辑处理,而不是当作已完成。
+        """
         ack = ReminderControlAck.model_validate(raw_message)
-        await self._dispatcher.handle_ack(ack.schedule_id)
+        if not ack.ok:
+            return None
+        await self._dispatcher.handle_ack(ack.schedule_id, device_id)
         return None
 
 
