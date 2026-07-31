@@ -18,6 +18,7 @@ yarn-error.*
 .ruff_cache/
 coverage.xml
 coverage/
+.data/
 dist/
 build/
 htmlcov/

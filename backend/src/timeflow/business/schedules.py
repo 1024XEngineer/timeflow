@@ -95,6 +95,7 @@ class ScheduleUpsertCommand:
 class ScheduleUpsertResult:
     """Result returned after create or update."""
 
+    schedule: ScheduleRecord
     schedule_id: str
     schedule_type: ScheduleType
     status: ScheduleStatus
@@ -238,6 +239,7 @@ class ScheduleService:
         )
         self._repository.save(schedule)
         return ScheduleUpsertResult(
+            schedule=schedule,
             schedule_id=schedule.id,
             schedule_type=schedule.schedule_type,
             status=schedule.status,

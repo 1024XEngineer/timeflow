@@ -23,3 +23,39 @@ class ReminderControlAck(BaseModel):
     schedule_id: str
     ok: bool
     error: ErrorDetail | None = None
+
+
+class ReminderAudioStart(BaseModel):
+    """服务端开始下发一个提醒音频流。"""
+
+    type: Literal["reminder.audio.start"] = "reminder.audio.start"
+    schedule_id: str
+    stream_id: str
+    audio_format: str
+
+
+class ReminderAudioEnd(BaseModel):
+    """服务端结束一个提醒音频流。"""
+
+    type: Literal["reminder.audio.end"] = "reminder.audio.end"
+    schedule_id: str
+    stream_id: str
+
+
+class ReminderAudioAck(BaseModel):
+    """客户端回传提醒音频接收或播放结果。"""
+
+    type: Literal["reminder.audio.ack"] = "reminder.audio.ack"
+    schedule_id: str
+    stream_id: str
+    ok: bool
+    error: ErrorDetail | None = None
+
+
+__all__ = [
+    "ReminderAudioAck",
+    "ReminderAudioEnd",
+    "ReminderAudioStart",
+    "ReminderControl",
+    "ReminderControlAck",
+]
