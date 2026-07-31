@@ -46,14 +46,6 @@ function formatClarificationLabel(result: VoiceParseOutcome): string | undefined
   return parts.length > 0 ? parts.join('；') : undefined;
 }
 
-const unavailableRecorder: VoiceRecorder = {
-  async start() {
-    throw new Error('录音适配器未注入');
-  },
-  async stop() {},
-  async cancel() {},
-};
-
 type ActiveVoiceStream = {
   streamId: string;
   jobId: string;
@@ -75,14 +67,14 @@ async function cancelVoiceStream(stream: ActiveVoiceStream): Promise<void> {
 export function useAssistantSession(options: {
   client: VoiceTransport | null;
   onConfirmDraft: (draft: VoiceParseDraft) => Promise<void>;
-  /** App/native hosts may inject an Expo Audio backed recorder. */
-  recorder?: VoiceRecorder;
+  /** The app host must inject a production PCM recorder for its platform. */
+  recorder: VoiceRecorder;
 }) {
   const voice = useMemo(
     () => (options.client ? new WsVoiceStreamPort(options.client) : null),
     [options.client],
   );
-  const recorder = useMemo(() => options.recorder ?? unavailableRecorder, [options.recorder]);
+  const recorder = options.recorder;
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const activeStreamRef = useRef<ActiveVoiceStream | null>(null);

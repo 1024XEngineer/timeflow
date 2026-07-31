@@ -17,6 +17,17 @@ export type ScheduleServiceDeps = {
   notifyConflicts?: ScheduleConflictNotifier;
 };
 
+export class ScheduleAlarmSyncError extends Error {
+  readonly alarmCause: unknown;
+
+  constructor(message: string, cause: unknown) {
+    const detail = cause instanceof Error ? `：${cause.message}` : '';
+    super(`${message}${detail}`);
+    this.name = 'ScheduleAlarmSyncError';
+    this.alarmCause = cause;
+  }
+}
+
 export class ScheduleService {
   private readonly alarm: AlarmPort;
   private pushUnsubscribe: (() => void) | null = null;
@@ -87,26 +98,33 @@ export class ScheduleService {
 
     const scheduleId = response.payload.schedule_id;
 
-    const offsetMinutes = draft.time_remind_offset_minutes ?? 0;
-    const syncedSystemScheduleRefId = await this.alarm.syncForSchedule({
-      scheduleType: draft.schedule_type,
-      title: draft.title,
-      startTime: draft.start_time ?? null,
-      offsetMinutes,
-      previousAlarmId: existing?.system_schedule_ref_id ?? null,
-      shouldArm: response.payload.status === 'scheduled',
-    });
-
-    const entity = scheduleFromUpsertPayload({
+    const confirmedEntity = scheduleFromUpsertPayload({
       draft: { ...draft, schedule_id: scheduleId },
       scheduleId,
       userId,
       status: response.payload.status,
       geofenceArmed: response.payload.geofence_armed,
       existing,
-      systemScheduleRefId: syncedSystemScheduleRefId,
+      systemScheduleRefId: existing?.system_schedule_ref_id ?? null,
     });
+    this.deps.cache.upsert(confirmedEntity);
 
+    const offsetMinutes = draft.time_remind_offset_minutes ?? 0;
+    let syncedSystemScheduleRefId: string | null;
+    try {
+      syncedSystemScheduleRefId = await this.alarm.syncForSchedule({
+        scheduleType: draft.schedule_type,
+        title: draft.title,
+        startTime: draft.start_time ?? null,
+        offsetMinutes,
+        previousAlarmId: existing?.system_schedule_ref_id ?? null,
+        shouldArm: response.payload.status === 'scheduled',
+      });
+    } catch (error) {
+      throw new ScheduleAlarmSyncError('日程已保存到服务端，但系统提醒同步失败', error);
+    }
+
+    const entity = { ...confirmedEntity, system_schedule_ref_id: syncedSystemScheduleRefId };
     this.deps.cache.upsert(entity);
     return entity;
   }
@@ -120,21 +138,34 @@ export class ScheduleService {
       throw new Error(response.error.message);
     }
 
+    const confirmedEntity = withStatus(
+      schedule,
+      response.payload.status,
+      schedule.system_schedule_ref_id,
+    );
+    this.deps.cache.upsert(confirmedEntity);
+
     let systemScheduleRefId = schedule.system_schedule_ref_id;
-    if (nextStatus === 'done') {
-      systemScheduleRefId = await this.alarm.cancel(systemScheduleRefId);
-    } else {
-      systemScheduleRefId = await this.alarm.syncForSchedule({
-        scheduleType: schedule.schedule_type,
-        title: schedule.title,
-        startTime: schedule.start_time,
-        offsetMinutes: schedule.time_remind_offset_minutes,
-        previousAlarmId: schedule.system_schedule_ref_id,
-        shouldArm: true,
-      });
+    try {
+      if (nextStatus === 'done') {
+        systemScheduleRefId = await this.alarm.cancel(systemScheduleRefId);
+      } else {
+        systemScheduleRefId = await this.alarm.syncForSchedule({
+          scheduleType: schedule.schedule_type,
+          title: schedule.title,
+          startTime: schedule.start_time,
+          offsetMinutes: schedule.time_remind_offset_minutes,
+          previousAlarmId: schedule.system_schedule_ref_id,
+          shouldArm: true,
+        });
+      }
+    } catch (error) {
+      throw new ScheduleAlarmSyncError('日程状态已在服务端更新，但系统提醒同步失败', error);
     }
 
-    this.deps.cache.upsert(withStatus(schedule, response.payload.status, systemScheduleRefId));
+    this.deps.cache.upsert(
+      withStatus(confirmedEntity, response.payload.status, systemScheduleRefId),
+    );
   }
 
   async deleteSchedule(schedule: Schedule): Promise<void> {
@@ -143,7 +174,14 @@ export class ScheduleService {
     if (!response.ok) {
       throw new Error(response.error.message);
     }
-    const systemScheduleRefId = await this.alarm.cancel(schedule.system_schedule_ref_id);
-    this.deps.cache.upsert(markDeleted(schedule, systemScheduleRefId));
+    const confirmedEntity = markDeleted(schedule, schedule.system_schedule_ref_id);
+    this.deps.cache.upsert(confirmedEntity);
+    let systemScheduleRefId: string | null;
+    try {
+      systemScheduleRefId = await this.alarm.cancel(schedule.system_schedule_ref_id);
+    } catch (error) {
+      throw new ScheduleAlarmSyncError('日程已在服务端删除，但系统提醒取消失败', error);
+    }
+    this.deps.cache.upsert(markDeleted(confirmedEntity, systemScheduleRefId));
   }
 }
