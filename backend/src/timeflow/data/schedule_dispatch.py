@@ -44,6 +44,18 @@ class SqlAlchemyScheduleDispatchAdapter:
         )
         return result.rowcount > 0
 
+    def mark_done(self, schedule_id: str, updated_at: datetime) -> bool:
+        """Mark an acknowledged schedule as done; only affects still-scheduled rows."""
+        result = cast(
+            CursorResult[object],
+            self._session.execute(
+                update(Schedule)
+                .where(Schedule.id == schedule_id, Schedule.status == "scheduled")
+                .values(status="done", updated_at=updated_at.isoformat())
+            ),
+        )
+        return result.rowcount > 0
+
     def list_geofence_schedules(self, user_id: str) -> Iterable[ScheduleRecord]:
         """Return this user's scheduled, not-yet-geo-triggered, location-only rows.
 

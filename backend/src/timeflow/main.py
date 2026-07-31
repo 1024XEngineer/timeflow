@@ -30,7 +30,10 @@ from timeflow.infrastructure.websocket.handlers.location import LocationWebSocke
 from timeflow.infrastructure.websocket.handlers.reminders import ReminderWebSocketHandlers
 from timeflow.infrastructure.websocket.handlers.schedules import ScheduleWebSocketHandlers
 from timeflow.infrastructure.websocket.handlers.voice import VoiceWebSocketHandlers
-from timeflow.infrastructure.websocket.reminder_audio import ReminderAudioSender
+from timeflow.infrastructure.websocket.reminder_audio import (
+    ReminderAudioGenerationTracker,
+    ReminderAudioSender,
+)
 from timeflow.infrastructure.websocket.router import MessageRouter
 from timeflow.infrastructure.workers.reminder_dispatcher import ReminderDispatcher
 from timeflow.intelligence.schedule_parser import ScheduleDraftParser
@@ -103,6 +106,20 @@ def create_app() -> FastAPI:
                     logger.exception("geofence report failed for schedule %s", schedule.id)
         return results
 
+    def mark_schedule_done(schedule_id: str, updated_at: datetime) -> bool:
+        """Close a schedule once its reminder was acknowledged (架构设计.md §8.4)。"""
+        with session_factory() as session:
+            try:
+                marked = SqlAlchemyScheduleDispatchAdapter(session).mark_done(
+                    schedule_id, updated_at
+                )
+                session.commit()
+            except Exception:
+                session.rollback()
+                logger.exception("failed to mark schedule %s as done", schedule_id)
+                return False
+        return marked
+
     health_service = HealthService()
     connections = ConnectionManager()
     router = MessageRouter()
@@ -114,17 +131,26 @@ def create_app() -> FastAPI:
         audio_storage,
         user_id="default_user",
     )
-    audio_sender = ReminderAudioSender(connections, audio_storage)
+    # tracker 必须先于 audio_sender 和 schedule_handlers 创建:前者下发提醒时要靠它
+    # 判断音频是否还在生成中(有界等待),后者负责把生成任务登记进去。
+    audio_generation_tracker = ReminderAudioGenerationTracker(reminder_audio_service)
+    audio_sender = ReminderAudioSender(
+        connections,
+        audio_storage,
+        generation_tracker=audio_generation_tracker,
+    )
     dispatcher = ReminderDispatcher(
         connections,
         run_dispatch_tick,
         reminder_sender=audio_sender,
+        mark_done=mark_schedule_done,
     )
     reminder_handlers = ReminderWebSocketHandlers(dispatcher)
     location_handlers = LocationWebSocketHandlers(run_geofence_report, dispatcher, connections)
     schedule_handlers = ScheduleWebSocketHandlers(
         ScheduleService(schedule_repository),
         reminder_audio_service,
+        generation_tracker=audio_generation_tracker,
     )
     voice_service = VoiceScheduleParsingService(
         AliyunASRClient(settings.aliyun_asr),

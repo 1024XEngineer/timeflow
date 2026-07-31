@@ -219,6 +219,55 @@ def test_list_geofence_schedules_returns_located_schedules_for_the_user(session:
     assert [schedule.id for schedule, _ in transitions] == ["schedule_geo_1"]
 
 
+def test_mark_done_closes_a_scheduled_row(session: Session) -> None:
+    """提醒被确认后置为 done,并刷新 updated_at。"""
+    session.add(_make_schedule(id="schedule_1"))
+    session.commit()
+    adapter = SqlAlchemyScheduleDispatchAdapter(session)
+    acked_at = datetime(2026, 7, 29, 15, 30, tzinfo=UTC)
+
+    marked = adapter.mark_done("schedule_1", acked_at)
+    session.commit()
+
+    assert marked is True
+    reloaded = _reload(session, "schedule_1")
+    assert reloaded.status == "done"
+    assert reloaded.updated_at == acked_at.isoformat()
+
+
+def test_mark_done_does_not_resurrect_a_deleted_schedule(session: Session) -> None:
+    """已删除的日程不能被这条路径改回 done——迟到的 ack 不应该让它复活。"""
+    session.add(_make_schedule(id="schedule_deleted", status="deleted"))
+    session.commit()
+    adapter = SqlAlchemyScheduleDispatchAdapter(session)
+
+    marked = adapter.mark_done("schedule_deleted", datetime(2026, 7, 29, 15, 30, tzinfo=UTC))
+    session.commit()
+
+    assert marked is False
+    assert _reload(session, "schedule_deleted").status == "deleted"
+
+
+def test_done_schedule_stops_being_listened_to(session: Session) -> None:
+    """置为 done 之后,时间维度和地理围栏两条链路都不该再扫到它(架构设计.md §8.4)。"""
+    start_time = datetime(2026, 7, 29, 15, 0, tzinfo=UTC)
+    session.add(_make_schedule(id="schedule_time", start_time=start_time.isoformat()))
+    session.add(_make_location_schedule(id="schedule_geo"))
+    session.commit()
+    adapter = SqlAlchemyScheduleDispatchAdapter(session)
+    adapter.mark_done("schedule_time", start_time)
+    adapter.mark_done("schedule_geo", start_time)
+    session.commit()
+
+    time_hits = TimeWindowTriggerService(adapter).find_schedules_entering_window(now=start_time)
+    geo_hits = GeofenceTriggerService(adapter).find_geofence_transitions(
+        "default_user", 31.2451, 121.5067
+    )
+
+    assert time_hits == []
+    assert geo_hits == []
+
+
 def test_geofence_query_excludes_schedules_that_also_have_a_start_time(session: Session) -> None:
     """既有时间又有地点的日程只走时间维度,不能同时被地理围栏命中——否则同一条日程
     会被两条链路各推一次提醒(time_triggered_at/geo_triggered_at 互不干涉)。"""
