@@ -44,6 +44,9 @@ class ReminderAudioGenerationPort(Protocol):
     async def generate(self, schedule: ScheduleRecord) -> bool:
         """Generate the current reminder audio for a schedule."""
 
+    async def delete(self, schedule_id: str) -> None:
+        """Delete the current reminder audio for a schedule."""
+
 
 class ReminderTextRenderer:
     """Build deterministic reminder text without an LLM call."""
@@ -117,6 +120,11 @@ class ReminderAudioGenerationService:
         """Generate audio and write it only if the schedule is still current."""
         lock = self._locks.setdefault(schedule.id, asyncio.Lock())
         async with lock:
+            current = self._schedule_getter(schedule.id, self._user_id)
+            if current is None or current.updated_at != schedule.updated_at:
+                return False
+            await self._storage.delete(schedule.id)
+
             text = self._renderer.render(schedule)
             audio = await self._text_to_speech.synthesize(text)
             current = self._schedule_getter(schedule.id, self._user_id)
@@ -127,7 +135,9 @@ class ReminderAudioGenerationService:
 
     async def delete(self, schedule_id: str) -> None:
         """Remove the audio belonging to a deleted schedule."""
-        await self._storage.delete(schedule_id)
+        lock = self._locks.setdefault(schedule_id, asyncio.Lock())
+        async with lock:
+            await self._storage.delete(schedule_id)
 
 
 __all__ = [

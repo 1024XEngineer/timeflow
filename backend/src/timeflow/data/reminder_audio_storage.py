@@ -23,11 +23,12 @@ class FileReminderAudioStorage(ReminderAudioStoragePort):
         await asyncio.to_thread(self._replace_sync, schedule_id, audio.data, audio.audio_format)
 
     async def read(self, schedule_id: str) -> ReminderAudio | None:
-        """Read the current schedule audio and infer its transport format."""
-        data = await asyncio.to_thread(self._read_sync, schedule_id)
-        if data is None:
+        """Read the current schedule audio and preserve its stored format."""
+        stored = await asyncio.to_thread(self._read_sync, schedule_id)
+        if stored is None:
             return None
-        return ReminderAudio(data=data, audio_format=self._detect_format(data))
+        data, audio_format = stored
+        return ReminderAudio(data=data, audio_format=audio_format)
 
     async def delete(self, schedule_id: str) -> None:
         """Delete the current audio file if it exists."""
@@ -46,10 +47,10 @@ class FileReminderAudioStorage(ReminderAudioStoragePort):
         finally:
             temporary.unlink(missing_ok=True)
 
-    def _read_sync(self, schedule_id: str) -> bytes | None:
-        for path in self._paths_for(schedule_id):
+    def _read_sync(self, schedule_id: str) -> tuple[bytes, str] | None:
+        for audio_format, path in zip(self._AUDIO_SUFFIXES, self._paths_for(schedule_id), strict=True):
             if path.is_file():
-                return path.read_bytes()
+                return path.read_bytes(), audio_format
         return None
 
     def _delete_sync(self, schedule_id: str) -> None:
@@ -71,14 +72,5 @@ class FileReminderAudioStorage(ReminderAudioStoragePort):
 
     def _paths_for(self, schedule_id: str) -> tuple[Path, ...]:
         return tuple(self._path_for(schedule_id, suffix) for suffix in self._AUDIO_SUFFIXES)
-
-    @staticmethod
-    def _detect_format(data: bytes) -> str:
-        if data.startswith(b"RIFF") and data[8:12] == b"WAVE":
-            return "wav"
-        if data.startswith(b"ID3") or data[:2] in {b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"}:
-            return "mp3"
-        return "wav"
-
 
 __all__ = ["FileReminderAudioStorage"]

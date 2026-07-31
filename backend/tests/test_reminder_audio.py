@@ -6,6 +6,8 @@ import asyncio
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from timeflow.business.reminders import (
     ReminderAudio,
     ReminderAudioGenerationService,
@@ -76,6 +78,7 @@ def test_generation_discards_audio_for_stale_schedule() -> None:
     class FakeStorage:
         def __init__(self) -> None:
             self.replaced = False
+            self.deleted = False
 
         async def replace(self, schedule_id: str, audio: ReminderAudio) -> None:
             del schedule_id, audio
@@ -87,6 +90,7 @@ def test_generation_discards_audio_for_stale_schedule() -> None:
 
         async def delete(self, schedule_id: str) -> None:
             del schedule_id
+            self.deleted = True
 
     async def scenario() -> None:
         storage = FakeStorage()
@@ -103,6 +107,48 @@ def test_generation_discards_audio_for_stale_schedule() -> None:
 
         assert generated is False
         assert storage.replaced is False
+        assert storage.deleted is False
+
+    asyncio.run(scenario())
+
+
+def test_generation_invalidates_old_audio_before_tts_failure() -> None:
+    events: list[str] = []
+
+    class FailingTTS:
+        async def synthesize(self, text: str) -> ReminderAudio:
+            del text
+            events.append("synthesize")
+            raise RuntimeError("TTS failed")
+
+    class FakeStorage:
+        async def replace(self, schedule_id: str, audio: ReminderAudio) -> None:
+            del schedule_id, audio
+            events.append("replace")
+
+        async def read(self, schedule_id: str) -> ReminderAudio | None:
+            del schedule_id
+            return None
+
+        async def delete(self, schedule_id: str) -> None:
+            assert schedule_id == "schedule_001"
+            events.append("delete")
+
+    async def scenario() -> None:
+        schedule = _schedule()
+        service = ReminderAudioGenerationService(
+            lambda schedule_id, user_id: schedule
+            if schedule_id == schedule.id and user_id == schedule.user_id
+            else None,
+            FailingTTS(),
+            FakeStorage(),
+            user_id="default_user",
+        )
+
+        with pytest.raises(RuntimeError, match="TTS failed"):
+            await service.generate(schedule)
+
+        assert events == ["delete", "synthesize"]
 
     asyncio.run(scenario())
 
@@ -125,6 +171,24 @@ def test_file_storage_atomically_replaces_one_schedule_audio(tmp_path: Path) -> 
         assert audio.data == b"RIFFnew0WAVE"
         assert audio.audio_format == "wav"
         assert [path.name for path in tmp_path.iterdir()] == ["schedule_001.wav"]
+
+    asyncio.run(scenario())
+
+
+def test_file_storage_preserves_pcm_suffix_for_raw_audio(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        storage = FileReminderAudioStorage(tmp_path)
+        await storage.replace(
+            "schedule_001",
+            ReminderAudio(data=b"\x00\x01\x02\x03", audio_format="pcm"),
+        )
+
+        audio = await storage.read("schedule_001")
+
+        assert audio is not None
+        assert audio.data == b"\x00\x01\x02\x03"
+        assert audio.audio_format == "pcm"
+        assert [path.name for path in tmp_path.iterdir()] == ["schedule_001.pcm"]
 
     asyncio.run(scenario())
 
