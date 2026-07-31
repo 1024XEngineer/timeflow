@@ -1,9 +1,12 @@
-"""提醒下发消息类型 vs 示例 JSON 的校验。"""
+"""提醒下发消息类型与示例 JSON 的校验。"""
 
 import pytest
 from pydantic import ValidationError
 
 from timeflow.infrastructure.websocket.messages.reminder import (
+    ReminderAudioAck,
+    ReminderAudioEnd,
+    ReminderAudioStart,
     ReminderControl,
     ReminderControlAck,
 )
@@ -60,3 +63,33 @@ def test_reminder_control_missing_schedule_id_is_rejected() -> None:
                 "action": "show",
             }
         )
+
+
+def test_reminder_audio_messages_match_doc_examples() -> None:
+    start = ReminderAudioStart.model_validate(
+        {
+            "type": "reminder.audio.start",
+            "schedule_id": "schedule_001",
+            "stream_id": "stream_audio_001",
+            "audio_format": "wav",
+        }
+    )
+    end = ReminderAudioEnd.model_validate(
+        {
+            "type": "reminder.audio.end",
+            "schedule_id": "schedule_001",
+            "stream_id": "stream_audio_001",
+        }
+    )
+    ack = ReminderAudioAck.model_validate(
+        {
+            "type": "reminder.audio.ack",
+            "schedule_id": "schedule_001",
+            "stream_id": "stream_audio_001",
+            "ok": True,
+        }
+    )
+
+    assert start.audio_format == "wav"
+    assert end.stream_id == start.stream_id
+    assert ack.ok is True

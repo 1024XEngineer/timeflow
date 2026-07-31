@@ -5,6 +5,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Protocol
 
 from timeflow.business.reminders.reminder_dispatch import TriggeredSchedule
 from timeflow.infrastructure.websocket.connection_manager import ConnectionManager
@@ -15,6 +16,17 @@ DEFAULT_ACK_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAX_ATTEMPTS = 3
 
 logger = logging.getLogger(__name__)
+
+
+class _ReminderSender(Protocol):
+    async def send_reminder(
+        self,
+        device_id: str,
+        schedule_id: str,
+        *,
+        reason: str,
+        action: str = "show",
+    ) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,8 +53,10 @@ class ReminderDispatcher:
         poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
         ack_timeout_seconds: float = DEFAULT_ACK_TIMEOUT_SECONDS,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+        reminder_sender: _ReminderSender | None = None,
     ) -> None:
         self._connections = connections
+        self._reminder_sender = reminder_sender
         self._run_tick = run_tick
         self._poll_interval_seconds = poll_interval_seconds
         self._ack_timeout_seconds = ack_timeout_seconds
@@ -88,14 +102,21 @@ class ReminderDispatcher:
         self._pending[schedule.schedule_id] = _PendingAck(
             schedule=schedule, sent_at=now, attempt=attempt
         )
-        sent = await self._connections.send(
-            schedule.user_id,
-            ReminderControl(
-                schedule_id=schedule.schedule_id,
+        if self._reminder_sender is not None:
+            sent = await self._reminder_sender.send_reminder(
+                schedule.user_id,
+                schedule.schedule_id,
                 reason=schedule.reason,
-                action="show",
-            ).model_dump(),
-        )
+            )
+        else:
+            sent = await self._connections.send(
+                schedule.user_id,
+                ReminderControl(
+                    schedule_id=schedule.schedule_id,
+                    reason=schedule.reason,
+                    action="show",
+                ).model_dump(),
+            )
         if not sent:
             # 设备离线:客户端根据自身能力降级为普通通知,不需要服务端等待 ack
             self._pending.pop(schedule.schedule_id, None)

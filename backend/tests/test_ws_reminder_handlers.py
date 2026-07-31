@@ -1,4 +1,4 @@
-"""`ReminderWebSocketHandlers` 的单元测试:只做解析转发,没有判断逻辑。"""
+"""提醒确认消息处理器的单元测试。"""
 
 import asyncio
 
@@ -14,8 +14,6 @@ class _StubDispatcher:
 
 
 def test_reminder_control_ack_forwards_schedule_id_and_device_id() -> None:
-    """`reminder.control.ack` 在 ok=True 时把 schedule_id 和来源 device_id 转发给 dispatcher。"""
-
     async def scenario() -> None:
         dispatcher = _StubDispatcher()
         handlers = ReminderWebSocketHandlers(dispatcher)
@@ -36,8 +34,6 @@ def test_reminder_control_ack_forwards_schedule_id_and_device_id() -> None:
 
 
 def test_reminder_control_ack_with_ok_false_does_not_forward() -> None:
-    """`ok=False`(客户端明确表示没能展示成功)不应该转发给 dispatcher 当作已确认。"""
-
     async def scenario() -> None:
         dispatcher = _StubDispatcher()
         handlers = ReminderWebSocketHandlers(dispatcher)
@@ -55,3 +51,36 @@ def test_reminder_control_ack_with_ok_false_does_not_forward() -> None:
         assert dispatcher.calls == []
 
     asyncio.run(scenario())
+
+
+def test_audio_ack_is_accepted_without_an_extra_response() -> None:
+    handlers = ReminderWebSocketHandlers(_StubDispatcher())
+
+    response = asyncio.run(
+        handlers.handle_audio_ack(
+            {
+                "type": "reminder.audio.ack",
+                "schedule_id": "schedule_001",
+                "stream_id": "stream_audio_001",
+                "ok": True,
+            },
+            "device_1",
+        )
+    )
+
+    assert response is None
+
+
+def test_invalid_audio_ack_returns_protocol_error() -> None:
+    handlers = ReminderWebSocketHandlers(_StubDispatcher())
+
+    response = asyncio.run(
+        handlers.handle_audio_ack(
+            {"type": "reminder.audio.ack", "ok": True},
+            "device_1",
+        )
+    )
+
+    assert response is not None
+    assert response["type"] == "protocol.error"
+    assert response["error"]["code"] == "VALIDATION_ERROR"
