@@ -1,6 +1,10 @@
 import { describe, expect, it } from '@jest/globals';
 
-import { buildSessionWebSocketUrl, resolveSessionUserId } from '@/app/session/sessionEndpoint';
+import {
+  buildSessionWebSocketUrl,
+  resolveAllowFakeWs,
+  resolveSessionUserId,
+} from '@/app/session/sessionEndpoint';
 
 describe('session endpoint compatibility', () => {
   it('adds the persisted device id to the backend WebSocket URL', () => {
@@ -32,5 +36,13 @@ describe('session endpoint compatibility', () => {
   it('uses the MVP backend user when session.ready omits user_id', () => {
     expect(resolveSessionUserId(undefined)).toBe('default_user');
     expect(resolveSessionUserId(' user_1 ')).toBe('user_1');
+  });
+
+  it('allows an explicit fake-ws opt-in outside __DEV__ for hosted previews', () => {
+    expect(resolveAllowFakeWs('true', false)).toBe(true);
+    expect(resolveAllowFakeWs('1', false)).toBe(true);
+    expect(resolveAllowFakeWs('false', false)).toBe(false);
+    expect(resolveAllowFakeWs(undefined, false)).toBe(false);
+    expect(resolveAllowFakeWs(undefined, true)).toBe(true);
   });
 });

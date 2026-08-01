@@ -4,6 +4,23 @@ function isDevelopmentBuild(): boolean {
   return typeof __DEV__ !== 'undefined' && __DEV__;
 }
 
+/**
+ * Decide whether the in-process FakeWsServer may be used when EXPO_PUBLIC_WS_URL is empty.
+ *
+ * - Explicit `true`/`1`: deliberate opt-in for any build (hosted web previews).
+ * - Explicit `false`/`0`: always disabled.
+ * - Unset: allowed only in `__DEV__` builds so store/production releases stay remote-only.
+ */
+export function resolveAllowFakeWs(
+  flag: string | undefined,
+  isDevBuild: boolean = isDevelopmentBuild(),
+): boolean {
+  const normalized = flag?.trim();
+  if (normalized === '0' || normalized === 'false') return false;
+  if (normalized === '1' || normalized === 'true') return true;
+  return isDevBuild;
+}
+
 export function buildSessionWebSocketUrl(
   baseUrl: string,
   deviceId: string,
