@@ -17,18 +17,6 @@ export type VoiceStreamEndCommand = WsRequest<'voice.stream.end', VoiceStreamEnd
 
 export type VoiceStreamError = WsFailure<'voice.stream.error'>;
 
-export type VoiceStreamCancelPayload = {
-  stream_id: string;
-  job_id: string | null;
-};
-
-export type VoiceStreamCancelCommand = WsRequest<'voice.stream.cancel', VoiceStreamCancelPayload>;
-
-export type VoiceStreamCancelAck =
-  | WsSuccess<'voice.stream.cancelled', { stream_id: string }>
-  | VoiceStreamError
-  | WsFailure<'voice.stream.cancel'>;
-
 export type VoiceStreamStarted = WsSuccess<
   'voice.stream.started',
   { stream_id: string; job_id: string }

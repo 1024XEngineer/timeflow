@@ -164,7 +164,6 @@ export function SessionProvider({
         setConnectionStatus('error');
         setConnectionError('会话握手超时，请检查服务连接');
         client.close();
-        scheduleReconnect();
       }, SESSION_READY_TIMEOUT_MS);
       client.sendJson(hello);
     };
@@ -182,7 +181,6 @@ export function SessionProvider({
         client.close();
         setConnectionStatus('error');
         setConnectionError(error instanceof Error ? error.message : 'WebSocket 连接失败');
-        scheduleReconnect();
       }
     };
 
