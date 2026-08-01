@@ -15,4 +15,19 @@ module.exports = defineConfig([
       'no-console': ['warn', { allow: ['warn', 'error'] }],
     },
   },
+  {
+    files: ['__tests__/**/*.ts', '__tests__/**/*.tsx'],
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+      'import/first': 'off',
+    },
+  },
+  {
+    files: ['jest.setup.js'],
+    languageOptions: {
+      globals: {
+        jest: 'readonly',
+      },
+    },
+  },
 ]);
