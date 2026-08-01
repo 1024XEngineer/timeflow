@@ -1,12 +1,15 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+
 # Expo
 .expo/
+dist/
 web-build/
 expo-env.d.ts
 
-# Metro
-.metro-health-check*
-
-# Native signing
+# Native
 .kotlin/
 *.orig.*
 *.jks
@@ -15,8 +18,46 @@ expo-env.d.ts
 *.key
 *.mobileprovision
 
-# generated native folders
-# Leading slash keeps these to this directory only — a bare `android/` would
-# match a directory of that name at any depth.
+# Metro
+.metro-health-check*
+
+# debug
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# test coverage
+coverage/
+
+# macOS / Windows
+.DS_Store
+Thumbs.db
+*.pem
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# local env files
+.env*.local
+.env
+!.env.example
+
+# typescript
+*.tsbuildinfo
+
+# generated native folders — the repo root does not cover these
+# Leading slash is required: a bare `android/` matches a directory of that
+# name at any depth, not just the prebuild output sitting here.
 /ios
 /android
+
+# local build artifacts & previews
+*.apk
+alarm-ring-preview.html
+
+# local source backups
+_backup*
