@@ -35,6 +35,7 @@ type FakeWsServerOptions = {
  */
 export class FakeWsServer {
   private readonly schedules = new Map<string, Schedule>();
+  private readonly voiceStreams = new Map<string, { jobId: string; startRequestId: string }>();
   private readonly userId: string;
   private client: WsClient | null = null;
   private voiceJobCounter = 0;
@@ -216,6 +217,7 @@ export class FakeWsServer {
     this.voiceJobCounter += 1;
     const streamId = `stream_${this.voiceJobCounter}`;
     const jobId = `job_${this.voiceJobCounter}`;
+    this.voiceStreams.set(streamId, { jobId, startRequestId: message.request_id });
     const response: VoiceStreamStartResponse = {
       type: 'voice.stream.started',
       request_id: message.request_id,
@@ -226,14 +228,28 @@ export class FakeWsServer {
   }
 
   private handleVoiceEnd(message: VoiceStreamEndCommand): void {
-    const jobId = `job_${this.voiceJobCounter || 1}`;
+    const stream = this.voiceStreams.get(message.payload.stream_id);
+    if (!stream) {
+      this.reply({
+        type: 'voice.stream.error',
+        request_id: message.request_id,
+        ok: false,
+        error: {
+          code: 'stream_not_found',
+          message: '语音流不存在或已结束',
+          details: null,
+        },
+      });
+      return;
+    }
+    this.voiceStreams.delete(message.payload.stream_id);
     const response: VoiceStreamEndResponse = {
       type: 'voice.stream.ended',
       request_id: message.request_id,
       ok: true,
       payload: {
         stream_id: message.payload.stream_id,
-        job_id: jobId,
+        job_id: stream.jobId,
         status: 'processing',
       },
     };
@@ -241,8 +257,9 @@ export class FakeWsServer {
 
     const parseResult: VoiceParseResultMessage = {
       type: 'voice.parse.result',
-      request_id: message.request_id,
-      job_id: jobId,
+      // Backend correlates parse results to voice.stream.start, not end.
+      request_id: stream.startRequestId,
+      job_id: stream.jobId,
       status: 'ready_for_confirmation',
       draft: {
         schedule_type: 'time',
@@ -260,6 +277,7 @@ export class FakeWsServer {
   }
 
   private handleVoiceCancel(message: VoiceStreamCancelCommand): void {
+    this.voiceStreams.delete(message.payload.stream_id);
     this.reply({
       type: 'voice.stream.cancelled',
       request_id: message.request_id,
