@@ -9,9 +9,7 @@
     "ios": {
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "允许 Timeflow 获取当前位置，以便在地图选点和地点提醒时使用。",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "允许 Timeflow 在后台获取当前位置，以便触发地点提醒。",
-        "NSMicrophoneUsageDescription": "允许 Timeflow 录制语音，以便将语音整理成日程。",
-        "UIBackgroundModes": ["location"]
+        "NSMicrophoneUsageDescription": "允许 Timeflow 录制语音，以便将语音整理成日程。"
       },
       "supportsTablet": true
     },
@@ -20,7 +18,6 @@
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
-        "ACCESS_BACKGROUND_LOCATION",
         "RECORD_AUDIO",
         "SCHEDULE_EXACT_ALARM",
         "POST_NOTIFICATIONS",
@@ -28,7 +25,6 @@
         "SYSTEM_ALERT_WINDOW",
         "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
         "FOREGROUND_SERVICE",
-        "FOREGROUND_SERVICE_LOCATION",
         "FOREGROUND_SERVICE_MEDIA_PLAYBACK",
         "VIBRATE"
       ],
@@ -44,6 +40,12 @@
     "plugins": [
       "./plugins/withTimeflowAlarm",
       "./plugins/withTimeflowVoiceRecorder",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "允许 Timeflow 在应用使用期间获取当前位置，以便触发地点提醒。"
+        }
+      ],
       [
         "expo-image-picker",
         {

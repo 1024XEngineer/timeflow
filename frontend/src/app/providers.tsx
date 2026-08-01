@@ -2,24 +2,28 @@ import { useMemo, type ReactNode } from 'react';
 import { Platform, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import { createReminderAlarmAdapter } from '@/app/integrations/reminderAlarmAdapter';
 import { OverlayProvider } from '@/app/overlay/OverlayProvider';
+import { createReminderAlarmAdapter } from '@/app/integrations/reminderAlarmAdapter';
+import { createScheduleConflictNotifier } from '@/app/integrations/scheduleConflictNotifier';
 import { SessionProvider, useSession } from '@/app/session/SessionProvider';
-import { ScheduleProvider } from '@/features/schedule';
 import type { DeviceIdStore } from '@/infrastructure/storage/deviceIdStore';
+import { ScheduleProvider } from '@/features/schedule';
 import { AppDialogProvider, useAppDialog } from '@/shared/components/AppDialogProvider';
 
 import { providerStyles as styles } from './providers.styles';
 
+/** 将 session 注入 schedule，避免 feature 反向依赖 app。 */
 function ScheduleSessionBridge({ children }: { children: ReactNode }) {
   const { client, connectionStatus, userId, sessionEpoch } = useSession();
   const { showNotice } = useAppDialog();
   const alarmAdapter = useMemo(() => createReminderAlarmAdapter(showNotice), [showNotice]);
+  const notifyConflicts = useMemo(() => createScheduleConflictNotifier(showNotice), [showNotice]);
   return (
     <ScheduleProvider
       alarmAdapter={alarmAdapter}
       client={client}
       connectionStatus={connectionStatus}
+      notifyConflicts={notifyConflicts}
       userId={userId}
       sessionEpoch={sessionEpoch}
     >

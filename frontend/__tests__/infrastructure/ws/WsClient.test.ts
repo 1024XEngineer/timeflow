@@ -97,7 +97,7 @@ describe('WsClient + FakeWsServer', () => {
     client.close();
   });
 
-  it('uses the production location report and uncorrelated ack shapes', async () => {
+  it('uses the production location report and correlated ack shapes', async () => {
     const server = new FakeWsServer({ userId: 'user_test' });
     const client = new WsClient({ fakeHandler: server.handleMessage });
     server.attach(client);
@@ -112,14 +112,22 @@ describe('WsClient + FakeWsServer', () => {
     });
     client.sendJson({
       type: 'location.report',
-      schedule_scope: 'current',
-      latitude: 31.236305,
-      longitude: 121.480237,
-      accuracy: 12,
-      timestamp: '2026-07-31T10:00:00Z',
+      request_id: 'req_location_1',
+      payload: {
+        schedule_scope: 'current',
+        latitude: 31.236305,
+        longitude: 121.480237,
+        accuracy: 12,
+        timestamp: '2026-07-31T10:00:00Z',
+      },
     });
 
-    await expect(ack).resolves.toEqual({ type: 'location.report.ack', ok: true });
+    await expect(ack).resolves.toEqual({
+      type: 'location.report.ack',
+      request_id: 'req_location_1',
+      ok: true,
+      payload: null,
+    });
     client.close();
   });
 

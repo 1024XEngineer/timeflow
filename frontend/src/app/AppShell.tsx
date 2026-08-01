@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useOverlay } from '@/app/overlay/OverlayProvider';
+import { useLocationReporting } from '@/app/integrations/useLocationReporting';
 import { useSession } from '@/app/session/SessionProvider';
+import { createVoiceRecorder } from '@/infrastructure/audio/VoiceRecorder';
 import {
   AssistantChatSheet,
   AssistantDock,
@@ -9,31 +11,35 @@ import {
   type VoiceRecorder,
 } from '@/features/assistant';
 import {
-  ScheduleScreen,
   StandardCreateModal,
+  ScheduleScreen,
   scheduleDraftFromVoiceParse,
   upsertDraftForSchedule,
-  useScheduleCommands,
   useSessionSavedLocations,
+  useScheduleCommands,
   type Schedule,
   type ScheduleDraft,
 } from '@/features/schedule';
-import { createVoiceRecorder } from '@/infrastructure/audio/VoiceRecorder';
+import type { LocationProvider } from '@/app/integrations/useLocationReporting';
 import { useAppDialog } from '@/shared/components/AppDialogProvider';
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Connects schedule and assistant features without coupling the feature packages. */
+/**
+ * App 组合根：接线 schedule 与 assistant，feature 之间不互相 import。
+ */
 export function AppShell({
+  locationProvider,
   voiceRecorder: injectedVoiceRecorder,
 }: {
+  locationProvider?: LocationProvider;
   voiceRecorder?: VoiceRecorder;
 } = {}) {
   const { isOpen, push, popKind } = useOverlay();
   const { showNotice } = useAppDialog();
-  const { client, connectionError } = useSession();
+  const { client, connectionStatus, connectionError } = useSession();
   const {
     items: scheduleItems,
     ready,
@@ -42,6 +48,13 @@ export function AppShell({
     deleteSchedule,
     mutation,
   } = useScheduleCommands();
+  useLocationReporting({
+    client,
+    connectionStatus,
+    items: scheduleItems,
+    provider: locationProvider,
+  });
+
   const [editingDraft, setEditingDraft] = useState<ScheduleDraft | null>(null);
   const voiceRecorder = useMemo(
     () => injectedVoiceRecorder ?? createVoiceRecorder(),
@@ -76,14 +89,19 @@ export function AppShell({
       }
       setEditingDraft(draft);
       if (!isOpen('standardCreate')) {
-        push({ kind: 'standardCreate', onClose: () => setEditingDraft(null) });
+        push({
+          kind: 'standardCreate',
+          onClose: () => setEditingDraft(null),
+        });
       }
     },
     [isOpen, push, ready, showNotice],
   );
 
   const editSchedule = useCallback(
-    (item: Schedule) => openStandardCreate(upsertDraftForSchedule(item)),
+    (item: Schedule) => {
+      openStandardCreate(upsertDraftForSchedule(item));
+    },
     [openStandardCreate],
   );
 
@@ -99,7 +117,10 @@ export function AppShell({
     if (!isOpen('assistant')) push({ kind: 'assistant' });
   }, [isOpen, push]);
 
-  const closeAssistant = useCallback(() => popKind('assistant'), [popKind]);
+  const closeAssistant = useCallback(() => {
+    popKind('assistant');
+  }, [popKind]);
+
   const assistant = useAssistantSession({
     client,
     onConfirmDraft: async (voiceDraft) => {
@@ -123,18 +144,35 @@ export function AppShell({
     }
   }, [assistant, openAssistant, showNotice]);
 
-  const onVoiceEnd = useCallback(() => void handleVoiceEnd(), [handleVoiceEnd]);
+  const onVoiceEnd = useCallback(() => {
+    void handleVoiceEnd();
+  }, [handleVoiceEnd]);
+
+  const onDeleteSchedule = useCallback(
+    (item: Schedule) => {
+      void deleteSchedule(item).catch(() => undefined);
+    },
+    [deleteSchedule],
+  );
+
+  const onToggleSchedule = useCallback(
+    (item: Schedule) => {
+      void toggleScheduleDone(item).catch(() => undefined);
+    },
+    [toggleScheduleDone],
+  );
 
   return (
     <>
       <ScheduleScreen
         canMutate={ready}
         onCreate={() => openStandardCreate()}
-        onDeleteSchedule={(item) => void deleteSchedule(item).catch(() => undefined)}
+        onDeleteSchedule={onDeleteSchedule}
         onEditSchedule={editSchedule}
-        onToggleSchedule={(item) => void toggleScheduleDone(item).catch(() => undefined)}
+        onToggleSchedule={onToggleSchedule}
         scheduleItems={scheduleItems}
       />
+
       <AssistantChatSheet
         isProcessing={assistant.isProcessing}
         messages={assistant.messages}
@@ -156,6 +194,7 @@ export function AppShell({
         onVoiceEnd={onVoiceEnd}
         onVoiceStart={handleVoiceStart}
       />
+
       <StandardCreateModal
         initialDraft={editingDraft}
         onClose={closeStandardCreate}

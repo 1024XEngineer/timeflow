@@ -1,4 +1,4 @@
-import type { ApiError } from './envelope';
+import type { ApiError, WsFailure, WsRequest, WsSuccess } from './envelope';
 
 export type SessionHello = {
   type: 'session.hello';
@@ -20,8 +20,7 @@ export type SessionError = {
   error: ApiError;
 };
 
-export type LocationReport = {
-  type: 'location.report';
+export type LocationReportPayload = {
   schedule_scope: 'current';
   latitude: number;
   longitude: number;
@@ -29,6 +28,7 @@ export type LocationReport = {
   timestamp: string;
 };
 
+export type LocationReport = WsRequest<'location.report', LocationReportPayload>;
+
 export type LocationReportAck =
-  | { type: 'location.report.ack'; ok: true }
-  | { type: 'location.report.ack'; ok: false; error: ApiError };
+  WsSuccess<'location.report.ack', null> | WsFailure<'location.report.ack'>;
