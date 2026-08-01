@@ -97,6 +97,40 @@ describe('WsClient + FakeWsServer', () => {
     client.close();
   });
 
+  it('uses the production location report and correlated ack shapes', async () => {
+    const server = new FakeWsServer({ userId: 'user_test' });
+    const client = new WsClient({ fakeHandler: server.handleMessage });
+    server.attach(client);
+    await client.connect();
+
+    const ack = new Promise<Record<string, unknown>>((resolve) => {
+      client.onMessage((message) => {
+        if (!(message instanceof ArrayBuffer) && message.type === 'location.report.ack') {
+          resolve(message);
+        }
+      });
+    });
+    client.sendJson({
+      type: 'location.report',
+      request_id: 'req_location_1',
+      payload: {
+        schedule_scope: 'current',
+        latitude: 31.236305,
+        longitude: 121.480237,
+        accuracy: 12,
+        timestamp: '2026-07-31T10:00:00Z',
+      },
+    });
+
+    await expect(ack).resolves.toEqual({
+      type: 'location.report.ack',
+      request_id: 'req_location_1',
+      ok: true,
+      payload: null,
+    });
+    client.close();
+  });
+
   it('rejects pending requests immediately when the remote socket closes unexpectedly', async () => {
     class TestWebSocket {
       static readonly OPEN = 1;

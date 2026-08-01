@@ -29,8 +29,8 @@ export function ScheduleScreen({
   scheduleItems: Schedule[];
 }) {
   const now = useCurrentDate();
-  const [visibleMonth, setVisibleMonth] = useState(() => startOfMonth(new Date()));
-  const [selectedDate, setSelectedDate] = useState(() => new Date());
+  const [visibleMonth, setVisibleMonth] = useState(() => startOfMonth(now));
+  const [selectedDate, setSelectedDate] = useState(() => now);
   const [selectedScheduleId, setSelectedScheduleId] = useState<string | null>(null);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
 

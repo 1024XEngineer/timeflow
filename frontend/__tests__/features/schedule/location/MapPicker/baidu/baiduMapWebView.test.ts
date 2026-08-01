@@ -22,4 +22,16 @@ describe('buildBaiduMapDocument', () => {
     expect(html).toContain('121.2');
     expect(html).toContain('办公室');
   });
+
+  it('escapes initial location data for the inline script context', () => {
+    const html = buildBaiduMapDocument('ak', {
+      address: '</script><script>window.pwned = "&"</script>',
+      latitude: 31.1,
+      longitude: 121.2,
+    });
+
+    expect(html).not.toContain('</script><script>window.pwned');
+    expect(html).toContain('\\u003c/script\\u003e\\u003cscript\\u003e');
+    expect(html).toContain('\\u0026');
+  });
 });

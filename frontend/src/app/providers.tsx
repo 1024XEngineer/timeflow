@@ -40,7 +40,6 @@ export function AppProviders({
   deviceIdStore?: DeviceIdStore;
 }) {
   const { width } = useWindowDimensions();
-
   const tree = (
     <SessionProvider deviceIdStore={deviceIdStore}>
       <ScheduleSessionBridge>
@@ -58,7 +57,6 @@ export function AppProviders({
   }
 
   const compact = width < 480;
-
   return (
     <SafeAreaProvider>
       <AppDialogProvider>
