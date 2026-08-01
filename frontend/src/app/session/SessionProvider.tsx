@@ -14,7 +14,11 @@ import { FakeWsServer } from '@/dev/fakes/FakeWsServer';
 import { getOrCreateDeviceId, type DeviceIdStore } from '@/infrastructure/storage/deviceIdStore';
 import { WsClient } from '@/infrastructure/ws/WsClient';
 
-import { buildSessionWebSocketUrl, resolveSessionUserId } from './sessionEndpoint';
+import {
+  buildSessionWebSocketUrl,
+  resolveAllowFakeWs,
+  resolveSessionUserId,
+} from './sessionEndpoint';
 
 export type SessionTransportMode = 'remote' | 'fake' | 'unavailable';
 
@@ -38,21 +42,11 @@ function resolveWsUrl(): string | null {
   return fromEnv || null;
 }
 
-function resolveAllowFake(): boolean {
-  const flag =
-    typeof process !== 'undefined' ? process.env.EXPO_PUBLIC_USE_FAKE_WS?.trim() : undefined;
-  const isDevBuild = typeof __DEV__ !== 'undefined' && __DEV__;
-  // Fake 只能进入开发/调试构建；release 即使误带变量也必须拒绝。
-  if (!isDevBuild) return false;
-  if (flag === '0' || flag === 'false') return false;
-  return flag === '1' || flag === 'true' || flag == null;
-}
-
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
 const SESSION_READY_TIMEOUT_MS = 10_000;
 const UNAVAILABLE_CONNECTION_ERROR =
-  '缺少 EXPO_PUBLIC_WS_URL。开发环境可设置 EXPO_PUBLIC_USE_FAKE_WS=true 使用进程内 Fake。';
+  '缺少 EXPO_PUBLIC_WS_URL。可设置 EXPO_PUBLIC_USE_FAKE_WS=true 使用进程内 Fake（含托管预览）。';
 
 function isSessionReady(message: WsJsonMessage, deviceId: string): message is SessionReady {
   return (
@@ -78,7 +72,13 @@ export function SessionProvider({
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
   const url = useMemo(() => resolveWsUrl(), []);
-  const allowFake = useMemo(() => resolveAllowFake(), []);
+  const allowFake = useMemo(
+    () =>
+      resolveAllowFakeWs(
+        typeof process !== 'undefined' ? process.env.EXPO_PUBLIC_USE_FAKE_WS : undefined,
+      ),
+    [],
+  );
   const transportMode: SessionTransportMode = url ? 'remote' : allowFake ? 'fake' : 'unavailable';
 
   const remoteEndpoint = useMemo(() => {
