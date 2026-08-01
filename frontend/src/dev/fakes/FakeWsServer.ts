@@ -13,6 +13,7 @@ import type {
   SessionHello,
   SessionReady,
   VoiceParseResultMessage,
+  VoiceStreamCancelCommand,
   VoiceStreamEndCommand,
   VoiceStreamStartCommand,
   VoiceStreamStartResponse,
