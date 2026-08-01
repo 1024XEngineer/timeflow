@@ -145,6 +145,18 @@ describe('ScheduleService', () => {
     expect(saved.system_schedule_ref_id).toBe('alarm_99');
   });
 
+  it('keeps a confirmed save in cache when alarm sync fails', async () => {
+    syncForSchedule.mockRejectedValueOnce(new Error('permission denied'));
+
+    await expect(service.saveDraft(makeDraft({ title: '已保存会议' }))).rejects.toThrow(
+      '日程已保存到服务端，但系统提醒同步失败：permission denied',
+    );
+
+    expect(service.getItems()).toEqual([
+      expect.objectContaining({ id: 'schedule_auto', title: '已保存会议', status: 'scheduled' }),
+    ]);
+  });
+
   it('toggles done through updateStatus and re-arms on undo', async () => {
     syncForSchedule.mockResolvedValue('alarm_old');
     await service.saveDraft(
@@ -174,6 +186,34 @@ describe('ScheduleService', () => {
     expect(cancel).toHaveBeenCalledWith('alarm_del');
     expect(service.getItems()[0]?.status).toBe('deleted');
     expect(service.getItems()[0]?.system_schedule_ref_id).toBeNull();
+  });
+
+  it('keeps a confirmed status update when alarm cancellation fails', async () => {
+    const schedule = makeSchedule({ id: 'toggle-failed', system_schedule_ref_id: 'alarm-1' });
+    cache.replaceAll([schedule]);
+    cancel.mockRejectedValueOnce(new Error('native alarm unavailable'));
+
+    await expect(service.toggleDone(schedule)).rejects.toThrow(
+      '日程状态已在服务端更新，但系统提醒同步失败',
+    );
+
+    expect(service.getItems()[0]).toEqual(
+      expect.objectContaining({ status: 'done', system_schedule_ref_id: 'alarm-1' }),
+    );
+  });
+
+  it('keeps a confirmed deletion when alarm cancellation fails', async () => {
+    const schedule = makeSchedule({ id: 'delete-failed', system_schedule_ref_id: 'alarm-2' });
+    cache.replaceAll([schedule]);
+    cancel.mockRejectedValueOnce(new Error('native alarm unavailable'));
+
+    await expect(service.deleteSchedule(schedule)).rejects.toThrow(
+      '日程已在服务端删除，但系统提醒取消失败',
+    );
+
+    expect(service.getItems()[0]).toEqual(
+      expect.objectContaining({ status: 'deleted', system_schedule_ref_id: 'alarm-2' }),
+    );
   });
 
   it('keeps the alarm reference returned by the platform adapter', async () => {
