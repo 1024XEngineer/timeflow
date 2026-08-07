@@ -1,0 +1,81 @@
+"""Agent-facing schedule application service skeleton."""
+
+from abc import ABC, abstractmethod
+
+from timeflow.business.calendar.contracts import (
+    CreateScheduleCommand,
+    DeleteOnceScheduleCommand,
+    DeleteRecurringScheduleCommand,
+    FindSchedulesQuery,
+    ScheduleMutationResult,
+    ScheduleSearchResult,
+    UpdateScheduleCommand,
+)
+
+
+class ScheduleAgentService(ABC):
+    """Five stable schedule operations exposed to the Agent.
+
+    This abstract class intentionally contains no persistence, validation,
+    recurrence expansion, or mutation logic yet.
+    """
+
+    @abstractmethod
+    def create_schedule(
+        self,
+        *,
+        account_id: str,
+        command: CreateScheduleCommand,
+    ) -> ScheduleMutationResult:
+        """Create an ordinary or recurring schedule from a confirmed command."""
+        # TODO(person-2): validate the aggregate and persist it transactionally.
+        raise NotImplementedError
+
+    @abstractmethod
+    def find_schedules(
+        self,
+        *,
+        account_id: str,
+        query: FindSchedulesQuery,
+    ) -> ScheduleSearchResult:
+        """Find schedules for Agent queries, matching, and disambiguation."""
+        # TODO(person-2): implement account-scoped schedule matching.
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_schedule(
+        self,
+        *,
+        account_id: str,
+        command: UpdateScheduleCommand,
+    ) -> ScheduleMutationResult:
+        """Update one schedule; recurring changes apply to the complete series."""
+        # TODO(person-2): validate the patch, revision, and final aggregate.
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete_once_schedule(
+        self,
+        *,
+        account_id: str,
+        command: DeleteOnceScheduleCommand,
+    ) -> ScheduleMutationResult:
+        """Soft-delete one non-recurring schedule."""
+        # TODO(person-2): validate the target and create a deleted cloud snapshot.
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete_recurring_schedule(
+        self,
+        *,
+        account_id: str,
+        command: DeleteRecurringScheduleCommand,
+    ) -> ScheduleMutationResult:
+        """Delete the next occurrence or that occurrence and all future ones."""
+        # TODO(person-2): use the schedule timezone and a system clock to find
+        # the first occurrence on or after the current local date, then apply
+        # command.scope without accepting an arbitrary date from the caller.
+        raise NotImplementedError
+
+
+__all__ = ["ScheduleAgentService"]
