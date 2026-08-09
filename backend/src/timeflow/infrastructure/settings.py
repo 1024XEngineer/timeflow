@@ -15,6 +15,11 @@ class Settings:
     app_name: str
     environment: str
     database_url: str
+    ws_handshake_timeout_seconds: float
+    ws_max_unauthenticated_connections: int
+    ws_audio_queue_max_chunks: int
+    ws_max_audio_duration_ms: int
+    ws_audio_chunk_size_bytes: int
 
     @classmethod
     def from_environment(cls, env_file: Path | str = ".env") -> "Settings":
@@ -26,6 +31,19 @@ class Settings:
             database_url=environ.get(
                 "TIMEFLOW_DATABASE_URL",
                 "postgresql+psycopg://timeapp:timeapp@127.0.0.1:5432/timeapp",
+            ),
+            ws_handshake_timeout_seconds=float(
+                environ.get("TIMEFLOW_WS_HANDSHAKE_TIMEOUT_SECONDS", "5.0")
+            ),
+            ws_max_unauthenticated_connections=int(
+                environ.get("TIMEFLOW_WS_MAX_UNAUTHENTICATED_CONNECTIONS", "100")
+            ),
+            ws_audio_queue_max_chunks=int(environ.get("TIMEFLOW_WS_AUDIO_QUEUE_MAX_CHUNKS", "32")),
+            ws_max_audio_duration_ms=int(
+                environ.get("TIMEFLOW_WS_MAX_AUDIO_DURATION_MS", "120000")
+            ),
+            ws_audio_chunk_size_bytes=int(
+                environ.get("TIMEFLOW_WS_AUDIO_CHUNK_SIZE_BYTES", "65536")
             ),
         )
 
