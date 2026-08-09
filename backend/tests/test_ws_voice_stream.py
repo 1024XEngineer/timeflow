@@ -259,6 +259,60 @@ def test_empty_binary_frame_is_refused_without_ending_the_stream() -> None:
     assert sink.audio() == b"\x09\x0a"
 
 
+def test_audio_exactly_at_the_duration_budget_is_accepted() -> None:
+    """Audio filling the budget precisely is still within it.
+
+    Guards the comparison at the limit: 10 ms of 16 kHz mono 16-bit audio is 320 bytes,
+    and 320 must pass where 321 does not.
+    """
+    sink = CapturingSink()
+    client = TestClient(_build_app(sink, max_audio_duration_ms=10))
+    frame = b"\x00" * 320
+
+    with client.websocket_connect("/ws?device_id=device_001") as websocket:
+        websocket.send_json(VALID_HELLO)
+        websocket.receive_json()
+        websocket.send_json(START)
+        websocket.receive_json()
+        websocket.send_bytes(frame)
+        websocket.send_json({"type": "voice.stream.end", "payload": {"stream_id": "stream_test"}})
+        assert sink.completed.wait(timeout=2)
+
+    assert sink.audio() == frame
+
+
+def test_closing_a_stream_without_a_stream_id_is_refused() -> None:
+    """An end message must say which stream it closes."""
+    sink = CapturingSink()
+    client = TestClient(_build_app(sink))
+
+    with client.websocket_connect("/ws?device_id=device_001") as websocket:
+        websocket.send_json(VALID_HELLO)
+        websocket.receive_json()
+        websocket.send_json(START)
+        websocket.receive_json()
+        websocket.send_bytes(b"\x01\x02")
+        websocket.send_json({"type": "voice.stream.end", "payload": {}})
+        reply = websocket.receive_json()
+
+    assert reply["error"]["code"] == "AUDIO_INVALID"
+
+
+def test_a_conversation_id_of_the_wrong_kind_is_refused() -> None:
+    """A conversation id that is not a string is malformed, not silently replaced."""
+    sink = CapturingSink()
+    client = TestClient(_build_app(sink))
+    start = {**START, "payload": {**START["payload"], "conversation_id": 123}}
+
+    with client.websocket_connect("/ws?device_id=device_001") as websocket:
+        websocket.send_json(VALID_HELLO)
+        websocket.receive_json()
+        websocket.send_json(start)
+        reply = websocket.receive_json()
+
+    assert reply["error"]["code"] == "AUDIO_INVALID"
+
+
 def test_audio_beyond_the_duration_budget_is_refused() -> None:
     """Audio exceeding the configured duration terminates the stream."""
     sink = CapturingSink()

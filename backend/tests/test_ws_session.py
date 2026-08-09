@@ -171,3 +171,57 @@ def test_authenticating_frees_an_unauthenticated_slot() -> None:
                 assert websocket.receive_json()["type"] == "session.ready"
 
     asyncio.run(scenario())
+
+
+def test_a_rejected_handshake_frees_its_slot() -> None:
+    """Refusing a token must not consume the slot, or bad tokens become a way to fill it."""
+    client = TestClient(_build_app(max_unauthenticated=1))
+    rejected = {**VALID_HELLO, "payload": {**VALID_HELLO["payload"], "access_token": "bad"}}
+
+    for _ in range(5):
+        with client.websocket_connect("/ws?device_id=device_001") as websocket:
+            websocket.send_json(rejected)
+            assert websocket.receive_json()["error"]["code"] == "UNAUTHENTICATED"
+
+    with client.websocket_connect("/ws?device_id=device_001") as websocket:
+        websocket.send_json(VALID_HELLO)
+        assert websocket.receive_json()["type"] == "session.ready"
+
+
+def test_a_client_that_leaves_before_saying_hello_frees_its_slot() -> None:
+    """Connecting and vanishing must not consume the slot, or it becomes a way to fill it."""
+    client = TestClient(_build_app(max_unauthenticated=1))
+
+    for _ in range(5):
+        with client.websocket_connect("/ws?device_id=device_001"):
+            pass
+
+    with client.websocket_connect("/ws?device_id=device_001") as websocket:
+        websocket.send_json(VALID_HELLO)
+        assert websocket.receive_json()["type"] == "session.ready"
+
+
+def test_a_first_frame_of_valid_json_that_is_not_an_object_is_rejected() -> None:
+    """Well-formed JSON that is not an object cannot open a session either."""
+    client = TestClient(_build_app())
+
+    for raw in ("[1, 2]", "123", '"hello"', "null"):
+        with client.websocket_connect("/ws?device_id=device_001") as websocket:
+            websocket.send_text(raw)
+            reply = websocket.receive_json()
+
+        assert reply["type"] == "session.error"
+        assert reply["error"]["code"] == "MALFORMED_MESSAGE"
+
+
+def test_a_hello_whose_payload_is_not_an_object_is_rejected() -> None:
+    """A payload of the wrong kind is malformed rather than treated as empty."""
+    client = TestClient(_build_app())
+
+    for payload in ("nope", [1, 2], None):
+        with client.websocket_connect("/ws?device_id=device_001") as websocket:
+            websocket.send_json({"type": "session.hello", "payload": payload})
+            reply = websocket.receive_json()
+
+        assert reply["type"] == "session.error"
+        assert reply["error"]["code"] == "MALFORMED_MESSAGE"
