@@ -31,6 +31,7 @@ class StreamContext:
     conversation_id: str
     session: SessionContext
     audio_config: AudioConfig
+    request_id: str | None = None
 
 
 class TokenVerifier(Protocol):
