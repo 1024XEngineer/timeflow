@@ -14,6 +14,7 @@ from timeflow.gateway.websocket.endpoint import (
     run_websocket_session,
 )
 from timeflow.gateway.websocket.handlers.session import SessionHandshake
+from timeflow.gateway.websocket.ports import TokenVerifier
 from timeflow.gateway.websocket.router import MessageRouter
 from timeflow.infrastructure.security.token_verifier import FakeTokenVerifier
 
@@ -29,14 +30,26 @@ VALID_HELLO: dict[str, Any] = {
 }
 
 
+class HangingTokenVerifier:
+    """A verifier that never answers, the way a wedged auth service would."""
+
+    async def verify(self, access_token: str) -> str | None:
+        """Never return."""
+        await asyncio.sleep(3600)
+        return "acc_never"
+
+
 def _build_app(
     *,
     handshake_timeout_seconds: float = 5.0,
     max_unauthenticated: int = 100,
+    token_verifier: TokenVerifier | None = None,
 ) -> FastAPI:
     """Build an app whose only route is the transport endpoint."""
     application = FastAPI()
-    handshake = SessionHandshake(FakeTokenVerifier(), session_id_factory=lambda: "ws_session_test")
+    handshake = SessionHandshake(
+        token_verifier or FakeTokenVerifier(), session_id_factory=lambda: "ws_session_test"
+    )
     connections = ConnectionManager()
     limiter = UnauthenticatedConnectionLimiter(max_unauthenticated)
     router = MessageRouter()
@@ -197,6 +210,49 @@ def test_a_client_that_leaves_before_saying_hello_frees_its_slot() -> None:
             pass
 
     with client.websocket_connect("/ws?device_id=device_001") as websocket:
+        websocket.send_json(VALID_HELLO)
+        assert websocket.receive_json()["type"] == "session.ready"
+
+
+def test_a_verifier_that_never_answers_still_hits_the_handshake_timeout() -> None:
+    """Verification shares the handshake deadline, so a hung verifier cannot hold on.
+
+    Timing only the wait for the opening frame would let a stalled verifier keep both
+    the connection and its unauthenticated slot, which with a small cap would shut the
+    endpoint to everyone else.
+    """
+    client = TestClient(
+        _build_app(
+            handshake_timeout_seconds=0.05,
+            max_unauthenticated=1,
+            token_verifier=HangingTokenVerifier(),
+        )
+    )
+
+    with client.websocket_connect("/ws?device_id=device_001") as websocket:
+        websocket.send_json(VALID_HELLO)
+        message = websocket.receive()
+
+    assert message["type"] == "websocket.close"
+
+
+def test_a_hung_verification_frees_its_slot_for_the_next_client() -> None:
+    """A stalled verification releases its slot, so later clients still get in."""
+    stuck = TestClient(
+        _build_app(
+            handshake_timeout_seconds=0.05,
+            max_unauthenticated=1,
+            token_verifier=HangingTokenVerifier(),
+        )
+    )
+
+    with stuck.websocket_connect("/ws?device_id=device_001") as websocket:
+        websocket.send_json(VALID_HELLO)
+        websocket.receive()
+
+    healthy = TestClient(_build_app(max_unauthenticated=1))
+
+    with healthy.websocket_connect("/ws?device_id=device_001") as websocket:
         websocket.send_json(VALID_HELLO)
         assert websocket.receive_json()["type"] == "session.ready"
 

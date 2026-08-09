@@ -99,26 +99,31 @@ async def run_websocket_session(
 async def _authenticate(
     websocket: WebSocket, handshake: SessionHandshake, timeout_seconds: float
 ) -> SessionContext | None:
-    """Run the handshake, closing the connection unless it succeeds."""
+    """Run the handshake, closing the connection unless it succeeds.
+
+    Waiting for the opening frame and verifying it share one deadline. Timing only the
+    wait would let a verifier that never answers hold the connection, and the
+    unauthenticated slot it occupies, for as long as it likes.
+    """
     try:
-        frame = await asyncio.wait_for(_receive_frame(websocket), timeout=timeout_seconds)
+        async with asyncio.timeout(timeout_seconds):
+            frame = await _receive_frame(websocket)
+            if frame.message is None:
+                await websocket.send_json(
+                    build_error_envelope(
+                        "session.error", None, ERROR_MALFORMED_MESSAGE, "Expected a JSON object"
+                    )
+                )
+                await websocket.close(code=1008)
+                return None
+            result = await handshake.perform(frame.message)
     except TimeoutError:
-        # Nothing was said, so say nothing back.
+        # Nothing was said, or nothing came back about it, so say nothing in return.
         await websocket.close(code=1008)
         return None
     except WebSocketDisconnect:
         return None
 
-    if frame.message is None:
-        await websocket.send_json(
-            build_error_envelope(
-                "session.error", None, ERROR_MALFORMED_MESSAGE, "Expected a JSON object"
-            )
-        )
-        await websocket.close(code=1008)
-        return None
-
-    result = await handshake.perform(frame.message)
     await websocket.send_json(result.reply)
     if result.session is None:
         await websocket.close(code=1008)

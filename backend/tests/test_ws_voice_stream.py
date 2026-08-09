@@ -14,7 +14,7 @@ from timeflow.gateway.websocket.endpoint import (
 )
 from timeflow.gateway.websocket.handlers.session import SessionHandshake
 from timeflow.gateway.websocket.handlers.voice_stream import VoiceStreamHandlers
-from timeflow.gateway.websocket.ports import StreamContext
+from timeflow.gateway.websocket.ports import AudioSink, StreamContext
 from timeflow.gateway.websocket.router import MessageRouter
 from timeflow.infrastructure.security.token_verifier import FakeTokenVerifier
 
@@ -56,13 +56,21 @@ class CapturingSink:
         return b"".join(self.chunks)
 
 
+class ExplodingSink:
+    """A sink that fails the way a provider outage would."""
+
+    async def consume(self, chunks: AsyncIterator[bytes], stream: StreamContext) -> None:
+        """Fail before reading anything."""
+        raise RuntimeError("the sink is unavailable")
+
+
 def _build_app(
-    sink: CapturingSink,
+    sink: AudioSink,
     *,
     max_audio_duration_ms: int = 120_000,
     queue_max_chunks: int = 32,
 ) -> FastAPI:
-    """Build an app wiring the transport to a capturing sink."""
+    """Build an app wiring the transport to the given sink."""
     application = FastAPI()
     handshake = SessionHandshake(FakeTokenVerifier(), session_id_factory=lambda: "ws_session_test")
     connections = ConnectionManager()
@@ -361,6 +369,29 @@ def test_unsupported_sample_rate_is_refused() -> None:
 
     assert reply["error"]["code"] == "AUDIO_INVALID"
     assert "44100" in reply["error"]["message"]
+
+
+def test_a_failing_sink_does_not_wedge_the_session() -> None:
+    """When the sink dies, the session keeps answering instead of seizing up.
+
+    Nothing drains the queue once the sink is gone, so without retiring the stream the
+    receive loop parks on a full queue and the connection never responds again. More
+    frames than the queue holds are sent here to force exactly that situation.
+    """
+    client = TestClient(_build_app(ExplodingSink(), queue_max_chunks=4))
+
+    with client.websocket_connect("/ws?device_id=device_001") as websocket:
+        websocket.send_json(VALID_HELLO)
+        websocket.receive_json()
+        websocket.send_json(START)
+        websocket.receive_json()
+        for _ in range(12):
+            websocket.send_bytes(b"\x00" * 320)
+        websocket.send_json({"type": "unknown.probe"})
+
+        replies = [websocket.receive_json() for _ in range(1)]
+
+    assert replies[0]["ok"] is False
 
 
 def test_disconnect_cancels_an_unfinished_stream() -> None:

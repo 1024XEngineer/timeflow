@@ -199,6 +199,21 @@ class VoiceStreamHandlers:
                     "stream_id": stream.context.stream_id,
                 },
             )
+            self._retire_failed_stream(stream)
+
+    def _retire_failed_stream(self, stream: _ActiveStream) -> None:
+        """Drop a stream whose consumer has died, so the session keeps working.
+
+        Removing it alone is not enough: the receive loop may be parked on a full
+        queue with nobody left to drain it, and would stay there forever. Emptying
+        the queue releases it, and the next frame is refused instead of enqueued.
+        """
+        session_id = stream.context.session.session_id
+        if self._active_streams.get(session_id) is stream:
+            self._active_streams.pop(session_id, None)
+        while not stream.queue.empty():
+            stream.queue.get_nowait()
+            stream.queue.task_done()
 
     async def _abort(self, session_id: str, stream: _ActiveStream) -> None:
         """Tear down a stream that violated its limits."""
