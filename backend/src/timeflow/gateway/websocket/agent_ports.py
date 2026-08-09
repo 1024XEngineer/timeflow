@@ -1,0 +1,94 @@
+"""What the transport needs from a dialogue agent, stated on the transport's own terms.
+
+The dialogue layer declares the same shapes for its own use. Restating them here rather
+than importing them keeps the dependency pointing one way: the agent satisfies these
+structurally, and the transport never reaches into the dialogue layer.
+"""
+
+from collections.abc import AsyncIterator
+from typing import Any, Protocol
+
+
+class StreamIdentity(Protocol):
+    """Identifiers of the audio stream a result belongs to."""
+
+    @property
+    def session_id(self) -> str:
+        """Session the stream belongs to."""
+        ...
+
+    @property
+    def stream_id(self) -> str:
+        """The stream itself."""
+        ...
+
+    @property
+    def conversation_id(self) -> str:
+        """Conversation the stream continues."""
+        ...
+
+    @property
+    def request_id(self) -> str | None:
+        """Request that opened the stream, when the client supplied one."""
+        ...
+
+
+class TranscriptResult(Protocol):
+    """What the user was heard to say."""
+
+    @property
+    def text(self) -> str:
+        """The transcribed words."""
+        ...
+
+    @property
+    def language(self) -> str:
+        """Language the words were recognized as."""
+        ...
+
+    @property
+    def duration_ms(self) -> int:
+        """How long the audio ran."""
+        ...
+
+
+class TurnResult(Protocol):
+    """A completed turn, ready to be sent to the client."""
+
+    @property
+    def stream(self) -> StreamIdentity:
+        """Stream this result answers."""
+        ...
+
+    @property
+    def message_id(self) -> str:
+        """Identifier the client echoes back in message.ack."""
+        ...
+
+    @property
+    def transcript(self) -> TranscriptResult:
+        """What was heard."""
+        ...
+
+    @property
+    def operation(self) -> str:
+        """Command that was carried out."""
+        ...
+
+    @property
+    def status(self) -> str:
+        """Outcome of that command."""
+        ...
+
+    @property
+    def schedule(self) -> dict[str, Any]:
+        """Persisted schedule snapshot the command produced."""
+        ...
+
+
+class Agent(Protocol):
+    """Take one audio stream and act on what it contains."""
+
+    async def handle_audio(self, chunks: AsyncIterator[bytes], stream: StreamIdentity) -> None:
+        """Consume the audio; returning only confirms receipt, not a result."""
+        ...
