@@ -108,6 +108,7 @@ class VoiceStreamHandlers:
             conversation_id=payload.conversation_id or self._conversation_id_factory(),
             session=session,
             audio_config=audio_config,
+            request_id=request_id,
         )
         stream = _ActiveStream(
             context=context,
