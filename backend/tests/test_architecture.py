@@ -37,7 +37,8 @@ FORBIDDEN_IMPORTS: dict[str, frozenset[str]] = {
             "timeflow.intelligence",
         }
     ),
-    # A.3: protocol only; must not reach the database or adapt vendor services.
+    # A.3: protocol only; must not reach the database, adapt vendor services, or depend
+    # on the dialogue layer -- the agent seam is structural, declared in agent_ports.py.
     "gateway": frozenset(
         {
             "sqlalchemy",
@@ -45,6 +46,7 @@ FORBIDDEN_IMPORTS: dict[str, frozenset[str]] = {
             "dashscope",
             "timeflow.data",
             "timeflow.infrastructure.external",
+            "timeflow.intelligence",
         }
     ),
     # A.4: runtime capability only; must not depend on product layers.
