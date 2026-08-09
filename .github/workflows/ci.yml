@@ -4,66 +4,122 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+# Cancel superseded runs on the same PR/branch to save CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11.15"
+  UV_VERSION: "0.11.28"
+  NODE_VERSION: "20.20.2"
+
 jobs:
-  ci:
-    name: Minimal CI
+  backend:
+    name: Backend (lint, types, tests)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
 
-      - id: detect
-        shell: bash
-        run: |
-          backend=false
-          frontend=false
-
-          if [[ -f backend/pyproject.toml && -f backend/uv.lock ]]; then
-            backend=true
-          fi
-          if [[ -f frontend/package-lock.json ]]; then
-            frontend=true
-          fi
-
-          echo "backend=$backend" >> "$GITHUB_OUTPUT"
-          echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
-
       - uses: actions/setup-python@v5
-        if: steps.detect.outputs.backend == 'true'
         with:
-          python-version: 3.11.15
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - uses: astral-sh/setup-uv@v6
-        if: steps.detect.outputs.backend == 'true'
         with:
-          version: 0.11.28
+          version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
 
-      - name: Backend checks
-        if: steps.detect.outputs.backend == 'true'
+      # Single source of truth: mirrors the local scripts/check.sh gate
+      # (uv lock --check, ruff check, ruff format --check, mypy, pytest+coverage, alembic heads).
+      - name: Quality gate
+        run: bash scripts/check.sh
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+          if-no-files-found: ignore
+
+  migrations:
+    name: Backend (migrations)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
         working-directory: backend
-        shell: bash
-        run: |
-          uv sync --locked --all-groups
-          uv run ruff check .
-          uv run pytest
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_DB: timeapp
+          POSTGRES_USER: timeapp
+          POSTGRES_PASSWORD: timeapp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U timeapp -d timeapp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TIMEFLOW_DATABASE_URL: postgresql+psycopg://timeapp:timeapp@127.0.0.1:5432/timeapp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install dependencies
+        run: uv sync --locked --all-groups
+
+      # Validate the migration chain against a real Postgres, both directions.
+      - name: Apply migrations (upgrade head)
+        run: uv run alembic upgrade head
+
+      - name: Verify downgrade path (downgrade base)
+        run: uv run alembic downgrade base
+
+  frontend:
+    name: Frontend (lint, types, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
-        if: steps.detect.outputs.frontend == 'true'
         with:
-          node-version: 20.20.2
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Frontend checks
-        if: steps.detect.outputs.frontend == 'true'
-        working-directory: frontend
-        shell: bash
-        run: |
-          npm ci
-          npm run check
-          npx expo export --platform android --output-dir dist
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Checks (lint, format, typecheck)
+        run: npm run check
+
+      - name: Export build
+        run: npx expo export --platform android --output-dir dist
