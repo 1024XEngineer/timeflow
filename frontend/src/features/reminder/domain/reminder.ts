@@ -1,13 +1,23 @@
 /**
  * 协议级联合类型以 `contracts/reminder` 为唯一来源，避免与 wire 定义漂移。
  * 本文件只补充本地运行时领域类型。
+ *
+ * 必须先 `import type` 再 `export type`：单独的 `export type { X } from`
+ * 不会把 X 引入本文件作用域，后面字段注解会报 TS2304。
  */
-export type {
+import type {
   ReminderDispositionState,
   ReminderStrength,
   ReminderSyncStatus,
   ReminderType,
 } from '../../../contracts/reminder';
+
+export type {
+  ReminderDispositionState,
+  ReminderStrength,
+  ReminderSyncStatus,
+  ReminderType,
+};
 
 export const DEFAULT_SNOOZE_MINUTES = 10;
 export type LocalScheduleStatus = 'active' | 'deleted';
