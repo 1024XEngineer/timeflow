@@ -68,6 +68,7 @@ class VoiceStreamHandlers:
         *,
         max_audio_duration_ms: int = 120_000,
         queue_max_chunks: int = 32,
+        max_chunk_bytes: int = 65_536,
         stream_id_factory: Callable[[], str] | None = None,
         conversation_id_factory: Callable[[], str] | None = None,
     ) -> None:
@@ -75,6 +76,7 @@ class VoiceStreamHandlers:
         self._audio_sink = audio_sink
         self._max_audio_duration_ms = max_audio_duration_ms
         self._queue_max_chunks = queue_max_chunks
+        self._max_chunk_bytes = max_chunk_bytes
         self._stream_id_factory = stream_id_factory or new_stream_id
         self._conversation_id_factory = conversation_id_factory or new_conversation_id
         self._active_streams: dict[str, _ActiveStream] = {}
@@ -147,10 +149,10 @@ class VoiceStreamHandlers:
         if stream is None:
             return self._error(request_id, "No audio stream is active for this session")
         if message.payload.stream_id != stream.context.stream_id:
-            return self._error(request_id, "stream_id does not match the active stream")
+            return self._error(request_id, "stream_id does not match the active stream", stream)
         if stream.total_audio_bytes == 0:
             await self._abort(session.session_id, stream)
-            return self._error(request_id, "The audio stream carried no audio")
+            return self._error(request_id, "The audio stream carried no audio", stream)
 
         self._active_streams.pop(session.session_id, None)
         await stream.queue.put(None)
@@ -162,12 +164,21 @@ class VoiceStreamHandlers:
         if stream is None:
             return self._error(None, "Audio frames require voice.stream.start first")
         if not chunk:
-            return self._error(stream.request_id, "Audio frame is empty")
+            return self._error(stream.request_id, "Audio frame is empty", stream)
+        if len(chunk) > self._max_chunk_bytes:
+            # Refuse the frame but keep the stream: an oversized frame is a client bug,
+            # and the budget check below is what bounds the stream as a whole.
+            return self._error(
+                stream.request_id,
+                f"Audio frame exceeds {self._max_chunk_bytes} bytes",
+                stream,
+            )
         if stream.total_audio_bytes + len(chunk) > stream.max_audio_bytes:
             await self._abort(session.session_id, stream)
             return self._error(
                 stream.request_id,
                 f"The audio stream exceeded {self._max_audio_duration_ms} ms",
+                stream,
             )
 
         stream.total_audio_bytes += len(chunk)
@@ -250,9 +261,17 @@ class VoiceStreamHandlers:
         )
 
     @staticmethod
-    def _error(request_id: str | None, message: str) -> dict[str, Any]:
-        """Build the audio error envelope."""
-        return build_error_envelope("voice.command.error", request_id, ERROR_AUDIO_INVALID, message)
+    def _error(
+        request_id: str | None, message: str, stream: "_ActiveStream | None" = None
+    ) -> dict[str, Any]:
+        """Build the audio error envelope, naming the conversation when one exists."""
+        return build_error_envelope(
+            "voice.command.error",
+            request_id,
+            ERROR_AUDIO_INVALID,
+            message,
+            conversation_id=stream.context.conversation_id if stream is not None else None,
+        )
 
 
 async def _chunks_of(queue: asyncio.Queue[bytes | None]) -> AsyncIterator[bytes]:

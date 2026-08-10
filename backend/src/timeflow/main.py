@@ -27,13 +27,25 @@ def create_app(
     application = FastAPI(title=settings.app_name, version="0.1.0")
     health_service = HealthService()
 
-    handshake = SessionHandshake(token_verifier or FakeTokenVerifier())
+    if token_verifier is None:
+        # Fail closed: the stand-in verifier accepts any non-empty token, so falling back
+        # to it outside development would leave /ws effectively unauthenticated.
+        if settings.environment != "development":
+            raise RuntimeError(
+                "No TokenVerifier was injected and the stand-in one is development-only; "
+                f"TIMEFLOW_ENVIRONMENT is {settings.environment!r}. "
+                "Inject a real verifier before exposing /ws."
+            )
+        token_verifier = FakeTokenVerifier()
+
+    handshake = SessionHandshake(token_verifier)
     connections = ConnectionManager()
     limiter = UnauthenticatedConnectionLimiter(settings.ws_max_unauthenticated_connections)
     voice_streams = VoiceStreamHandlers(
         audio_sink or NullAudioSink(),
         max_audio_duration_ms=settings.ws_max_audio_duration_ms,
         queue_max_chunks=settings.ws_audio_queue_max_chunks,
+        max_chunk_bytes=settings.ws_audio_chunk_size_bytes,
     )
     router = MessageRouter()
     router.register("voice.stream.start", voice_streams.handle_start)
