@@ -35,12 +35,17 @@ class FakeWebSocket:
             self._incoming.put_nowait(message)
         self.sent_text: list[str] = []
         self.closed = False
+        self.recv_cancelled = False
 
     async def send(self, message: str) -> None:
         self.sent_text.append(message)
 
     async def recv(self) -> str | bytes:
-        result = await self._incoming.get()
+        try:
+            result = await self._incoming.get()
+        except asyncio.CancelledError:
+            self.recv_cancelled = True
+            raise
         if isinstance(result, BaseException):
             raise result
         return result
@@ -300,4 +305,26 @@ async def test_cancellation_closes_connection(settings: Settings) -> None:
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+    assert websocket.recv_cancelled is True
+    assert websocket.closed is True
+
+
+@pytest.mark.asyncio
+async def test_sender_failure_cancels_pending_receive_task(settings: Settings) -> None:
+    async def failing_audio() -> AsyncIterator[bytes]:
+        yield b"audio"
+        raise RuntimeError("audio source failed")
+
+    websocket = FakeWebSocket(
+        [
+            server_event("session.created", session={"id": "sess_1"}),
+            server_event("session.updated", session={"id": "sess_1"}),
+        ]
+    )
+    provider = QwenRealtimeAsr(settings, connector=FakeConnector(websocket))
+
+    with pytest.raises(AsrConnectionError, match="ASR WebSocket connection failed"):
+        _ = [event async for event in provider.stream(failing_audio())]
+
+    assert websocket.recv_cancelled is True
     assert websocket.closed is True

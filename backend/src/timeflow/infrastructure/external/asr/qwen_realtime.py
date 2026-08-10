@@ -182,6 +182,7 @@ class QwenRealtimeAsr(AsrPort):
         self._validate_settings()
         websocket: WebSocketConnection | None = None
         sender: asyncio.Task[None] | None = None
+        receive_task: asyncio.Task[str | bytes] | None = None
 
         try:
             websocket = await self._connect()
@@ -239,9 +240,12 @@ class QwenRealtimeAsr(AsrPort):
         except Exception as exc:
             raise AsrConnectionError("ASR WebSocket connection failed") from exc
         finally:
-            if sender is not None and not sender.done():
-                sender.cancel()
-                await asyncio.gather(sender, return_exceptions=True)
+            for task in (receive_task, sender):
+                if task is None:
+                    continue
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
             if websocket is not None:
                 await websocket.close()
 
