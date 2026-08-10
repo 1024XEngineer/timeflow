@@ -1,10 +1,4 @@
-"""The message.ack confirmation (architecture design section 5.5).
-
-An ack states that the client applied a command result locally. It confirms nothing
-beyond that, is never itself acknowledged, and carries no business data, so this handler
-records it and replies with nothing. An ack for an unknown message is not an error: the
-ack sets a target state, and a target already reached needs no action.
-"""
+"""The message.ack confirmation, recorded and never answered."""
 
 import logging
 from typing import Any
