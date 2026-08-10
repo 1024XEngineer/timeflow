@@ -82,6 +82,10 @@ def settings() -> Settings:
         app_name="Test API",
         environment="test",
         database_url="sqlite+pysqlite:///:memory:",
+        ws_handshake_timeout_seconds=5.0,
+        ws_max_unauthenticated_connections=100,
+        ws_audio_queue_max_chunks=32,
+        ws_max_audio_duration_ms=120000,
         aliyun_asr_ws_url=("wss://workspace.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime"),
         aliyun_asr_api_key="test-api-key",
     )

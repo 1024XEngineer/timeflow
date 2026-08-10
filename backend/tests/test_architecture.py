@@ -57,7 +57,6 @@ FORBIDDEN_IMPORTS: dict[str, frozenset[str]] = {
             "timeflow.business",
             "timeflow.data",
             "timeflow.gateway",
-            "timeflow.intelligence",
         }
     ),
     # A.5: orchestration through ports; no frameworks, no direct SDK or database access.
@@ -122,6 +121,22 @@ def test_all_declared_layers_exist() -> None:
 def test_gateway_does_not_import_vendor_adapters() -> None:
     """The gateway reaches external providers only through injected ports."""
     violations = _violations("gateway", frozenset({"timeflow.infrastructure"}))
+
+    assert violations == []
+
+
+def test_only_external_infrastructure_imports_intelligence_ports() -> None:
+    """Only external provider adapters may implement intelligence-owned ports."""
+    violations: list[str] = []
+    infrastructure_root = PACKAGE_ROOT / "infrastructure"
+    for path in sorted(infrastructure_root.rglob("*.py")):
+        relative_path = path.relative_to(infrastructure_root)
+        if relative_path.parts[0] == "external":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for lineno, module in _imported_modules(tree):
+            if module == "timeflow.intelligence" or module.startswith("timeflow.intelligence."):
+                violations.append(f"infrastructure/{relative_path}:{lineno} {module}")
 
     assert violations == []
 
