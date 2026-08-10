@@ -17,8 +17,8 @@ export interface GetSchedulesByDayQuery {
 /** One displayable occurrence returned to the calendar UI. */
 export interface ScheduleOccurrenceView {
   scheduleId: string;
-  scheduleType: ScheduleType;
-  scheduleKind: ScheduleKind;
+  scheduleCategory: ScheduleType;
+  recurrenceMode: ScheduleKind;
   title: string;
   isAllDay: boolean;
   timezone: string;

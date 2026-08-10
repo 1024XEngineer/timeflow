@@ -48,8 +48,8 @@ export type ScheduleOccurrenceViewContract = Assert<
   Equal<
     keyof ScheduleOccurrenceView,
     | 'scheduleId'
-    | 'scheduleType'
-    | 'scheduleKind'
+    | 'scheduleCategory'
+    | 'recurrenceMode'
     | 'title'
     | 'isAllDay'
     | 'timezone'
