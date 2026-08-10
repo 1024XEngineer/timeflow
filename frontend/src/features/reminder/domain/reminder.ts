@@ -12,12 +12,7 @@ import type {
   ReminderType,
 } from '../../../contracts/reminder';
 
-export type {
-  ReminderDispositionState,
-  ReminderStrength,
-  ReminderSyncStatus,
-  ReminderType,
-};
+export type { ReminderDispositionState, ReminderStrength, ReminderSyncStatus, ReminderType };
 
 export const DEFAULT_SNOOZE_MINUTES = 10;
 export type LocalScheduleStatus = 'active' | 'deleted';
