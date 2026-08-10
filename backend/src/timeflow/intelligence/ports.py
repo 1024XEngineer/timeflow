@@ -1,16 +1,4 @@
-"""Ports the dialogue layer exposes, plus the values passed across them.
-
-The transport hands audio in through AgentPort and pushes results back out through
-ResultSink. Both directions are one-way and asynchronous: handing audio over only
-confirms receipt, and results arrive later through the other port.
-
-ResultSink has one method per protocol message rather than one method per turn. The two
-messages become known at different moments -- the transcript as soon as the speech is
-recognized, the command result only after the command has actually been carried out --
-so bundling them would hold the transcript back until the slower half was ready.
-
-These types stay free of any transport concern so the layer never imports the gateway.
-"""
+"""Ports the dialogue layer exposes, plus the values passed across them."""
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
