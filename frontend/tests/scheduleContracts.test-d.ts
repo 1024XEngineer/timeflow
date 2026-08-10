@@ -1,4 +1,9 @@
 import type {
+  RecurringDeleteScope,
+  ReminderDispositionState,
+  ScheduleSnapshot,
+} from '../src/contracts/schedule';
+import type {
   ScheduleClientService,
   ScheduleOccurrenceView,
 } from '../src/features/schedule/application';
@@ -16,6 +21,20 @@ type Equal<Left, Right> =
     : false;
 
 type Assert<Condition extends true> = Condition;
+
+export type RecurringDeleteScopeContract = Assert<
+  Equal<RecurringDeleteScope, 'this_occurrence' | 'this_and_future' | 'entire_series'>
+>;
+
+export type ReminderDispositionStateContract = Assert<Equal<ReminderDispositionState, 'confirmed'>>;
+
+export type SnapshotReminderDispositionContract = Assert<
+  Equal<ScheduleSnapshot['reminder_disposition_state'], ReminderDispositionState | null>
+>;
+
+export type LocalReminderStateIsNotCloudDispositionContract = Assert<
+  Equal<Extract<'snoozed' | 'pending' | 'done', ReminderDispositionState>, never>
+>;
 
 export type ScheduleClientOperationsContract = Assert<
   Equal<keyof ScheduleClientService, 'getSchedulesByDay'>

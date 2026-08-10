@@ -87,14 +87,13 @@ class ScheduleAgentService(ABC):
         account_id: str,
         command: DeleteRecurringScheduleCommand,
     ) -> ScheduleMutationResult:
-        """Delete the next occurrence or that occurrence and all future ones.
+        """Apply the confirmed occurrence, future, or entire-series deletion scope.
 
         Raises:
             ScheduleBusinessError: If the target, revision, or occurrence is invalid.
         """
-        # TODO(person-2): use the schedule timezone and a system clock to find
-        # the first occurrence on or after the current local date, then apply
-        # command.scope without accepting an arbitrary date from the caller.
+        # TODO(person-2): resolve the current occurrence when the confirmed
+        # scope requires one, then apply command.scope transactionally.
         raise NotImplementedError
 
 

@@ -44,16 +44,22 @@ class ReminderStrength(StrEnum):
     HIGH = "high"
 
 
-class RecurringDeleteScope(StrEnum):
-    """Deletion scopes based on the schedule-local current date.
+class ReminderDispositionState(StrEnum):
+    """Cloud-persisted final disposition for the current reminder occurrence."""
 
-    The implementation must derive the current date from the schedule's IANA
-    timezone. It then finds the first occurrence whose local date is today or
-    later; the caller cannot provide an arbitrary occurrence date.
+    CONFIRMED = "confirmed"
+
+
+class RecurringDeleteScope(StrEnum):
+    """Wiki-defined deletion scopes for a recurring schedule.
+
+    Occurrence-scoped deletion targets the confirmed current occurrence;
+    deleting an entire series does not require occurrence resolution.
     """
 
-    NEXT_OCCURRENCE = "next_occurrence"
-    NEXT_AND_FUTURE = "next_and_future"
+    THIS_OCCURRENCE = "this_occurrence"
+    THIS_AND_FUTURE = "this_and_future"
+    ENTIRE_SERIES = "entire_series"
 
 
 class OccurrenceOverrideAction(StrEnum):
@@ -143,7 +149,7 @@ class ScheduleSnapshot:
     reminder_trigger_at: datetime | None = None
     reminder_offset_minutes: int | None = None
     reminder_strength: ReminderStrength | None = None
-    reminder_disposition_state: str | None = None
+    reminder_disposition_state: ReminderDispositionState | None = None
     deleted_at: datetime | None = None
 
 
@@ -212,7 +218,7 @@ class DeleteOnceScheduleCommand:
 
 @dataclass(frozen=True, slots=True)
 class DeleteRecurringScheduleCommand:
-    """A confirmed request to delete the next recurring occurrence or its future."""
+    """A confirmed request carrying the Wiki-defined recurring deletion scope."""
 
     schedule_id: str
     expected_revision: int
@@ -241,6 +247,7 @@ __all__ = [
     "FindSchedulesQuery",
     "OccurrenceOverrideAction",
     "RecurringDeleteScope",
+    "ReminderDispositionState",
     "ReminderStrength",
     "ReminderType",
     "ScheduleBusinessError",

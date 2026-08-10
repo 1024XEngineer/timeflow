@@ -2,12 +2,16 @@ export type ScheduleType = 'time' | 'location';
 
 export type ScheduleKind = 'once' | 'recurring';
 
+export type RecurringDeleteScope = 'this_occurrence' | 'this_and_future' | 'entire_series';
+
 export type ScheduleStatus = 'active' | 'deleted';
 
 export type ReminderType =
   'at_time' | 'before_start' | 'arrive_location' | 'return_to_recorded_location';
 
 export type ReminderStrength = 'low' | 'medium' | 'high';
+
+export type ReminderDispositionState = 'confirmed';
 
 export type OccurrenceOverrideAction = 'cancel' | 'replace';
 
@@ -30,7 +34,7 @@ export interface ScheduleSnapshot {
   reminder_trigger_at: string | null;
   reminder_offset_minutes: number | null;
   reminder_strength: ReminderStrength | null;
-  reminder_disposition_state: string | null;
+  reminder_disposition_state: ReminderDispositionState | null;
   status: ScheduleStatus;
   revision: number;
   created_at: string;

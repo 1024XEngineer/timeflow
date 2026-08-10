@@ -1,10 +1,20 @@
 """Contract tests for the person-two schedule service skeleton."""
 
+import json
+from datetime import UTC, datetime
+
+import pytest
+
 from timeflow.business.calendar import (
     RecurringDeleteScope,
+    ReminderDispositionState,
     ScheduleAgentService,
     ScheduleBusinessError,
     ScheduleErrorCode,
+    ScheduleKind,
+    ScheduleSnapshot,
+    ScheduleStatus,
+    ScheduleType,
     ScheduleUpdatePatch,
     UpdateScheduleCommand,
 )
@@ -28,13 +38,65 @@ def test_agent_schedule_service_exposes_exactly_five_business_operations() -> No
     }
 
 
-def test_recurring_delete_scope_has_only_the_two_agreed_choices() -> None:
-    """Callers cannot select an arbitrary recurring occurrence or date range."""
+def test_recurring_delete_scope_matches_the_three_wiki_wire_values() -> None:
+    """Recurring deletion scopes serialize exactly as the v3.10 Wiki defines."""
 
     assert list(RecurringDeleteScope) == [
-        RecurringDeleteScope.NEXT_OCCURRENCE,
-        RecurringDeleteScope.NEXT_AND_FUTURE,
+        RecurringDeleteScope.THIS_OCCURRENCE,
+        RecurringDeleteScope.THIS_AND_FUTURE,
+        RecurringDeleteScope.ENTIRE_SERIES,
     ]
+    assert [scope.value for scope in RecurringDeleteScope] == [
+        "this_occurrence",
+        "this_and_future",
+        "entire_series",
+    ]
+
+
+def test_reminder_disposition_state_matches_the_cloud_snapshot_contract() -> None:
+    """Cloud snapshots accept only confirmed or no final disposition state."""
+
+    now = datetime.now(UTC)
+    confirmed_snapshot = ScheduleSnapshot(
+        id="schedule-confirmed",
+        account_id="account-1",
+        schedule_type=ScheduleType.TIME,
+        schedule_kind=ScheduleKind.ONCE,
+        title="Confirmed reminder",
+        is_all_day=False,
+        timezone="Asia/Shanghai",
+        status=ScheduleStatus.ACTIVE,
+        revision=1,
+        created_at=now,
+        updated_at=now,
+        reminder_disposition_state=ReminderDispositionState.CONFIRMED,
+    )
+    empty_snapshot = ScheduleSnapshot(
+        id="schedule-empty",
+        account_id="account-1",
+        schedule_type=ScheduleType.TIME,
+        schedule_kind=ScheduleKind.ONCE,
+        title="No disposition",
+        is_all_day=False,
+        timezone="Asia/Shanghai",
+        status=ScheduleStatus.ACTIVE,
+        revision=1,
+        created_at=now,
+        updated_at=now,
+        reminder_disposition_state=None,
+    )
+
+    assert ReminderDispositionState.CONFIRMED.value == "confirmed"
+    assert json.dumps(ReminderDispositionState.CONFIRMED) == '"confirmed"'
+    assert confirmed_snapshot.reminder_disposition_state is ReminderDispositionState.CONFIRMED
+    assert empty_snapshot.reminder_disposition_state is None
+
+
+def test_reminder_disposition_state_rejects_local_only_values() -> None:
+    """Local snooze state cannot be represented as a cloud disposition enum."""
+
+    with pytest.raises(ValueError):
+        ReminderDispositionState("snoozed")
 
 
 def test_update_patch_exposes_only_explicitly_mutable_fields() -> None:
