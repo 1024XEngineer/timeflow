@@ -1,9 +1,4 @@
-"""Access token verification.
-
-Real JWT verification belongs to the account module and is not built yet, so this stand-in
-accepts any non-empty token. It satisfies the transport's verifier port structurally and
-deliberately does not import the gateway, keeping the dependency direction inward.
-"""
+"""Stand-in access token verification, until the account module provides the real one."""
 
 FAKE_ACCOUNT_ID = "acc_fake_001"
 REJECTED_TOKENS = frozenset({"bad", "invalid", "expired"})

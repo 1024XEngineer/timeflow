@@ -1,4 +1,4 @@
-"""Static dependency checks for every layer (architecture design appendix A)."""
+"""Static dependency checks enforcing the direction between layers."""
 
 import ast
 from pathlib import Path

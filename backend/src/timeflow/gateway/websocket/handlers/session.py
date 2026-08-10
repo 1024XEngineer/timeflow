@@ -1,9 +1,4 @@
-"""The session.hello handshake.
-
-Per the architecture design section 5.1 the first frame carries the access token; the
-`device_id` query parameter only identifies the device and is never trusted for access
-control. A rejected handshake yields session.error and the caller closes the connection.
-"""
+"""The session.hello handshake that opens an authenticated session."""
 
 from collections.abc import Callable
 from dataclasses import dataclass

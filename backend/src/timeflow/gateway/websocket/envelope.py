@@ -1,8 +1,4 @@
-"""Outbound envelope construction.
-
-Transport-level error codes. The architecture design (section 5.9) lists voice-semantic
-codes and states the table is a minimum; these cover the transport cases it leaves open.
-"""
+"""Construction of outbound failure envelopes, and the transport-level error codes."""
 
 from typing import Any
 

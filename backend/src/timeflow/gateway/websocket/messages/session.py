@@ -1,4 +1,4 @@
-"""Session handshake messages (architecture design section 5.1)."""
+"""Session handshake messages: hello and ready."""
 
 from typing import Literal
 

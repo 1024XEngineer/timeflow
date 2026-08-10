@@ -1,9 +1,4 @@
-"""Audio sink that drains a stream without interpreting it.
-
-Placeholder until the dialogue engine lands: it proves the transport delivers every byte
-in order while the engine that will consume them does not exist yet. It satisfies the
-transport's sink port structurally and does not import the gateway.
-"""
+"""Audio sink that drains a stream and discards it, until a real consumer exists."""
 
 import logging
 from collections.abc import AsyncIterator

@@ -1,9 +1,4 @@
-"""The inbound audio stream lifecycle (architecture design sections 5.2 and 5.3).
-
-This handler owns transport concerns only: it validates the wire format, bounds how much
-audio a stream may carry, and hands the bytes to an injected sink. It performs no speech
-recognition and sends no transcript, so `voice.stream.end` has no reply this round.
-"""
+"""The inbound audio stream lifecycle: start, binary frames, end, disconnect."""
 
 import asyncio
 import logging

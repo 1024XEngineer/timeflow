@@ -1,4 +1,4 @@
-"""Audio stream lifecycle messages (architecture design sections 5.2 and 5.3)."""
+"""Audio stream lifecycle messages: start, started, end."""
 
 from typing import Literal
 

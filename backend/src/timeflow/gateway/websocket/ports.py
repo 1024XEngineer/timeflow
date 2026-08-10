@@ -1,8 +1,4 @@
-"""Ports the WebSocket transport depends on, plus the contexts it passes through them.
-
-Implementations live outside this package and are injected by the composition root.
-They satisfy these protocols structurally, so an adapter never imports the gateway.
-"""
+"""Ports the WebSocket transport depends on, plus the contexts it passes through them."""
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
