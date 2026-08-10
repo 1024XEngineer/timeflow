@@ -12,10 +12,19 @@ export class AppRuntime {
   async start(): Promise<void> {
     if (this.started) return;
 
-    for (const module of this.modules) {
-      await module.start();
+    const startedModules: RuntimeModule[] = [];
+    try {
+      for (const module of this.modules) {
+        await module.start();
+        startedModules.push(module);
+      }
+      this.started = true;
+    } catch (error) {
+      for (const module of [...startedModules].reverse()) {
+        await module.stop();
+      }
+      throw error;
     }
-    this.started = true;
   }
 
   async stop(): Promise<void> {

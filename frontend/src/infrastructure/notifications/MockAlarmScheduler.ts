@@ -8,7 +8,7 @@ import type {
 export class MockAlarmScheduler implements AlarmSchedulerPort {
   async schedule(request: AlarmScheduleRequest): Promise<AlarmScheduleReceipt> {
     return {
-      alarm_id: 'mock-alarm-001',
+      alarm_id: `mock-alarm-${request.schedule_id}`,
       schedule_id: request.schedule_id,
     };
   }
@@ -20,8 +20,9 @@ export class MockAlarmScheduler implements AlarmSchedulerPort {
   async rebuild(
     requests: readonly AlarmScheduleRequest[],
   ): Promise<readonly AlarmScheduleReceipt[]> {
-    return requests.length > 0
-      ? [{ alarm_id: 'mock-alarm-001', schedule_id: requests[0]!.schedule_id }]
-      : [];
+    return requests.map((request) => ({
+      alarm_id: `mock-alarm-${request.schedule_id}`,
+      schedule_id: request.schedule_id,
+    }));
   }
 }
