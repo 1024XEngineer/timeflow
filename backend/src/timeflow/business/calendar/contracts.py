@@ -3,32 +3,32 @@
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import TypeAlias
 
 
-class ScheduleType(str, Enum):
+class ScheduleType(StrEnum):
     """Supported schedule categories."""
 
     TIME = "time"
     LOCATION = "location"
 
 
-class ScheduleKind(str, Enum):
+class ScheduleKind(StrEnum):
     """Whether a schedule occurs once or follows an RRULE."""
 
     ONCE = "once"
     RECURRING = "recurring"
 
 
-class ScheduleStatus(str, Enum):
+class ScheduleStatus(StrEnum):
     """Cloud lifecycle status for a schedule."""
 
     ACTIVE = "active"
     DELETED = "deleted"
 
 
-class ReminderType(str, Enum):
+class ReminderType(StrEnum):
     """The single reminder configuration attached to a schedule."""
 
     AT_TIME = "at_time"
@@ -37,7 +37,7 @@ class ReminderType(str, Enum):
     RETURN_TO_RECORDED_LOCATION = "return_to_recorded_location"
 
 
-class ReminderStrength(str, Enum):
+class ReminderStrength(StrEnum):
     """Reminder delivery strength selected for a schedule."""
 
     LOW = "low"
@@ -45,7 +45,7 @@ class ReminderStrength(str, Enum):
     HIGH = "high"
 
 
-class RecurringDeleteScope(str, Enum):
+class RecurringDeleteScope(StrEnum):
     """Deletion scopes based on the schedule-local current date.
 
     The implementation must derive the current date from the schedule's IANA
@@ -57,7 +57,7 @@ class RecurringDeleteScope(str, Enum):
     NEXT_AND_FUTURE = "next_and_future"
 
 
-class OccurrenceOverrideAction(str, Enum):
+class OccurrenceOverrideAction(StrEnum):
     """Supported changes to one expanded recurring occurrence."""
 
     CANCEL = "cancel"
