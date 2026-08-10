@@ -1,8 +1,10 @@
 """Result sink that pushes transcripts and command results to the client."""
 
 import logging
+from collections.abc import AsyncIterator
 
 from timeflow.gateway.websocket.agent_ports import (
+    AudioReplyInfo,
     CommandOutcome,
     StreamIdentity,
     TranscriptResult,
@@ -13,6 +15,11 @@ from timeflow.gateway.websocket.messages.agent import (
     VoiceAsrCompletedPayload,
     VoiceCommandResult,
     VoiceCommandResultPayload,
+)
+from timeflow.gateway.websocket.messages.tts import (
+    VoiceTtsEnd,
+    VoiceTtsStart,
+    VoiceTtsStartPayload,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,6 +60,30 @@ class WebSocketResultSink:
             ),
         )
         await self._send(stream.session_id, message.type, message.model_dump())
+
+    async def deliver_audio(
+        self, reply: AudioReplyInfo, chunks: AsyncIterator[bytes], stream: StreamIdentity
+    ) -> None:
+        """Speak a reply, putting each chunk on the wire as it is produced."""
+        start = VoiceTtsStart(
+            conversation_id=stream.conversation_id,
+            audio_id=reply.audio_id,
+            payload=VoiceTtsStartPayload(
+                format=reply.audio_format,
+                sample_rate_hz=reply.sample_rate_hz,
+                purpose=reply.purpose,
+            ),
+        )
+        end = VoiceTtsEnd(conversation_id=stream.conversation_id, audio_id=reply.audio_id)
+
+        delivered = await self._connections.stream_audio(
+            stream.session_id, start.model_dump(), chunks, end.model_dump()
+        )
+        if not delivered:
+            logger.info(
+                "stopped speaking to a session that had gone",
+                extra={"session_id": stream.session_id, "audio_id": reply.audio_id},
+            )
 
     async def _send(self, session_id: str, message_type: str, envelope: dict[str, object]) -> None:
         """Send one message, logging rather than raising when the session has gone."""
