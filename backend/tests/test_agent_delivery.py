@@ -52,7 +52,11 @@ def _result(tag: str) -> CommandResult:
 
 
 def test_deliver_transcript_sends_voice_asr_completed() -> None:
-    """The transcript goes out on its own, carrying the stream's identifiers."""
+    """The transcript goes out on its own, carrying the stream's identifiers.
+
+    Uses real Chinese speech so the assertion also covers non-ASCII surviving the
+    pydantic model and the JSON encoding, which every real transcript will need.
+    """
 
     async def scenario() -> None:
         """Deliver only a transcript to a connected session."""
@@ -61,7 +65,7 @@ def test_deliver_transcript_sends_voice_asr_completed() -> None:
         connections.register(SESSION_ID, connection)
 
         await WebSocketResultSink(connections).deliver_transcript(
-            _transcript("what the user said"), _Identity()
+            _transcript("明天下午三点在203开会"), _Identity()
         )
 
         assert len(connection.frames) == 1
@@ -69,7 +73,7 @@ def test_deliver_transcript_sends_voice_asr_completed() -> None:
         assert frame["type"] == "voice.asr.completed"
         assert frame["request_id"] == "req_voice_001"
         assert frame["conversation_id"] == "conversation_test"
-        assert frame["payload"]["transcript"] == "what the user said"
+        assert frame["payload"]["transcript"] == "明天下午三点在203开会"
 
     asyncio.run(scenario())
 
