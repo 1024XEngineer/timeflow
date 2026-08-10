@@ -1,9 +1,4 @@
-"""What the transport needs from a dialogue agent, stated on the transport's own terms.
-
-The dialogue layer declares the same shapes for its own use. Restating them here rather
-than importing them keeps the dependency pointing one way: the agent satisfies these
-structurally, and the transport never reaches into the dialogue layer.
-"""
+"""What the transport needs from a dialogue agent, stated on the transport's own terms."""
 
 from collections.abc import AsyncIterator
 from typing import Any, Protocol

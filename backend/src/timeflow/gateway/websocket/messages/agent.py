@@ -1,9 +1,4 @@
-"""Dialogue result messages (architecture design sections 5.3 and 5.5).
-
-These follow the shapes the architecture design gives literally, which differ from the
-stream lifecycle messages in two ways: the identifiers sit beside `payload` rather than
-inside it, and there is no `ok` field. `message.ack` carries no payload at all.
-"""
+"""Transcript and command result messages pushed after a stream ends."""
 
 from typing import Any, Literal
 

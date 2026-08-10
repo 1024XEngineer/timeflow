@@ -1,9 +1,4 @@
-"""Audio sink that forwards a stream to the dialogue agent.
-
-This is the seam between transport and dialogue: it passes the bytes along untouched and
-translates the transport's stream context into the identifiers the agent needs. It does
-not transcribe or interpret anything, so no model concern enters the gateway.
-"""
+"""Audio sink that forwards an inbound stream to the dialogue agent unchanged."""
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass

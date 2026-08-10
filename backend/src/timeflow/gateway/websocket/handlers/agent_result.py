@@ -1,11 +1,4 @@
-"""Result sink that pushes what the agent produced to the client.
-
-Results arrive after `voice.stream.end` has already been answered, so these messages are
-pushed rather than returned as replies. There is one method per protocol message, and the
-agent calls each as soon as that piece is known -- the transcript need not wait for the
-command to finish. Each send takes the session write lock on its own, so a message can go
-out even while other work on the session is still in progress.
-"""
+"""Result sink that pushes transcripts and command results to the client."""
 
 import logging
 

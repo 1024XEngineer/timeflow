@@ -1,12 +1,4 @@
-"""Agent that answers every stream with the same fixed result.
-
-Placeholder until real understanding exists: it proves a turn can travel from audio
-to a delivered result while nothing yet transcribes or interprets speech. It reads the
-audio only to know when the stream ended, and never inspects the bytes.
-
-Deciding whether to ask a follow-up question needs real understanding of what was said,
-so this stand-in does not attempt it; every stream takes the one successful path.
-"""
+"""Agent that answers every stream with the same fixed result, until a real one exists."""
 
 import logging
 from collections.abc import AsyncIterator, Callable
@@ -29,7 +21,7 @@ def new_message_id() -> str:
 
 
 def fake_schedule(schedule_id: str) -> dict[str, Any]:
-    """Return a persisted-looking schedule snapshot (architecture design section 6.2)."""
+    """Return a persisted-looking schedule snapshot."""
     return {
         "id": schedule_id,
         "schedule_type": "time",
