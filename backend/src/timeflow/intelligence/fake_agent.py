@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any
 from uuid import uuid4
 
-from timeflow.intelligence.ports import AgentResult, ResultSink, StreamInfo, Transcript
+from timeflow.intelligence.ports import CommandResult, ResultSink, StreamInfo, Transcript
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ class FakeAgent:
         self._schedule_id = schedule_id
 
     async def handle_audio(self, chunks: AsyncIterator[bytes], stream: StreamInfo) -> None:
-        """Read the audio to its end, then deliver the fixed result."""
+        """Read the audio to its end, then deliver the fixed transcript and result."""
         byte_count = 0
         async for chunk in chunks:
             byte_count += len(chunk)
@@ -80,19 +80,20 @@ class FakeAgent:
             extra={"stream_id": stream.stream_id, "byte_count": byte_count},
         )
 
-        result = AgentResult(
-            stream=stream,
+        transcript = Transcript(
+            text=FAKE_TRANSCRIPT,
+            language=FAKE_LANGUAGE,
+            duration_ms=_duration_ms_of(byte_count),
+        )
+        await self._result_sink.deliver_transcript(transcript, stream)
+
+        result = CommandResult(
             message_id=self._message_id_factory(),
-            transcript=Transcript(
-                text=FAKE_TRANSCRIPT,
-                language=FAKE_LANGUAGE,
-                duration_ms=_duration_ms_of(byte_count),
-            ),
             operation=FAKE_OPERATION,
             status=FAKE_STATUS,
             schedule=fake_schedule(self._schedule_id),
         )
-        await self._result_sink.deliver(result)
+        await self._result_sink.deliver_result(result, stream)
 
 
 def _duration_ms_of(byte_count: int) -> int:
