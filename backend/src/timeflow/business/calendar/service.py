@@ -27,7 +27,11 @@ class ScheduleAgentService(ABC):
         account_id: str,
         command: CreateScheduleCommand,
     ) -> ScheduleMutationResult:
-        """Create an ordinary or recurring schedule from a confirmed command."""
+        """Create an ordinary or recurring schedule from a confirmed command.
+
+        Raises:
+            ScheduleBusinessError: If the confirmed command is invalid.
+        """
         # TODO(person-2): validate the aggregate and persist it transactionally.
         raise NotImplementedError
 
@@ -38,7 +42,11 @@ class ScheduleAgentService(ABC):
         account_id: str,
         query: FindSchedulesQuery,
     ) -> ScheduleSearchResult:
-        """Find schedules for Agent queries, matching, and disambiguation."""
+        """Find schedules for Agent queries, matching, and disambiguation.
+
+        Raises:
+            ScheduleBusinessError: If the query contains invalid criteria.
+        """
         # TODO(person-2): implement account-scoped schedule matching.
         raise NotImplementedError
 
@@ -49,7 +57,11 @@ class ScheduleAgentService(ABC):
         account_id: str,
         command: UpdateScheduleCommand,
     ) -> ScheduleMutationResult:
-        """Update one schedule; recurring changes apply to the complete series."""
+        """Update one schedule; recurring changes apply to the complete series.
+
+        Raises:
+            ScheduleBusinessError: If the target, revision, or patch is invalid.
+        """
         # TODO(person-2): validate the patch, revision, and final aggregate.
         raise NotImplementedError
 
@@ -60,7 +72,11 @@ class ScheduleAgentService(ABC):
         account_id: str,
         command: DeleteOnceScheduleCommand,
     ) -> ScheduleMutationResult:
-        """Soft-delete one non-recurring schedule."""
+        """Soft-delete one non-recurring schedule.
+
+        Raises:
+            ScheduleBusinessError: If the target or revision is invalid.
+        """
         # TODO(person-2): validate the target and create a deleted cloud snapshot.
         raise NotImplementedError
 
@@ -71,7 +87,11 @@ class ScheduleAgentService(ABC):
         account_id: str,
         command: DeleteRecurringScheduleCommand,
     ) -> ScheduleMutationResult:
-        """Delete the next occurrence or that occurrence and all future ones."""
+        """Delete the next occurrence or that occurrence and all future ones.
+
+        Raises:
+            ScheduleBusinessError: If the target, revision, or occurrence is invalid.
+        """
         # TODO(person-2): use the schedule timezone and a system clock to find
         # the first occurrence on or after the current local date, then apply
         # command.scope without accepting an arbitrary date from the caller.

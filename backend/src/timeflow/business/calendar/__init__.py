@@ -9,6 +9,8 @@ from timeflow.business.calendar.contracts import (
     RecurringDeleteScope,
     ReminderStrength,
     ReminderType,
+    ScheduleBusinessError,
+    ScheduleErrorCode,
     ScheduleKind,
     ScheduleMutationResult,
     ScheduleOccurrenceOverrideSnapshot,
@@ -16,6 +18,7 @@ from timeflow.business.calendar.contracts import (
     ScheduleSnapshot,
     ScheduleStatus,
     ScheduleType,
+    ScheduleUpdatePatch,
     UpdateScheduleCommand,
 )
 from timeflow.business.calendar.service import ScheduleAgentService
@@ -30,6 +33,8 @@ __all__ = [
     "ReminderStrength",
     "ReminderType",
     "ScheduleAgentService",
+    "ScheduleBusinessError",
+    "ScheduleErrorCode",
     "ScheduleKind",
     "ScheduleMutationResult",
     "ScheduleOccurrenceOverrideSnapshot",
@@ -37,5 +42,6 @@ __all__ = [
     "ScheduleSnapshot",
     "ScheduleStatus",
     "ScheduleType",
+    "ScheduleUpdatePatch",
     "UpdateScheduleCommand",
 ]

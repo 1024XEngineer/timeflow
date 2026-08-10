@@ -1,10 +1,9 @@
 """Framework-independent contracts for the schedule business boundary."""
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import TypeAlias
+from typing import TypedDict
 
 
 class ScheduleType(StrEnum):
@@ -64,7 +63,59 @@ class OccurrenceOverrideAction(StrEnum):
     REPLACE = "replace"
 
 
-SchedulePatchValue: TypeAlias = str | bool | int | float | datetime | None
+class ScheduleErrorCode(StrEnum):
+    """Stable business failures raised by the Agent schedule boundary."""
+
+    SCHEDULE_NOT_FOUND = "schedule_not_found"
+    REVISION_CONFLICT = "revision_conflict"
+    OCCURRENCE_NOT_FOUND = "occurrence_not_found"
+    INVALID_TIMEZONE = "invalid_timezone"
+    INVALID_UPDATE_PATCH = "invalid_update_patch"
+    INVALID_SCHEDULE_KIND = "invalid_schedule_kind"
+    VALIDATION_FAILED = "validation_failed"
+
+
+class ScheduleBusinessError(Exception):
+    """Expected schedule failure that callers can translate without parsing text."""
+
+    __slots__ = ("code", "field", "message", "schedule_id")
+
+    def __init__(
+        self,
+        *,
+        code: ScheduleErrorCode,
+        message: str,
+        schedule_id: str | None = None,
+        field: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.schedule_id = schedule_id
+        self.field = field
+
+
+class ScheduleUpdatePatch(TypedDict, total=False):
+    """Explicit user-editable fields for an update command.
+
+    Omitting a key leaves the persisted value unchanged. Supplying ``None``
+    explicitly clears a nullable field. Identity, ownership, lifecycle,
+    revision, and audit fields are intentionally not patchable.
+    """
+
+    title: str
+    is_all_day: bool
+    start_time: datetime | None
+    end_time: datetime | None
+    timezone: str
+    recurrence_rule: str | None
+    location_name: str | None
+    latitude: float | None
+    longitude: float | None
+    reminder_type: ReminderType | None
+    reminder_trigger_at: datetime | None
+    reminder_offset_minutes: int | None
+    reminder_strength: ReminderStrength | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,7 +199,7 @@ class UpdateScheduleCommand:
 
     schedule_id: str
     expected_revision: int
-    changes: Mapping[str, SchedulePatchValue] = field(default_factory=dict)
+    changes: ScheduleUpdatePatch
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,13 +243,15 @@ __all__ = [
     "RecurringDeleteScope",
     "ReminderStrength",
     "ReminderType",
+    "ScheduleBusinessError",
+    "ScheduleErrorCode",
     "ScheduleKind",
     "ScheduleMutationResult",
     "ScheduleOccurrenceOverrideSnapshot",
-    "SchedulePatchValue",
     "ScheduleSearchResult",
     "ScheduleSnapshot",
     "ScheduleStatus",
     "ScheduleType",
+    "ScheduleUpdatePatch",
     "UpdateScheduleCommand",
 ]
