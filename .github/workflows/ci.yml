@@ -1,7 +1,10 @@
 name: CI
 
 on:
+  # ready_for_review is not in the default type set, and without it a draft PR
+  # turned ready would never start a run.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
   workflow_dispatch:
@@ -22,6 +25,10 @@ env:
 jobs:
   backend:
     name: Backend (lint, types, tests)
+    # Skip while the PR is a draft; the ready_for_review event starts the real run.
+    # Repeated per job because there is no workflow-level `if`. The event_name guard
+    # comes first so push and workflow_dispatch runs are unaffected.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -55,6 +62,7 @@ jobs:
 
   migrations:
     name: Backend (migrations)
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -101,6 +109,7 @@ jobs:
 
   frontend:
     name: Frontend (lint, types, build)
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
