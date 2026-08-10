@@ -1,10 +1,14 @@
-/** 本地执行架构定义的提醒类型。 */
-export type ReminderType =
-  'at_time' | 'before_start' | 'arrive_location' | 'return_to_recorded_location';
+/**
+ * 协议级联合类型以 `contracts/reminder` 为唯一来源，避免与 wire 定义漂移。
+ * 本文件只补充本地运行时领域类型。
+ */
+export type {
+  ReminderDispositionState,
+  ReminderStrength,
+  ReminderSyncStatus,
+  ReminderType,
+} from '../../../contracts/reminder';
 
-export type ReminderStrength = 'low' | 'medium' | 'high';
-export type ReminderDispositionState = 'pending' | 'confirmed' | 'snoozed';
-export type ReminderSyncStatus = 'pending' | 'synced';
 export const DEFAULT_SNOOZE_MINUTES = 10;
 export type LocalScheduleStatus = 'active' | 'deleted';
 export type LocalScheduleKind = 'once' | 'recurring';
