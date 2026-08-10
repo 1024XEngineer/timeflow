@@ -1,4 +1,4 @@
-"""How a turn result reaches the wire, when things go wrong or happen at once."""
+"""How the two result messages reach the wire, when things go wrong or happen at once."""
 
 import asyncio
 from dataclasses import dataclass
@@ -6,7 +6,7 @@ from typing import Any
 
 from timeflow.gateway.websocket.connection_manager import ConnectionManager
 from timeflow.gateway.websocket.handlers.agent_result import WebSocketResultSink
-from timeflow.intelligence.ports import AgentResult, Transcript
+from timeflow.intelligence.ports import CommandResult, Transcript
 
 SESSION_ID = "ws_session_test"
 
@@ -36,36 +36,83 @@ class RecordingConnection:
         """Record nothing; results never go out as binary."""
 
 
-def _result(tag: str, *, session_id: str = SESSION_ID) -> AgentResult:
-    """Build a turn result tagged so its two messages can be told apart."""
-    return AgentResult(
-        stream=_Identity(session_id=session_id),
+def _transcript(tag: str) -> Transcript:
+    """Build a transcript tagged so its message can be told apart."""
+    return Transcript(text=tag, language="zh", duration_ms=10)
+
+
+def _result(tag: str) -> CommandResult:
+    """Build a command result tagged so its message can be told apart."""
+    return CommandResult(
         message_id=tag,
-        transcript=Transcript(text=tag, language="zh", duration_ms=10),
         operation="create_schedule",
         status="applied",
         schedule={"id": tag},
     )
 
 
-def _turn_tag(frame: dict[str, Any]) -> str:
-    """Return the tag of whichever turn a frame belongs to."""
-    if frame["type"] == "voice.asr.completed":
-        return str(frame["payload"]["transcript"])
-    return str(frame["message_id"])
-
-
-def test_a_turn_sends_the_transcript_before_the_command_result() -> None:
-    """The two messages of a turn go out in that order."""
+def test_deliver_transcript_sends_voice_asr_completed() -> None:
+    """The transcript goes out on its own, carrying the stream's identifiers."""
 
     async def scenario() -> None:
-        """Deliver one turn to a connected session."""
+        """Deliver only a transcript to a connected session."""
         connections = ConnectionManager()
         connection = RecordingConnection()
         connections.register(SESSION_ID, connection)
 
-        await WebSocketResultSink(connections).deliver(_result("msg_a"))
+        await WebSocketResultSink(connections).deliver_transcript(
+            _transcript("what the user said"), _Identity()
+        )
 
+        assert len(connection.frames) == 1
+        frame = connection.frames[0]
+        assert frame["type"] == "voice.asr.completed"
+        assert frame["request_id"] == "req_voice_001"
+        assert frame["conversation_id"] == "conversation_test"
+        assert frame["payload"]["transcript"] == "what the user said"
+
+    asyncio.run(scenario())
+
+
+def test_deliver_result_sends_voice_command_result() -> None:
+    """The command result goes out on its own, without needing a transcript first."""
+
+    async def scenario() -> None:
+        """Deliver only a command result to a connected session."""
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register(SESSION_ID, connection)
+
+        await WebSocketResultSink(connections).deliver_result(_result("msg_a"), _Identity())
+
+        assert len(connection.frames) == 1
+        frame = connection.frames[0]
+        assert frame["type"] == "voice.command.result"
+        assert frame["message_id"] == "msg_a"
+        assert frame["conversation_id"] == "conversation_test"
+        assert frame["payload"]["operation"] == "create_schedule"
+
+    asyncio.run(scenario())
+
+
+def test_the_two_messages_are_independent_calls() -> None:
+    """Each message is one call, so the caller decides when each goes out.
+
+    Pins the split: the sink no longer bundles a turn, so a transcript can be sent long
+    before its command result is known.
+    """
+
+    async def scenario() -> None:
+        """Send the transcript, then the result, as two separate calls."""
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register(SESSION_ID, connection)
+        sink = WebSocketResultSink(connections)
+
+        await sink.deliver_transcript(_transcript("msg_a"), _Identity())
+        assert [frame["type"] for frame in connection.frames] == ["voice.asr.completed"]
+
+        await sink.deliver_result(_result("msg_a"), _Identity())
         assert [frame["type"] for frame in connection.frames] == [
             "voice.asr.completed",
             "voice.command.result",
@@ -78,16 +125,18 @@ def test_delivering_to_a_gone_session_sends_nothing() -> None:
     """A result for a session that has closed is dropped rather than raising."""
 
     async def scenario() -> None:
-        """Deliver a turn for a session nobody registered."""
+        """Deliver both messages for a session nobody registered."""
         connections = ConnectionManager()
+        sink = WebSocketResultSink(connections)
 
-        await WebSocketResultSink(connections).deliver(_result("msg_a"))
+        await sink.deliver_transcript(_transcript("msg_a"), _Identity())
+        await sink.deliver_result(_result("msg_a"), _Identity())
 
     asyncio.run(scenario())
 
 
-def test_a_session_that_dies_mid_turn_gets_no_second_message() -> None:
-    """A connection that leaves after the transcript is never written to again.
+def test_a_session_that_dies_after_the_transcript_gets_no_result() -> None:
+    """A connection that leaves after the first message is never written to again.
 
     Pins the observable half-delivered turn: whatever delivery does internally, a socket
     that has left the registry receives nothing further.
@@ -107,8 +156,10 @@ def test_a_session_that_dies_mid_turn_gets_no_second_message() -> None:
 
         connection = DiesAfterFirstFrame()
         connections.register(SESSION_ID, connection)
+        sink = WebSocketResultSink(connections)
 
-        await WebSocketResultSink(connections).deliver(_result("msg_a"))
+        await sink.deliver_transcript(_transcript("msg_a"), _Identity())
+        await sink.deliver_result(_result("msg_a"), _Identity())
 
         assert [frame["type"] for frame in connection.frames] == ["voice.asr.completed"]
 
@@ -131,7 +182,7 @@ def test_a_result_follows_a_reconnect_that_lands_before_it_is_written() -> None:
 
         async with connections.lock_for(SESSION_ID):
             delivery = asyncio.create_task(
-                WebSocketResultSink(connections).deliver(_result("msg_a"))
+                WebSocketResultSink(connections).deliver_result(_result("msg_a"), _Identity())
             )
             await asyncio.sleep(0)
             connections.register(SESSION_ID, live)
@@ -143,33 +194,11 @@ def test_a_result_follows_a_reconnect_that_lands_before_it_is_written() -> None:
     asyncio.run(scenario())
 
 
-def test_two_turns_delivered_at_once_do_not_interleave() -> None:
-    """Each turn's two messages stay adjacent, so a client never pairs them wrongly."""
+def test_results_for_different_sessions_stay_apart() -> None:
+    """Two sessions each receive only their own result."""
 
     async def scenario() -> None:
-        """Deliver two turns concurrently to one session."""
-        connections = ConnectionManager()
-        connection = RecordingConnection()
-        connections.register(SESSION_ID, connection)
-        sink = WebSocketResultSink(connections)
-
-        await asyncio.gather(sink.deliver(_result("msg_a")), sink.deliver(_result("msg_b")))
-
-        tags = [_turn_tag(frame) for frame in connection.frames]
-
-        assert len(tags) == 4
-        assert tags[0] == tags[1]
-        assert tags[2] == tags[3]
-        assert tags[0] != tags[2]
-
-    asyncio.run(scenario())
-
-
-def test_turns_for_different_sessions_stay_apart() -> None:
-    """Two sessions each receive only their own turn."""
-
-    async def scenario() -> None:
-        """Deliver one turn per session, concurrently."""
+        """Deliver one result per session, concurrently."""
         connections = ConnectionManager()
         first = RecordingConnection()
         second = RecordingConnection()
@@ -178,11 +207,11 @@ def test_turns_for_different_sessions_stay_apart() -> None:
         sink = WebSocketResultSink(connections)
 
         await asyncio.gather(
-            sink.deliver(_result("msg_first", session_id="ws_session_first")),
-            sink.deliver(_result("msg_second", session_id="ws_session_second")),
+            sink.deliver_result(_result("msg_first"), _Identity(session_id="ws_session_first")),
+            sink.deliver_result(_result("msg_second"), _Identity(session_id="ws_session_second")),
         )
 
-        assert {_turn_tag(frame) for frame in first.frames} == {"msg_first"}
-        assert {_turn_tag(frame) for frame in second.frames} == {"msg_second"}
+        assert [frame["message_id"] for frame in first.frames] == ["msg_first"]
+        assert [frame["message_id"] for frame in second.frames] == ["msg_second"]
 
     asyncio.run(scenario())

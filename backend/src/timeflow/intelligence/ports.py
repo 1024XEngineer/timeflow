@@ -1,8 +1,13 @@
 """Ports the dialogue layer exposes, plus the values passed across them.
 
-The transport hands audio in through AgentPort and receives results back through
+The transport hands audio in through AgentPort and pushes results back out through
 ResultSink. Both directions are one-way and asynchronous: handing audio over only
-confirms receipt, and the semantic result arrives later through the other port.
+confirms receipt, and results arrive later through the other port.
+
+ResultSink has one method per protocol message rather than one method per turn. The two
+messages become known at different moments -- the transcript as soon as the speech is
+recognized, the command result only after the command has actually been carried out --
+so bundling them would hold the transcript back until the slower half was ready.
 
 These types stay free of any transport concern so the layer never imports the gateway.
 """
@@ -50,26 +55,28 @@ class Transcript:
 
 
 @dataclass(frozen=True, slots=True)
-class AgentResult:
-    """A completed turn: what was heard, and the command that was carried out.
+class CommandResult:
+    """A command that was carried out, and the schedule state it left behind.
 
-    Carries every identifier the transport needs to address the result, so the
-    receiving side translates and sends without inventing or looking up anything.
+    Holds no stream identifiers: the caller passes those separately, so the same result
+    is never coupled to one particular stream.
     """
 
-    stream: StreamInfo
     message_id: str
-    transcript: Transcript
     operation: str
     status: str
     schedule: dict[str, Any]
 
 
 class ResultSink(Protocol):
-    """Deliver a completed turn back to the client."""
+    """Push results back to the client, one method per protocol message."""
 
-    async def deliver(self, result: AgentResult) -> None:
-        """Send the result; returning means it was handed to the transport."""
+    async def deliver_transcript(self, transcript: Transcript, stream: StreamInfo) -> None:
+        """Send what the user was heard to say; call as soon as it is known."""
+        ...
+
+    async def deliver_result(self, result: CommandResult, stream: StreamInfo) -> None:
+        """Send the outcome of a command; call once it has actually been carried out."""
         ...
 
 

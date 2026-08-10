@@ -52,22 +52,12 @@ class TranscriptResult(Protocol):
         ...
 
 
-class TurnResult(Protocol):
-    """A completed turn, ready to be sent to the client."""
-
-    @property
-    def stream(self) -> StreamIdentity:
-        """Stream this result answers."""
-        ...
+class CommandOutcome(Protocol):
+    """A command that was carried out, ready to be sent to the client."""
 
     @property
     def message_id(self) -> str:
         """Identifier the client echoes back in message.ack."""
-        ...
-
-    @property
-    def transcript(self) -> TranscriptResult:
-        """What was heard."""
         ...
 
     @property
