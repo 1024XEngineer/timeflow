@@ -31,9 +31,16 @@ packages = ["src/timeflow"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["-q"]
+addopts = [
+    "-q",
+    "--cov=timeflow",
+    "--cov-branch",
+    "--cov-report=term-missing",
+    "--cov-fail-under=95",
+]
 
 [tool.coverage.run]
+data_file = ".pytest_cache/.coverage"
 source = ["timeflow"]
 branch = true
 
