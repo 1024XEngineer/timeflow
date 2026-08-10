@@ -127,6 +127,4 @@ def test_occurrence_overrides_table_matches_documented_schema() -> None:
         "ck_schedule_occurrence_overrides_action",
         "ck_schedule_occurrence_overrides_replacement",
     } <= _constraint_names(ScheduleOccurrenceOverride)
-    assert _index_names(ScheduleOccurrenceOverride) == {
-        "ix_schedule_occurrence_overrides_schedule_id"
-    }
+    assert _index_names(ScheduleOccurrenceOverride) == set()

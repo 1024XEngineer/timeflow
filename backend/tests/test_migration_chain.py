@@ -4,8 +4,12 @@ import ast
 import subprocess
 from pathlib import Path
 
+import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+
+from alembic import command
+from timeflow.infrastructure.settings import get_settings
 
 BACKEND_ROOT = Path(__file__).parents[1]
 VERSIONS_ROOT = BACKEND_ROOT / "alembic" / "versions"
@@ -83,3 +87,27 @@ def test_schedules_revision_guards_legacy_data_before_replacement() -> None:
     assert source.index("Legacy schedules table contains data") < source.index(
         'op.drop_table("schedules")'
     )
+
+
+def test_schedules_revision_rejects_offline_mode_deliberately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "TIMEFLOW_DATABASE_URL",
+        "postgresql+psycopg://postgres:postgres@localhost:5432/timeflow_test",
+    )
+    get_settings.cache_clear()
+    config = Config(str(BACKEND_ROOT / "alembic.ini"))
+
+    try:
+        with pytest.raises(RuntimeError, match="requires online mode"):
+            command.upgrade(config, "head", sql=True)
+    finally:
+        get_settings.cache_clear()
+
+
+def test_occurrence_override_revision_avoids_redundant_schedule_id_index() -> None:
+    source = (
+        VERSIONS_ROOT / "20260810_0005_create_schedule_occurrence_overrides_table.py"
+    ).read_text(encoding="utf-8")
+    assert "ix_schedule_occurrence_overrides_schedule_id" not in source

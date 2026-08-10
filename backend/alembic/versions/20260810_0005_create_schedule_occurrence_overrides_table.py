@@ -54,18 +54,9 @@ def upgrade() -> None:
             name="uq_schedule_occurrence_overrides_schedule_occurrence",
         ),
     )
-    op.create_index(
-        "ix_schedule_occurrence_overrides_schedule_id",
-        "schedule_occurrence_overrides",
-        ["schedule_id"],
-    )
 
 
 def downgrade() -> None:
     """Drop occurrence overrides."""
 
-    op.drop_index(
-        "ix_schedule_occurrence_overrides_schedule_id",
-        table_name="schedule_occurrence_overrides",
-    )
     op.drop_table("schedule_occurrence_overrides")

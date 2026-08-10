@@ -194,7 +194,6 @@ class ScheduleOccurrenceOverride(Base):
             "OR (action = 'cancel' AND replacement_schedule_id IS NULL)",
             name="ck_schedule_occurrence_overrides_replacement",
         ),
-        Index("ix_schedule_occurrence_overrides_schedule_id", "schedule_id"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)

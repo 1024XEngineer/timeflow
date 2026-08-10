@@ -9,7 +9,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 
-from alembic import op
+from alembic import context, op
 
 revision: str = "20260810_0004"
 down_revision: str | Sequence[str] | None = "20260810_0003"
@@ -19,6 +19,12 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     """Replace the legacy table only when it contains no data."""
+
+    if context.is_offline_mode():
+        raise RuntimeError(
+            "Migration 20260810_0004 requires online mode because it must inspect "
+            "legacy schedules data. Run `alembic upgrade head` without `--sql`."
+        )
 
     connection = op.get_bind()
     legacy_row = connection.execute(sa.text("SELECT 1 FROM schedules LIMIT 1")).first()

@@ -251,7 +251,7 @@ def test_postgres_keys_checks_and_indexes_match_document(
         for index in inspector.get_indexes("schedule_occurrence_overrides")
         if not index.get("duplicates_constraint")
     }
-    assert override_indexes == {"ix_schedule_occurrence_overrides_schedule_id": ["schedule_id"]}
+    assert override_indexes == {}
 
 
 def test_postgres_applies_schedule_server_defaults(
