@@ -4,9 +4,9 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-PURPOSE_DIALOGUE_QUESTION = "dialogue_question"
+# The protocol allows dialogue_question and reminder too; both belong to rounds that do
+# not exist yet, and a reminder additionally requires schedule_id and audio_version.
 PURPOSE_COMMAND_RESULT = "command_result"
-PURPOSE_REMINDER = "reminder"
 
 
 class VoiceTtsStartPayload(BaseModel):

@@ -7,6 +7,7 @@ from typing import Any
 
 from timeflow.gateway.websocket.connection_manager import ConnectionManager
 from timeflow.gateway.websocket.messages.tts import (
+    PURPOSE_COMMAND_RESULT,
     VoiceTtsEnd,
     VoiceTtsStart,
     VoiceTtsStartPayload,
@@ -60,7 +61,7 @@ def _tts_start(audio_id: str = "audio_001") -> dict[str, Any]:
         payload=VoiceTtsStartPayload(
             format="pcm",
             sample_rate_hz=24000,
-            purpose="command_result",
+            purpose=PURPOSE_COMMAND_RESULT,
             speech_text="好，已经记下了",
         ),
     ).model_dump()
@@ -123,7 +124,6 @@ def test_unregister_keeps_a_replacement_connection() -> None:
 
         connections.unregister("ws_session_1", old)
 
-        assert connections.is_connected("ws_session_1") is True
         assert await connections.send("ws_session_1", {"type": "ping"}) is True
         assert new.frames == [("json", {"type": "ping"})]
         assert old.frames == []
@@ -142,7 +142,9 @@ def test_unregister_releases_the_owning_connection() -> None:
 
         connections.unregister("ws_session_1", connection)
 
-        assert connections.is_connected("ws_session_1") is False
+        # Asserted through observable behaviour rather than the registry's internals.
+        assert await connections.send("ws_session_1", {"type": "ping"}) is False
+        assert connection.frames == []
 
     asyncio.run(scenario())
 

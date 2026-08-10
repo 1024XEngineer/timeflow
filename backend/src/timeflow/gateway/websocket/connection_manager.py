@@ -47,10 +47,6 @@ class ConnectionManager:
             self._locks.pop(session_id, None)
             self._audio_locks.pop(session_id, None)
 
-    def is_connected(self, session_id: str) -> bool:
-        """Report whether a session currently has a connection."""
-        return session_id in self._connections
-
     def lock_for(self, session_id: str) -> asyncio.Lock:
         """Return the write lock for a session, creating it on first use."""
         return self._locks.setdefault(session_id, asyncio.Lock())
