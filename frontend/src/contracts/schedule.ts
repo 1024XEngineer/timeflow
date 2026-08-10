@@ -19,7 +19,8 @@ export type Schedule = {
   latitude: number | null;
   longitude: number | null;
   geofence_radius_meters: number;
-  geofence_armed: boolean;
+  /** Wire type matches backend Integer constrained to 0/1 (not JSON boolean). */
+  geofence_armed: 0 | 1;
   time_remind_offset_minutes: number;
   time_triggered_at: string | null;
   geo_triggered_at: string | null;
