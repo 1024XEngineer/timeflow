@@ -65,10 +65,13 @@ def test_settings_load_dotenv_file(tmp_path: Path, monkeypatch: MonkeyPatch) -> 
     assert settings.database_url == "sqlite+pysqlite:///:memory:"
 
 
-def test_settings_use_qwen_asr_defaults(monkeypatch: MonkeyPatch) -> None:
+def test_settings_use_qwen_asr_defaults(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
     clear_asr_environment(monkeypatch)
 
-    settings = Settings.from_environment()
+    settings = Settings.from_environment(tmp_path / "missing.env")
 
     assert settings.aliyun_asr_ws_url == ""
     assert settings.aliyun_asr_api_key == ""
