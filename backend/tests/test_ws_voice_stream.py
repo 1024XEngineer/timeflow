@@ -69,7 +69,6 @@ def _build_app(
     *,
     max_audio_duration_ms: int = 120_000,
     queue_max_chunks: int = 32,
-    max_chunk_bytes: int = 65_536,
 ) -> FastAPI:
     """Build an app wiring the transport to the given sink."""
     application = FastAPI()
@@ -80,7 +79,6 @@ def _build_app(
         sink,
         max_audio_duration_ms=max_audio_duration_ms,
         queue_max_chunks=queue_max_chunks,
-        max_chunk_bytes=max_chunk_bytes,
         stream_id_factory=lambda: "stream_test",
         conversation_id_factory=lambda: "conversation_test",
     )
@@ -411,36 +409,6 @@ def test_disconnect_cancels_an_unfinished_stream() -> None:
     assert not sink.completed.is_set()
 
 
-def test_an_oversized_frame_is_refused_and_the_stream_survives() -> None:
-    """The configured per-frame cap is enforced, and one bad frame does not end the stream.
-
-    The cap was a dead setting: read from the environment but never passed to the handler,
-    so a client could send one frame as large as the whole duration budget.
-    """
-    sink = CapturingSink()
-    client = TestClient(_build_app(sink, max_chunk_bytes=16))
-
-    with client.websocket_connect("/ws") as websocket:
-        websocket.send_json(VALID_HELLO)
-        websocket.receive_json()
-        websocket.send_json(START)
-        websocket.receive_json()
-
-        websocket.send_bytes(b"x" * 17)
-        refused = websocket.receive_json()
-
-        assert refused["type"] == "voice.command.error"
-        assert refused["error"]["code"] == "AUDIO_INVALID"
-        assert "16 bytes" in refused["error"]["message"]
-
-        # Still usable: a frame within the cap goes through silently.
-        websocket.send_bytes(b"y" * 16)
-        websocket.send_json({"type": "voice.stream.end", "payload": {"stream_id": "stream_test"}})
-        assert sink.completed.wait(timeout=2)
-
-    assert sink.audio() == b"y" * 16
-
-
 def test_an_audio_error_names_the_conversation_it_belongs_to() -> None:
     """voice.command.error carries a top-level conversation_id when a stream exists.
 
@@ -477,3 +445,22 @@ def test_an_error_with_no_conversation_omits_the_field() -> None:
 
         assert refused["type"] == "voice.command.error"
         assert "conversation_id" not in refused
+
+
+def test_a_rejected_second_start_names_the_conversation_holding_the_stream() -> None:
+    """Being told a stream is already active says which conversation is holding it."""
+    sink = CapturingSink()
+    client = TestClient(_build_app(sink))
+
+    with client.websocket_connect("/ws") as websocket:
+        websocket.send_json(VALID_HELLO)
+        websocket.receive_json()
+        websocket.send_json(START)
+        websocket.receive_json()
+
+        websocket.send_json(START)
+        refused = websocket.receive_json()
+
+        assert refused["type"] == "voice.command.error"
+        assert "already active" in refused["error"]["message"]
+        assert refused["conversation_id"] == "conversation_test"

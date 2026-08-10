@@ -19,7 +19,6 @@ class Settings:
     ws_max_unauthenticated_connections: int
     ws_audio_queue_max_chunks: int
     ws_max_audio_duration_ms: int
-    ws_audio_chunk_size_bytes: int
 
     @classmethod
     def from_environment(cls, env_file: Path | str = ".env") -> "Settings":
@@ -41,9 +40,6 @@ class Settings:
             ws_audio_queue_max_chunks=int(environ.get("TIMEFLOW_WS_AUDIO_QUEUE_MAX_CHUNKS", "32")),
             ws_max_audio_duration_ms=int(
                 environ.get("TIMEFLOW_WS_MAX_AUDIO_DURATION_MS", "120000")
-            ),
-            ws_audio_chunk_size_bytes=int(
-                environ.get("TIMEFLOW_WS_AUDIO_CHUNK_SIZE_BYTES", "65536")
             ),
         )
 

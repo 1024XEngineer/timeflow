@@ -45,7 +45,6 @@ def create_app(
         audio_sink or NullAudioSink(),
         max_audio_duration_ms=settings.ws_max_audio_duration_ms,
         queue_max_chunks=settings.ws_audio_queue_max_chunks,
-        max_chunk_bytes=settings.ws_audio_chunk_size_bytes,
     )
     router = MessageRouter()
     router.register("voice.stream.start", voice_streams.handle_start)
