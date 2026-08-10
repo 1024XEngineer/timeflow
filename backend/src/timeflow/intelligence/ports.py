@@ -43,6 +43,20 @@ class Transcript:
 
 
 @dataclass(frozen=True, slots=True)
+class AudioReply:
+    """What a spoken reply says and how it is encoded, sent ahead of the audio itself.
+
+    Describes the audio without holding it; the bytes arrive separately as a stream.
+    """
+
+    audio_id: str
+    audio_format: str
+    sample_rate_hz: int
+    purpose: str
+    speech_text: str
+
+
+@dataclass(frozen=True, slots=True)
 class CommandResult:
     """A command that was carried out, and the schedule state it left behind.
 
@@ -65,6 +79,15 @@ class ResultSink(Protocol):
 
     async def deliver_result(self, result: CommandResult, stream: StreamInfo) -> None:
         """Send the outcome of a command; call once it has actually been carried out."""
+        ...
+
+    async def deliver_audio(
+        self, reply: AudioReply, chunks: AsyncIterator[bytes], stream: StreamInfo
+    ) -> None:
+        """Speak a reply, forwarding chunks as they are produced.
+
+        Cancelling stops it early and still closes the run.
+        """
         ...
 
 

@@ -71,6 +71,35 @@ class CommandOutcome(Protocol):
         ...
 
 
+class AudioReplyInfo(Protocol):
+    """Format and purpose of a spoken reply, announced before its audio."""
+
+    @property
+    def audio_id(self) -> str:
+        """Identifier distinguishing this reply from the next."""
+        ...
+
+    @property
+    def audio_format(self) -> str:
+        """Encoding of the audio frames that follow."""
+        ...
+
+    @property
+    def sample_rate_hz(self) -> int:
+        """Sample rate the frames were produced at."""
+        ...
+
+    @property
+    def purpose(self) -> str:
+        """Why the reply is being spoken."""
+        ...
+
+    @property
+    def speech_text(self) -> str:
+        """The words the audio says."""
+        ...
+
+
 class Agent(Protocol):
     """Take one audio stream and act on what it contains."""
 

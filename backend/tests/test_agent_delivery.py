@@ -1,12 +1,13 @@
 """How the two result messages reach the wire, when things go wrong or happen at once."""
 
 import asyncio
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
 from timeflow.gateway.websocket.connection_manager import ConnectionManager
 from timeflow.gateway.websocket.handlers.agent_result import WebSocketResultSink
-from timeflow.intelligence.ports import CommandResult, Transcript
+from timeflow.intelligence.ports import AudioReply, CommandResult, Transcript
 
 SESSION_ID = "ws_session_test"
 
@@ -33,7 +34,8 @@ class RecordingConnection:
         self.frames.append(data)
 
     async def send_bytes(self, data: bytes) -> None:
-        """Record nothing; results never go out as binary."""
+        """Record one binary frame as a marker, so audio shows up in the frame order."""
+        self.frames.append({"type": "audio"})
 
 
 def _transcript(tag: str) -> Transcript:
@@ -217,5 +219,89 @@ def test_results_for_different_sessions_stay_apart() -> None:
 
         assert [frame["message_id"] for frame in first.frames] == ["msg_first"]
         assert [frame["message_id"] for frame in second.frames] == ["msg_second"]
+
+    asyncio.run(scenario())
+
+
+def _reply() -> AudioReply:
+    """Build a spoken reply matching what the realtime model emits."""
+    return AudioReply(
+        audio_id="audio_001",
+        audio_format="pcm",
+        sample_rate_hz=24000,
+        purpose="command_result",
+        speech_text="好，明天下午三点在203的会已经记下了",
+    )
+
+
+async def _chunks(*payloads: bytes) -> AsyncIterator[bytes]:
+    """Yield the given chunks with no delay."""
+    for payload in payloads:
+        yield payload
+
+
+def test_deliver_audio_translates_the_reply_into_voice_tts_start() -> None:
+    """The reply description becomes a voice.tts.start carrying the stream's identifiers.
+
+    Only the translation is checked here; the framing and cancellation behaviour of the
+    burst itself belongs to the transport and is covered there.
+    """
+
+    async def scenario() -> None:
+        """Speak a one-chunk reply to a connected session."""
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register(SESSION_ID, connection)
+
+        await WebSocketResultSink(connections).deliver_audio(_reply(), _chunks(b"aa"), _Identity())
+
+        start = connection.frames[0]
+        assert start["type"] == "voice.tts.start"
+        assert start["conversation_id"] == "conversation_test"
+        assert start["audio_id"] == "audio_001"
+        assert start["payload"] == {
+            "format": "pcm",
+            "sample_rate_hz": 24000,
+            "purpose": "command_result",
+            "speech_text": "好，明天下午三点在203的会已经记下了",
+            "schedule_id": None,
+            "audio_version": None,
+        }
+        assert "ok" not in start
+
+    asyncio.run(scenario())
+
+
+def test_the_reply_text_arrives_before_any_audio() -> None:
+    """speech_text rides on the start message, so the words are known before the sound."""
+
+    async def scenario() -> None:
+        """Speak a reply and read the frame order."""
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register(SESSION_ID, connection)
+
+        await WebSocketResultSink(connections).deliver_audio(
+            _reply(), _chunks(b"aa", b"bb"), _Identity()
+        )
+
+        assert [frame["type"] for frame in connection.frames] == [
+            "voice.tts.start",
+            "audio",
+            "audio",
+            "voice.tts.end",
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_speaking_to_a_gone_session_sends_nothing() -> None:
+    """A reply for a session that has closed is dropped rather than raising."""
+
+    async def scenario() -> None:
+        """Speak to a session nobody registered."""
+        connections = ConnectionManager()
+
+        await WebSocketResultSink(connections).deliver_audio(_reply(), _chunks(b"aa"), _Identity())
 
     asyncio.run(scenario())
