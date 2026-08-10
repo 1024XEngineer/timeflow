@@ -1,18 +1,4 @@
-"""Registry of authenticated connections, and serialized writes to each one.
-
-Two separate guards, because they answer two different questions.
-
-The write lock keeps individual frames from racing: a WebSocket does no internal write
-locking, so two concurrent sends could corrupt the stream. It is held for one frame at a
-time and never across a whole burst.
-
-The audio lock keeps two audio bursts from overlapping. Audio arrives as bare binary
-frames carrying no identifier (architecture design section 5.8), so the only thing that
-says which burst a frame belongs to is that it sits between that burst's start and end
-messages. Two overlapping bursts would make every frame ambiguous. A JSON frame passing
-through the middle creates no such ambiguity, which is why it is not blocked -- a command
-result stays deliverable while a reply is still being spoken.
-"""
+"""Registry of authenticated connections, and serialized writes to each one."""
 
 import asyncio
 import contextlib

@@ -94,6 +94,11 @@ class AudioReplyInfo(Protocol):
         """Why the reply is being spoken."""
         ...
 
+    @property
+    def speech_text(self) -> str:
+        """The words the audio says."""
+        ...
+
 
 class Agent(Protocol):
     """Take one audio stream and act on what it contains."""

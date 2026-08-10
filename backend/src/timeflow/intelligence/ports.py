@@ -44,16 +44,21 @@ class Transcript:
 
 @dataclass(frozen=True, slots=True)
 class AudioReply:
-    """Format and purpose of a spoken reply, sent ahead of the audio itself.
+    """What a spoken reply says and how it is encoded, sent ahead of the audio itself.
 
     Describes the audio without holding it: the bytes arrive separately as a stream, so a
     producer that generates them gradually never has to buffer the whole reply.
+
+    Carries the words as well as the format, because a producer knows what it is about to
+    say before it has finished saying it, and a client that only receives audio has no way
+    to caption or log the reply.
     """
 
     audio_id: str
     audio_format: str
     sample_rate_hz: int
     purpose: str
+    speech_text: str
 
 
 @dataclass(frozen=True, slots=True)

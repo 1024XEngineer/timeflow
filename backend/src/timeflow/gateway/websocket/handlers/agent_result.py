@@ -1,4 +1,4 @@
-"""Result sink that pushes transcripts and command results to the client."""
+"""Result sink that pushes transcripts, command results and spoken replies to the client."""
 
 import logging
 from collections.abc import AsyncIterator
@@ -72,6 +72,7 @@ class WebSocketResultSink:
                 format=reply.audio_format,
                 sample_rate_hz=reply.sample_rate_hz,
                 purpose=reply.purpose,
+                speech_text=reply.speech_text,
             ),
         )
         end = VoiceTtsEnd(conversation_id=stream.conversation_id, audio_id=reply.audio_id)

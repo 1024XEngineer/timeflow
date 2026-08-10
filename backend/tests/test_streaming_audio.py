@@ -26,7 +26,11 @@ class _Identity:
 def _reply(audio_id: str = "audio_001") -> AudioReply:
     """Build a reply description matching what the realtime model emits."""
     return AudioReply(
-        audio_id=audio_id, audio_format="pcm", sample_rate_hz=24000, purpose="command_result"
+        audio_id=audio_id,
+        audio_format="pcm",
+        sample_rate_hz=24000,
+        purpose="command_result",
+        speech_text="好，明天下午三点在203的会已经记下了",
     )
 
 
@@ -78,7 +82,7 @@ async def _chunks(*payloads: bytes) -> AsyncIterator[bytes]:
 
 
 def test_a_reply_is_framed_by_start_and_end() -> None:
-    """Audio frames sit between voice.tts.start and voice.tts.end, per section 5.8."""
+    """Audio frames sit between voice.tts.start and voice.tts.end."""
 
     async def scenario() -> None:
         """Speak a three-chunk reply to a connected session."""
@@ -105,6 +109,7 @@ def test_a_reply_is_framed_by_start_and_end() -> None:
             "format": "pcm",
             "sample_rate_hz": 24000,
             "purpose": "command_result",
+            "speech_text": "好，明天下午三点在203的会已经记下了",
             "schedule_id": None,
             "audio_version": None,
         }
@@ -114,6 +119,29 @@ def test_a_reply_is_framed_by_start_and_end() -> None:
             "conversation_id": "conversation_test",
             "audio_id": "audio_001",
         }
+
+    asyncio.run(scenario())
+
+
+def test_the_reply_text_arrives_before_any_audio() -> None:
+    """speech_text rides on the start message, so the words are known before the sound.
+
+    Without it the assistant's own words would exist only as audio, leaving nothing to
+    caption, nothing to log, and nothing to show when playback fails.
+    """
+
+    async def scenario() -> None:
+        """Speak a reply and read the text off the first frame."""
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register(SESSION_ID, connection)
+
+        await WebSocketResultSink(connections).deliver_audio(_reply(), _chunks(b"aa"), _Identity())
+
+        first = connection.frames[0]
+        assert isinstance(first, dict)
+        assert first["type"] == "voice.tts.start"
+        assert first["payload"]["speech_text"] == "好，明天下午三点在203的会已经记下了"
 
     asyncio.run(scenario())
 
