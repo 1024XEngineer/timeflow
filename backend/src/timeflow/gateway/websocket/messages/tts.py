@@ -15,7 +15,8 @@ class VoiceTtsStartPayload(BaseModel):
     format: str
     sample_rate_hz: int
     purpose: str
-    speech_text: str
+    # Empty when the wording already went out through voice.dialogue.reply.
+    speech_text: str = ""
     schedule_id: str | None = None
     audio_version: int | None = None
 

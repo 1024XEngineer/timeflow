@@ -8,13 +8,16 @@ from timeflow.gateway.websocket.endpoint import (
     UnauthenticatedConnectionLimiter,
     run_websocket_session,
 )
+from timeflow.gateway.websocket.handlers.agent_audio import AgentAudioSink
+from timeflow.gateway.websocket.handlers.agent_result import WebSocketResultSink
+from timeflow.gateway.websocket.handlers.message_ack import handle_message_ack
 from timeflow.gateway.websocket.handlers.session import SessionHandshake
 from timeflow.gateway.websocket.handlers.voice_stream import VoiceStreamHandlers
 from timeflow.gateway.websocket.ports import AudioSink, TokenVerifier
 from timeflow.gateway.websocket.router import MessageRouter
-from timeflow.infrastructure.audio.null_sink import NullAudioSink
 from timeflow.infrastructure.security.token_verifier import FakeTokenVerifier
 from timeflow.infrastructure.settings import get_settings
+from timeflow.intelligence.fake_agent import FakeAgent
 
 
 def create_app(
@@ -41,14 +44,28 @@ def create_app(
     handshake = SessionHandshake(token_verifier)
     connections = ConnectionManager()
     limiter = UnauthenticatedConnectionLimiter(settings.ws_max_unauthenticated_connections)
+
+    if audio_sink is None:
+        # Fail closed like the verifier above: the stand-in agent reports commands as
+        # applied that were never carried out.
+        if settings.environment != "development":
+            raise RuntimeError(
+                "No AudioSink was injected and the stand-in agent is development-only; "
+                f"TIMEFLOW_ENVIRONMENT is {settings.environment!r}. "
+                "It reports commands as applied that were never carried out. "
+                "Inject a real sink before exposing /ws."
+            )
+        audio_sink = AgentAudioSink(FakeAgent(WebSocketResultSink(connections)))
+
     voice_streams = VoiceStreamHandlers(
-        audio_sink or NullAudioSink(),
+        audio_sink,
         max_audio_duration_ms=settings.ws_max_audio_duration_ms,
         queue_max_chunks=settings.ws_audio_queue_max_chunks,
     )
     router = MessageRouter()
     router.register("voice.stream.start", voice_streams.handle_start)
     router.register("voice.stream.end", voice_streams.handle_end)
+    router.register("message.ack", handle_message_ack)
 
     @application.get("/api/v1/health")
     def health() -> dict[str, str]:
