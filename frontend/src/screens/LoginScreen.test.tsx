@@ -97,4 +97,21 @@ describe('LoginScreen', () => {
     expect(await screen.findByText('无法连接服务器，请检查网络后重试')).toBeTruthy();
     expect(onAuthenticated).not.toHaveBeenCalled();
   });
+
+  it('shows a timeout error and re-enables the form', async () => {
+    const authAccess: AuthAccess = jest.fn(async () => {
+      throw new AuthAccessError('timeout' as never);
+    });
+    render(<LoginScreen authAccess={authAccess} />);
+    fillValidForm();
+
+    fireEvent.press(screen.getByRole('button', { name: '继续' }));
+
+    expect(await screen.findByText('请求超时，请稍后重试')).toBeTruthy();
+    expect(screen.getByLabelText('用户名').props.editable).toBe(true);
+    expect(screen.getByLabelText('密码').props.editable).toBe(true);
+    expect(screen.getByRole('button', { name: '继续' }).props.accessibilityState.disabled).toBe(
+      false,
+    );
+  });
 });

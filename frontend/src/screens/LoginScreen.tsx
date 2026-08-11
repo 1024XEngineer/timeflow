@@ -239,6 +239,9 @@ function getSubmitErrorMessage(error: unknown): string {
   if (error.reason === 'network') {
     return '无法连接服务器，请检查网络后重试';
   }
+  if (error.reason === 'timeout') {
+    return '请求超时，请稍后重试';
+  }
   if (error.code) {
     return AUTH_ERROR_MESSAGES[error.code] ?? '登录或注册失败，请稍后重试';
   }

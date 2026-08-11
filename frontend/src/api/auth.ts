@@ -4,7 +4,14 @@ import {
   type AuthAccessResponse,
   type AuthErrorCode,
 } from '../contracts/auth';
-import { ApiError, apiFetch, type ApiRequest } from '../infrastructure/network/client';
+import {
+  ApiError,
+  ApiResponseError,
+  apiFetch,
+  type ApiRequest,
+} from '../infrastructure/network/client';
+
+const AUTH_ACCESS_TIMEOUT_MS = 15_000;
 
 const AUTH_ERROR_CODES = new Set<AuthErrorCode>([
   'AUTH_INVALID_USERNAME',
@@ -15,11 +22,15 @@ const AUTH_ERROR_CODES = new Set<AuthErrorCode>([
 /** 纯前端传输适配器；账号创建或密码校验均由服务端统一接口决定。 */
 export function createAuthAccess(request: ApiRequest = apiFetch): AuthAccess {
   return async (credentials) => {
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => abortController.abort(), AUTH_ACCESS_TIMEOUT_MS);
+
     try {
       const response = await request<unknown>('/auth/access', {
         body: JSON.stringify(credentials),
         headers: { 'Content-Type': 'application/json' },
         method: 'POST',
+        signal: abortController.signal,
       });
 
       // 只有完整 Token 响应才能进入页面的成功回调，避免伪造或误判登录成功。
@@ -35,7 +46,15 @@ export function createAuthAccess(request: ApiRequest = apiFetch): AuthAccess {
       if (error instanceof ApiError) {
         throw new AuthAccessError('business', readAuthErrorCode(error.body));
       }
+      if (error instanceof ApiResponseError) {
+        throw new AuthAccessError('invalid_response');
+      }
+      if (isAbortError(error)) {
+        throw new AuthAccessError('timeout');
+      }
       throw new AuthAccessError('network');
+    } finally {
+      clearTimeout(timeoutId);
     }
   };
 }
@@ -48,10 +67,8 @@ function isAuthAccessResponse(value: unknown): value is AuthAccessResponse {
   }
 
   return (
-    typeof value.account_id === 'string' &&
-    value.account_id.length > 0 &&
-    typeof value.access_token === 'string' &&
-    value.access_token.length > 0 &&
+    isNonBlankString(value.account_id) &&
+    isNonBlankString(value.access_token) &&
     typeof value.expires_in === 'number' &&
     Number.isFinite(value.expires_in) &&
     value.expires_in > 0
@@ -72,4 +89,12 @@ function readAuthErrorCode(body: unknown): AuthErrorCode | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function isNonBlankString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isAbortError(value: unknown): boolean {
+  return value instanceof Error && value.name === 'AbortError';
 }
