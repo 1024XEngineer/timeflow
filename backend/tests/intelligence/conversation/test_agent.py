@@ -131,6 +131,31 @@ async def test_run_turn_streams_text_and_completion_without_tools() -> None:
     assert isinstance(conversation.messages[0], ChatMessage)
     assert conversation.messages[0].role == "system"
     assert conversation.messages[1] == ChatMessage(role="user", content="你好")
+    assert conversation.messages[2] == ChatMessage(role="assistant", content="你好，我可以帮你")
+
+
+@pytest.mark.asyncio
+async def test_followup_request_includes_previous_assistant_response() -> None:
+    llm = FakeLlm(
+        [
+            [TextDelta("第一轮回答。"), completed()],
+            [TextDelta("第二轮回答。"), completed()],
+        ]
+    )
+    conversation = AgentConversation()
+    agent = Agent(llm, ToolRegistry([]))
+
+    _ = [event async for event in agent.run_turn(conversation, "第一轮问题")]
+    _ = [event async for event in agent.run_turn(conversation, "继续说明")]
+
+    second_messages, _ = llm.requests[1]
+    assert second_messages == (
+        conversation.messages[0],
+        ChatMessage(role="user", content="第一轮问题"),
+        ChatMessage(role="assistant", content="第一轮回答。"),
+        ChatMessage(role="user", content="继续说明"),
+    )
+    assert conversation.messages[-1] == ChatMessage(role="assistant", content="第二轮回答。")
 
 
 @pytest.mark.asyncio
@@ -190,12 +215,13 @@ async def test_tool_round_text_is_not_exposed_as_agent_text_delta() -> None:
         AgentTextDelta("日程服务尚未接入。"),
         AgentCompleted(LlmUsage(8, 3, 11)),
     ]
-    assert isinstance(conversation.messages[-2], AssistantToolCallMessage)
-    assert conversation.messages[-1] == ToolResultMessage(
+    assert isinstance(conversation.messages[-3], AssistantToolCallMessage)
+    assert conversation.messages[-2] == ToolResultMessage(
         tool_call_id="call_1",
         content='{"status":"not_implemented","tool":"schedule_create"}',
     )
-    assert llm.requests[1][0][-1] == conversation.messages[-1]
+    assert conversation.messages[-1] == ChatMessage(role="assistant", content="日程服务尚未接入。")
+    assert llm.requests[1][0][-1] == conversation.messages[-2]
 
 
 @pytest.mark.asyncio
@@ -329,7 +355,17 @@ async def test_missing_usage_makes_completed_usage_unknown() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_without_completion_is_protocol_error() -> None:
+async def test_empty_text_completion_records_assistant_turn() -> None:
+    conversation = AgentConversation()
+    events = [
+        event
+        async for event in Agent(FakeLlm([[completed()]]), ToolRegistry([])).run_turn(
+            conversation, "你好"
+        )
+    ]
+
+    assert events == [AgentCompleted(LlmUsage(1, 2, 3))]
+    assert conversation.messages[-1] == ChatMessage(role="assistant", content="")
     agent = Agent(FakeLlm([[TextDelta("partial")]]), ToolRegistry([]))
 
     with pytest.raises(AgentProtocolError, match="without a completion"):
@@ -378,10 +414,11 @@ async def test_pending_answer_becomes_tool_result_without_duplicate_user_message
 
     assert events == [AgentTextDelta("好的。"), AgentCompleted(LlmUsage(2, 1, 3))]
     assert conversation.pending_question is None
-    assert conversation.messages[-1] == ToolResultMessage(
+    assert conversation.messages[-2] == ToolResultMessage(
         tool_call_id="question_1",
         content='{"user_response":"明天下午三点"}',
     )
+    assert conversation.messages[-1] == ChatMessage(role="assistant", content="好的。")
     assert ChatMessage(role="user", content="明天下午三点") not in conversation.messages
 
 

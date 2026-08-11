@@ -170,6 +170,9 @@ class Agent:
                 usages.append(completed.usage)
 
             if not response.tool_calls:
+                conversation.messages.append(
+                    ChatMessage(role="assistant", content="".join(response.text_parts))
+                )
                 for text in response.text_parts:
                     yield AgentTextDelta(text)
                 yield AgentCompleted(_sum_usage(usages) if usage_complete else None)
