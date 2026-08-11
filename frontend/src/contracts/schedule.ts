@@ -1,31 +1,60 @@
-export type ScheduleSourceMode = 'manual' | 'voice';
 export type ScheduleType = 'time' | 'location';
-export type ScheduleStatus = 'scheduled' | 'done' | 'deleted';
 
-/** 与后端接口共享的已持久化日程结构。 */
-export type Schedule = {
+export type ScheduleKind = 'once' | 'recurring';
+
+export type RecurringDeleteScope = 'this_occurrence' | 'this_and_future' | 'entire_series';
+
+export type ScheduleStatus = 'active' | 'deleted';
+
+export type ReminderType =
+  'at_time' | 'before_start' | 'arrive_location' | 'return_to_recorded_location';
+
+export type ReminderStrength = 'low' | 'medium' | 'high';
+
+export type ReminderDispositionState = 'confirmed';
+
+export type OccurrenceOverrideAction = 'cancel' | 'replace';
+
+/** Final schedule fields already committed by the cloud service. */
+export interface ScheduleSnapshot {
   id: string;
-  user_id: string;
-  source_mode: ScheduleSourceMode;
+  account_id: string;
   schedule_type: ScheduleType;
-  status: ScheduleStatus;
+  schedule_kind: ScheduleKind;
   title: string;
-  notes: string | null;
+  is_all_day: boolean;
   start_time: string | null;
   end_time: string | null;
-  timezone: string | null;
+  timezone: string;
+  recurrence_rule: string | null;
   location_name: string | null;
-  location_address: string | null;
   latitude: number | null;
   longitude: number | null;
-  geofence_radius_meters: number;
-  /** Wire type matches backend Integer constrained to 0/1 (not JSON boolean). */
-  geofence_armed: 0 | 1;
-  time_remind_offset_minutes: number;
-  time_triggered_at: string | null;
-  geo_triggered_at: string | null;
-  system_schedule_ref_id: string | null;
-  system_alarm_ref_id: string | null;
+  reminder_type: ReminderType | null;
+  reminder_trigger_at: string | null;
+  reminder_offset_minutes: number | null;
+  reminder_strength: ReminderStrength | null;
+  reminder_disposition_state: ReminderDispositionState | null;
+  status: ScheduleStatus;
+  revision: number;
   created_at: string;
   updated_at: string;
-};
+  deleted_at: string | null;
+}
+
+/** Final recurring exception fields already committed by the cloud service. */
+export interface ScheduleOccurrenceOverrideSnapshot {
+  id: string;
+  schedule_id: string;
+  occurrence_start: string;
+  action: OccurrenceOverrideAction;
+  replacement_schedule_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One WebSocket command result, including every local row it can affect. */
+export interface CloudScheduleSnapshot {
+  schedules: readonly ScheduleSnapshot[];
+  occurrence_overrides: readonly ScheduleOccurrenceOverrideSnapshot[];
+}
