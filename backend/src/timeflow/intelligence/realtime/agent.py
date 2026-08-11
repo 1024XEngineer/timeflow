@@ -176,20 +176,23 @@ class _Turn:
         logger.warning("realtime session failed", extra={"reason": message})
 
     async def close(self) -> None:
-        """Finish the audio if any started, then settle the reply's wording.
+        """Settle the reply's wording, then finish the audio if any started.
 
-        The settling update goes last so it marks the end of the whole turn rather than
-        just the end of the text: a client that hides its "still answering" state on it
-        would otherwise hide it while audio was still arriving.
+        The settling update has to precede the audio's closing message, because that
+        message is what ends a turn: a client that stops reading on voice.tts.end -- the
+        reasonable thing to do -- would never see an update sent after it. The wording is
+        in fact final well before this point; the session reports no completion for it, so
+        the end of the turn is the earliest moment this side can be sure.
         """
-        if self._speaking is not None:
-            await self._audio.put(None)
-            await self._speaking
         if self._spoken:
             await self._result_sink.deliver_reply_text(
                 ReplyText(reply_id=self._reply_id, speech_text=self._spoken, done=True),
                 self._stream,
             )
+        if self._speaking is None:
+            return
+        await self._audio.put(None)
+        await self._speaking
 
     async def _speak(self) -> None:
         """Hand the queued audio to the sink as one continuous reply."""

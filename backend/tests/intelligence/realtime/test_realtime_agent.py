@@ -151,8 +151,8 @@ def test_a_turn_pushes_the_transcript_then_the_spoken_reply() -> None:
             "audio_start",
             "audio",
             "audio",
-            "audio_end",
             "done",
+            "audio_end",
         ]
         assert [text for kind, text in sink.calls if kind in ("reply", "done")] == [
             "好，",
@@ -338,6 +338,29 @@ def test_a_failing_session_still_closes_the_audio_it_started() -> None:
 
         # Both runs are closed, not just the audio: a client showing the wording as it
         # arrives needs to be told it is final, or a reply cut short reads as still coming.
-        assert sink.kinds() == ["reply", "audio_start", "audio", "audio_end", "done"]
+        # The settling update comes before audio_end, which is what ends the turn.
+        assert sink.kinds() == ["reply", "audio_start", "audio", "done", "audio_end"]
+
+    asyncio.run(scenario())
+
+
+def test_the_wording_is_settled_before_the_audio_closes_the_turn() -> None:
+    """The settling update precedes voice.tts.end, because that message ends the turn.
+
+    Found on the real model: with the order reversed, a client that stops reading once the
+    audio run closes -- the reasonable reading of the protocol -- never sees the wording
+    marked final, and goes on showing an answer as still arriving.
+    """
+
+    async def scenario() -> None:
+        """Replay a turn that speaks and sends audio, then inspect the tail."""
+        sink = RecordingSink()
+        session = ScriptedSession([("spoke", ("在",)), ("audio", (b"pcm",))])
+
+        await RealtimeAgent(ScriptedFactory(session), sink).handle_audio(_chunks(b"a"), _Stream())
+
+        kinds = sink.kinds()
+        assert kinds[-1] == "audio_end"
+        assert kinds.index("done") < kinds.index("audio_end")
 
     asyncio.run(scenario())
