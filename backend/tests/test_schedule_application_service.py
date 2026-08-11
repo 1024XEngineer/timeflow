@@ -257,6 +257,11 @@ def test_create_schedule_returns_the_committed_cloud_snapshot() -> None:
             "timezone",
         ),
         (
+            replace(_time_command(), timezone="../America/New_York"),
+            ScheduleErrorCode.INVALID_TIMEZONE,
+            "timezone",
+        ),
+        (
             replace(_time_command(), start_time=None),
             ScheduleErrorCode.VALIDATION_FAILED,
             "start_time",
@@ -333,6 +338,59 @@ def test_create_schedule_accepts_location_recurring_and_reminder_shapes() -> Non
 
     assert location_result.schedules[0].schedule_type is ScheduleType.LOCATION
     assert recurring_result.schedules[0].schedule_kind is ScheduleKind.RECURRING
+
+
+@pytest.mark.parametrize("timezone", ["UTC", "Asia/Shanghai", "America/New_York"])
+def test_create_schedule_accepts_valid_iana_timezones(timezone: str) -> None:
+    service, _ = _service()
+
+    result = service.create_schedule(
+        account_id="account-a",
+        command=replace(_time_command(), timezone=timezone),
+    )
+
+    assert result.schedules[0].timezone == timezone
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        "RDATE:20260810T090000Z",
+        "EXRULE:FREQ=WEEKLY",
+        "DTSTART:20260810T090000Z",
+        "RRULE:FREQ=DAILY\nRDATE:20260810T090000Z",
+        "",
+        "FREQ=NOT_A_FREQUENCY",
+    ],
+)
+def test_create_schedule_translates_non_single_rrules_to_business_errors(rule: str) -> None:
+    service, store = _service()
+    command = _time_command(
+        schedule_kind=ScheduleKind.RECURRING,
+        recurrence_rule=rule,
+    )
+
+    error = _assert_error(
+        ScheduleErrorCode.VALIDATION_FAILED,
+        lambda: service.create_schedule(account_id="account-a", command=command),
+    )
+
+    assert error.field == "recurrence_rule"
+    assert store.schedules == {}
+
+
+def test_create_schedule_normalizes_one_rrule_prefix_before_persistence() -> None:
+    service, _ = _service()
+
+    result = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(
+            schedule_kind=ScheduleKind.RECURRING,
+            recurrence_rule="RRULE:FREQ=WEEKLY;BYDAY=WE",
+        ),
+    )
+
+    assert result.schedules[0].recurrence_rule == "FREQ=WEEKLY;BYDAY=WE"
 
 
 def test_find_schedules_filters_without_leaking_other_accounts_or_deleted_rows() -> None:
@@ -427,6 +485,26 @@ def test_update_rejects_empty_or_protected_patch_without_writing() -> None:
     assert store.schedules[created.id] == created
 
 
+def test_update_translates_invalid_timezone_value_error_without_writing() -> None:
+    service, store = _service()
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    error = _assert_error(
+        ScheduleErrorCode.INVALID_TIMEZONE,
+        lambda: service.update_schedule(
+            account_id="account-a",
+            command=UpdateScheduleCommand(
+                created.id,
+                1,
+                {"timezone": "../America/New_York"},
+            ),
+        ),
+    )
+
+    assert error.field == "timezone"
+    assert store.schedules[created.id] == created
+
+
 def test_delete_once_is_soft_account_scoped_and_kind_checked() -> None:
     service, store = _service()
     ordinary = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
@@ -499,6 +577,58 @@ def test_delete_this_occurrence_uses_current_schedule_timezone_and_skips_overrid
     assert second.schedules[0].revision == 3
     assert second.occurrence_overrides[0].occurrence_start == datetime(2026, 8, 24, 2, tzinfo=UTC)
     assert len(store.overrides) == 2
+
+
+def test_delete_this_occurrence_keeps_new_york_wall_time_after_dst() -> None:
+    service, _ = _service(now=datetime(2026, 3, 8, 16, tzinfo=UTC))
+    recurring = service.create_schedule(
+        account_id="account-a",
+        command=replace(
+            _time_command(
+                start_time=datetime(2026, 1, 5, 14, tzinfo=UTC),
+                schedule_kind=ScheduleKind.RECURRING,
+                recurrence_rule="FREQ=WEEKLY;BYDAY=MO",
+            ),
+            timezone="America/New_York",
+        ),
+    ).schedules[0]
+
+    result = service.delete_recurring_schedule(
+        account_id="account-a",
+        command=DeleteRecurringScheduleCommand(
+            recurring.id,
+            1,
+            RecurringDeleteScope.THIS_OCCURRENCE,
+        ),
+    )
+
+    assert result.occurrence_overrides[0].occurrence_start == datetime(2026, 3, 9, 13, tzinfo=UTC)
+
+
+def test_delete_this_and_future_uses_dst_correct_prior_occurrence() -> None:
+    service, _ = _service(now=datetime(2026, 3, 8, 16, tzinfo=UTC))
+    recurring = service.create_schedule(
+        account_id="account-a",
+        command=replace(
+            _time_command(
+                start_time=datetime(2026, 1, 5, 14, tzinfo=UTC),
+                schedule_kind=ScheduleKind.RECURRING,
+                recurrence_rule="FREQ=WEEKLY;BYDAY=MO;COUNT=20",
+            ),
+            timezone="America/New_York",
+        ),
+    ).schedules[0]
+
+    result = service.delete_recurring_schedule(
+        account_id="account-a",
+        command=DeleteRecurringScheduleCommand(
+            recurring.id,
+            1,
+            RecurringDeleteScope.THIS_AND_FUTURE,
+        ),
+    )
+
+    assert result.schedules[0].recurrence_rule == ("FREQ=WEEKLY;BYDAY=MO;UNTIL=20260302T140000Z")
 
 
 def test_delete_this_and_future_truncates_after_last_retained_occurrence() -> None:

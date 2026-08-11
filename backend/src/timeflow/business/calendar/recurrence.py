@@ -3,7 +3,7 @@
 from datetime import UTC, datetime, time
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from dateutil.rrule import rrulebase, rrulestr
+from dateutil.rrule import rrule, rrulebase, rrulestr
 
 from timeflow.business.calendar.contracts import (
     ScheduleOccurrenceOverrideSnapshot,
@@ -15,12 +15,43 @@ class InvalidRecurrenceRuleError(ValueError):
     """A recurrence rule cannot be expanded from its schedule start."""
 
 
+class InvalidTimezoneKeyError(ValueError):
+    """A schedule timezone is not a valid IANA key."""
+
+
+def get_schedule_timezone(key: str) -> ZoneInfo:
+    """Return an IANA timezone while normalizing known invalid-key failures."""
+    try:
+        return ZoneInfo(key)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise InvalidTimezoneKeyError(key) from exc
+
+
+def normalize_recurrence_rule(rule: str) -> str:
+    """Return the canonical body of exactly one RRULE.
+
+    The shared contract stores an RRULE body such as ``FREQ=WEEKLY;BYDAY=MO``.
+    A single legacy-style ``RRULE:`` prefix is accepted and removed, while
+    recurrence sets, content lines, and embedded DTSTART/RDATE/EXDATE data are
+    rejected before dateutil parses the rule body.
+    """
+    normalized = rule.strip()
+    if not normalized or "\n" in normalized or "\r" in normalized:
+        raise InvalidRecurrenceRuleError("recurrence_rule must contain one RRULE")
+    if normalized[:6].upper() == "RRULE:":
+        normalized = normalized[6:]
+    if not normalized or ":" in normalized:
+        raise InvalidRecurrenceRuleError("recurrence_rule must contain only one RRULE body")
+    return normalized
+
+
 def parse_recurrence_rule(rule: str, *, start_time: datetime) -> rrulebase:
     """Parse one RFC 5545 RRULE using the schedule start as DTSTART."""
-    if not rule.strip() or "\n" in rule or "\r" in rule:
-        raise InvalidRecurrenceRuleError("recurrence_rule must contain one RRULE")
+    normalized = normalize_recurrence_rule(rule)
     try:
-        parsed = rrulestr(rule, dtstart=start_time)
+        parsed = rrulestr(normalized, dtstart=start_time)
+        if not isinstance(parsed, rrule):
+            raise InvalidRecurrenceRuleError("recurrence_rule must contain exactly one RRULE")
         first = parsed.after(start_time, inc=True)
     except (TypeError, ValueError, OverflowError) as exc:
         raise InvalidRecurrenceRuleError("recurrence_rule is not a valid RFC 5545 RRULE") from exc
@@ -38,18 +69,16 @@ def first_active_occurrence_on_or_after_local_date(
     """Return the first non-overridden occurrence on/after today's local date."""
     if schedule.start_time is None or schedule.recurrence_rule is None:
         return None
-    try:
-        timezone = ZoneInfo(schedule.timezone)
-    except ZoneInfoNotFoundError:
-        return None
+    timezone = get_schedule_timezone(schedule.timezone)
+    local_start = schedule.start_time.astimezone(timezone)
     local_date = now.astimezone(timezone).date()
     boundary = datetime.combine(local_date, time.min, tzinfo=timezone)
-    rule = parse_recurrence_rule(schedule.recurrence_rule, start_time=schedule.start_time)
+    rule = parse_recurrence_rule(schedule.recurrence_rule, start_time=local_start)
     overridden = {override.occurrence_start for override in overrides}
     occurrence = rule.after(boundary, inc=True)
     while occurrence is not None and occurrence in overridden:
         occurrence = rule.after(occurrence, inc=False)
-    return occurrence
+    return None if occurrence is None else occurrence.astimezone(UTC)
 
 
 def truncate_rule_before_occurrence(
@@ -59,25 +88,31 @@ def truncate_rule_before_occurrence(
     """Return an RRULE ending at the prior occurrence, or None for the first one."""
     if schedule.start_time is None or schedule.recurrence_rule is None:
         return None
-    rule = parse_recurrence_rule(schedule.recurrence_rule, start_time=schedule.start_time)
-    previous = rule.before(occurrence, inc=False)
+    timezone = get_schedule_timezone(schedule.timezone)
+    local_start = schedule.start_time.astimezone(timezone)
+    local_occurrence = occurrence.astimezone(timezone)
+    rule = parse_recurrence_rule(schedule.recurrence_rule, start_time=local_start)
+    previous = rule.before(local_occurrence, inc=False)
     if previous is None:
         return None
 
     components = [
         component
-        for component in schedule.recurrence_rule.split(";")
+        for component in normalize_recurrence_rule(schedule.recurrence_rule).split(";")
         if not component.upper().startswith(("UNTIL=", "COUNT="))
     ]
     until = previous.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
     truncated = ";".join((*components, f"UNTIL={until}"))
-    parse_recurrence_rule(truncated, start_time=schedule.start_time)
+    parse_recurrence_rule(truncated, start_time=local_start)
     return truncated
 
 
 __all__ = [
     "InvalidRecurrenceRuleError",
+    "InvalidTimezoneKeyError",
     "first_active_occurrence_on_or_after_local_date",
+    "get_schedule_timezone",
+    "normalize_recurrence_rule",
     "parse_recurrence_rule",
     "truncate_rule_before_occurrence",
 ]

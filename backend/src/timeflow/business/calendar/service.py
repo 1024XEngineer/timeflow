@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from typing import NoReturn
 from uuid import uuid4
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from timeflow.business.calendar.contracts import (
     CreateScheduleCommand,
@@ -35,7 +35,10 @@ from timeflow.business.calendar.ports import (
 )
 from timeflow.business.calendar.recurrence import (
     InvalidRecurrenceRuleError,
+    InvalidTimezoneKeyError,
     first_active_occurrence_on_or_after_local_date,
+    get_schedule_timezone,
+    normalize_recurrence_rule,
     parse_recurrence_rule,
     truncate_rule_before_occurrence,
 )
@@ -156,7 +159,7 @@ class ScheduleApplicationService(ScheduleAgentService):
             updated_at=now,
             start_time=command.start_time,
             end_time=command.end_time,
-            recurrence_rule=command.recurrence_rule,
+            recurrence_rule=_normalize_optional_recurrence_rule(command.recurrence_rule),
             location_name=command.location_name,
             latitude=command.latitude,
             longitude=command.longitude,
@@ -241,6 +244,10 @@ class ScheduleApplicationService(ScheduleAgentService):
                 schedule_id=command.schedule_id,
             )
             candidate = replace(current, **command.changes, updated_at=now)
+            candidate = replace(
+                candidate,
+                recurrence_rule=_normalize_optional_recurrence_rule(candidate.recurrence_rule),
+            )
             _validate_snapshot(candidate)
             persisted = _persist_update(
                 unit_of_work.schedules,
@@ -333,6 +340,7 @@ class ScheduleApplicationService(ScheduleAgentService):
         command: DeleteRecurringScheduleCommand,
         now: datetime,
     ) -> ScheduleMutationResult:
+        _validated_timezone(current.timezone)
         overrides = repository.list_occurrence_overrides(
             account_id=account_id,
             schedule_id=current.id,
@@ -528,10 +536,7 @@ def _validate_snapshot(snapshot: ScheduleSnapshot) -> None:
         _validation_error("title must contain 1 to 255 characters", field="title")
     if not snapshot.timezone.strip() or len(snapshot.timezone) > 64:
         _invalid_timezone(snapshot.timezone)
-    try:
-        ZoneInfo(snapshot.timezone)
-    except ZoneInfoNotFoundError:
-        _invalid_timezone(snapshot.timezone)
+    timezone = _validated_timezone(snapshot.timezone)
 
     for field, value in (
         ("created_at", snapshot.created_at),
@@ -588,7 +593,10 @@ def _validate_snapshot(snapshot: ScheduleSnapshot) -> None:
                 "recurrence_rule must not exceed 512 characters", field="recurrence_rule"
             )
         try:
-            parse_recurrence_rule(snapshot.recurrence_rule, start_time=snapshot.start_time)
+            parse_recurrence_rule(
+                snapshot.recurrence_rule,
+                start_time=snapshot.start_time.astimezone(timezone),
+            )
         except InvalidRecurrenceRuleError:
             _validation_error(
                 "recurrence_rule is not a valid RFC 5545 RRULE",
@@ -675,6 +683,25 @@ def _new_id(id_factory: Callable[[], str], *, field: str) -> str:
     if not value or len(value) > 64:
         _validation_error(f"{field} must contain 1 to 64 characters", field=field)
     return value
+
+
+def _normalize_optional_recurrence_rule(rule: str | None) -> str | None:
+    if rule is None:
+        return None
+    try:
+        return normalize_recurrence_rule(rule)
+    except InvalidRecurrenceRuleError:
+        _validation_error(
+            "recurrence_rule must contain exactly one RFC 5545 RRULE",
+            field="recurrence_rule",
+        )
+
+
+def _validated_timezone(timezone: str) -> ZoneInfo:
+    try:
+        return get_schedule_timezone(timezone)
+    except InvalidTimezoneKeyError:
+        _invalid_timezone(timezone)
 
 
 def _invalid_timezone(timezone: str) -> NoReturn:
