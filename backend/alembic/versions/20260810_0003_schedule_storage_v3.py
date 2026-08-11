@@ -183,6 +183,25 @@ def _create_occurrence_overrides_table() -> None:
 
 def upgrade() -> None:
     """Migrate the legacy schedule rows and create occurrence overrides."""
+    op.execute(
+        sa.text(
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1
+                    FROM schedules
+                    WHERE char_length(id) > 64 OR char_length(user_id) > 64
+                ) THEN
+                    RAISE EXCEPTION
+                        'Cannot migrate schedules: id and user_id must not exceed 64 characters';
+                END IF;
+            END
+            $$
+            """
+        )
+    )
+
     op.drop_index("ix_schedules_system_alarm_ref_id", table_name="schedules")
     op.drop_index("ix_schedules_system_schedule_ref_id", table_name="schedules")
     op.drop_index("ix_schedules_user_status_start_time", table_name="schedules")
@@ -211,8 +230,8 @@ def upgrade() -> None:
                 updated_at, deleted_at
             )
             SELECT
-                left(id, 64),
-                left(user_id, 64),
+                id,
+                user_id,
                 schedule_type,
                 'once',
                 left(title, 255),
@@ -229,12 +248,14 @@ def upgrade() -> None:
                 NULL,
                 NULL,
                 NULL,
-                CASE WHEN status = 'deleted' THEN 'deleted' ELSE 'active' END,
+                -- v3 cannot represent legacy `done`; keep completed rows
+                -- non-active rather than resurrecting them as active schedules.
+                CASE WHEN status IN ('done', 'deleted') THEN 'deleted' ELSE 'active' END,
                 1,
                 COALESCE(NULLIF(created_at, '')::timestamptz, now()),
                 COALESCE(NULLIF(updated_at, '')::timestamptz, now()),
                 CASE
-                    WHEN status = 'deleted'
+                    WHEN status IN ('done', 'deleted')
                     THEN COALESCE(NULLIF(updated_at, '')::timestamptz, now())
                     ELSE NULL
                 END
@@ -249,7 +270,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Restore the legacy MVP schedule shape while retaining core row data."""
+    """Restore the legacy shape without reactivating completed rows.
+
+    The v3 status model cannot distinguish a legacy ``done`` row from a deleted
+    row after upgrade, so both are restored as ``deleted`` rather than turning a
+    previously completed schedule back into ``scheduled``.
+    """
     op.create_table(
         "schedules_v2",
         sa.Column("id", sa.Text(), primary_key=True, nullable=False),

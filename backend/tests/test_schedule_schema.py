@@ -1,10 +1,15 @@
 """Schema tests for the v3.10 schedule persistence model."""
 
+from pathlib import Path
 from typing import cast
 
 from sqlalchemy import Table
 
 from timeflow.data.models import Schedule, ScheduleOccurrenceOverride
+
+MIGRATION_SOURCE = (
+    Path(__file__).parents[1] / "alembic" / "versions" / "20260810_0003_schedule_storage_v3.py"
+).read_text(encoding="utf-8")
 
 
 def test_schedule_table_matches_cloud_snapshot_storage_fields() -> None:
@@ -68,3 +73,17 @@ def test_occurrence_override_table_matches_v3_contract() -> None:
     constraint_names = {constraint.name for constraint in occurrence_table.constraints}
     assert "uq_schedule_occurrence_overrides_schedule_occurrence" in constraint_names
     assert "ck_schedule_occurrence_overrides_replacement" in constraint_names
+
+
+def test_schedule_migration_rejects_overlong_legacy_identifiers() -> None:
+    """Legacy ownership identifiers are rejected instead of silently truncated."""
+    assert "char_length(id) > 64" in MIGRATION_SOURCE
+    assert "char_length(user_id) > 64" in MIGRATION_SOURCE
+    assert "left(id, 64)" not in MIGRATION_SOURCE
+    assert "left(user_id, 64)" not in MIGRATION_SOURCE
+
+
+def test_schedule_migration_keeps_completed_legacy_rows_non_active() -> None:
+    """A migration round trip must not resurrect a completed legacy schedule."""
+    assert MIGRATION_SOURCE.count("status IN ('done', 'deleted')") == 2
+    assert "CASE WHEN status = 'deleted' THEN 'deleted' ELSE 'scheduled' END" in MIGRATION_SOURCE

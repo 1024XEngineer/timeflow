@@ -77,6 +77,26 @@ def test_schedule_update_requires_matching_account_and_revision(session: Session
     assert persisted.revision == 2
 
 
+def test_schedule_update_preserves_immutable_creation_time(session: Session) -> None:
+    """A replacement snapshot cannot rewrite the persisted creation timestamp."""
+    repository = ScheduleRepository(session)
+    original = repository.add_schedule(_schedule("schedule-a", "account-a"))
+    caller_created_at = datetime(2020, 1, 1, tzinfo=UTC)
+    updated = replace(
+        original,
+        title="Updated",
+        revision=2,
+        created_at=caller_created_at,
+        updated_at=datetime.now(UTC),
+    )
+
+    persisted = repository.update_schedule(snapshot=updated, expected_revision=1)
+
+    assert persisted is not None
+    assert persisted.created_at == original.created_at.replace(tzinfo=None)
+    assert persisted.created_at != caller_created_at.replace(tzinfo=None)
+
+
 def test_deleted_schedules_are_hidden_by_default(session: Session) -> None:
     """Soft-deleted rows remain available only to explicit snapshot queries."""
     repository = ScheduleRepository(session)

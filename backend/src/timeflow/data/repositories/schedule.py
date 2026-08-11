@@ -75,9 +75,6 @@ class ScheduleRepository:
         expected_revision: int,
     ) -> ScheduleSnapshot | None:
         """Conditionally replace mutable persisted fields using optimistic revision."""
-        values = _schedule_values(snapshot)
-        values.pop("id")
-        values.pop("account_id")
         statement = (
             update(Schedule)
             .where(
@@ -85,7 +82,7 @@ class ScheduleRepository:
                 Schedule.account_id == snapshot.account_id,
                 Schedule.revision == expected_revision,
             )
-            .values(**values)
+            .values(**_schedule_update_values(snapshot))
             .returning(Schedule)
         )
         model = self._session.scalars(statement).one_or_none()
@@ -197,6 +194,34 @@ def _schedule_values(snapshot: ScheduleSnapshot) -> dict[str, object]:
         "updated_at": snapshot.updated_at,
         "deleted_at": snapshot.deleted_at,
     }
+
+
+def _schedule_update_values(snapshot: ScheduleSnapshot) -> dict[str, object]:
+    """Map only fields that the update contract permits callers to replace."""
+    values = _schedule_values(snapshot)
+    mutable_fields = (
+        "schedule_type",
+        "schedule_kind",
+        "title",
+        "is_all_day",
+        "start_time",
+        "end_time",
+        "timezone",
+        "recurrence_rule",
+        "location_name",
+        "latitude",
+        "longitude",
+        "reminder_type",
+        "reminder_trigger_at",
+        "reminder_offset_minutes",
+        "reminder_strength",
+        "reminder_disposition_state",
+        "status",
+        "revision",
+        "updated_at",
+        "deleted_at",
+    )
+    return {field: values[field] for field in mutable_fields}
 
 
 def _to_schedule_snapshot(model: Schedule) -> ScheduleSnapshot:
