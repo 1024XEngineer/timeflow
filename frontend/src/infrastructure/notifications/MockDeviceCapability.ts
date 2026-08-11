@@ -27,8 +27,9 @@ export class MockDeviceCapability implements DeviceCapabilityPort {
     return { ...MOCK_STATUS, permissions: { ...MOCK_STATUS.permissions } };
   }
 
-  async requestPermission(_permission: DevicePermission): Promise<boolean> {
-    return true;
+  async requestPermission(permission: DevicePermission): Promise<boolean> {
+    // 与 getStatus() 保持一致：返回该权限的固定值，不假装 grant 成功。
+    return MOCK_PERMISSIONS[permission];
   }
 
   async openSettings(_permission: DevicePermission): Promise<boolean> {
