@@ -38,6 +38,7 @@ export type {
 } from './ReminderApplicationPort';
 export type { ReminderDeliveryPort } from './ReminderDeliveryPort';
 export type {
+  ReminderConfirmedDisposition,
   ReminderDispositionSyncPort,
   ReminderDispositionSyncReceipt,
 } from './ReminderDispositionSyncPort';
