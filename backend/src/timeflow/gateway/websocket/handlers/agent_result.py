@@ -36,13 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 def _question_kind(value: str) -> QuestionKind:
-    """Narrow a producer's string to the protocol's four kinds, refusing anything else.
-
-    Narrowed here because this is where a domain value becomes a wire value, and the wire
-    is where an undefined kind does its damage. Raising rather than substituting one: there
-    is no kind meaning "some other reason", so any stand-in would misdescribe the question.
-    A value outside the four is a bug in whatever produced it, and the traceback names it.
-    """
+    """Narrow a producer's string to the protocol's four kinds, refusing anything else."""
     if value not in QUESTION_KINDS:
         raise ValueError(f"question_kind must be one of {QUESTION_KINDS}, got {value!r}")
     return value

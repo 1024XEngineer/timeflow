@@ -20,9 +20,7 @@ FAKE_LANGUAGE = "zh"
 FAKE_OPERATION = "create_schedule"
 FAKE_STATUS = "applied"
 
-# Each entry is everything said so far, not the newest fragment -- the port carries
-# accumulations. A stand-in that sent fragments instead would let a client that
-# concatenates them pass against it and then garble every reply from a real agent.
+# Each entry is everything said so far, not the newest fragment.
 FAKE_REPLY_STEPS = ("好，", "好，明天下午三点", "好，明天下午三点在203，记下了")
 
 
@@ -80,11 +78,7 @@ class FakeAgent:
         self._schedule_id = schedule_id
 
     async def handle_audio(self, chunks: AsyncIterator[bytes], stream: StreamInfo) -> None:
-        """Read the audio to its end, then deliver the fixed transcript, result and reply.
-
-        The order mirrors what a real agent does: it can only say the schedule was recorded
-        once the command has actually been carried out.
-        """
+        """Read the audio to its end, then deliver the fixed transcript, result and reply."""
         byte_count = 0
         async for chunk in chunks:
             byte_count += len(chunk)

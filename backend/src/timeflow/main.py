@@ -46,10 +46,8 @@ def create_app(
     limiter = UnauthenticatedConnectionLimiter(settings.ws_max_unauthenticated_connections)
 
     if audio_sink is None:
-        # Fail closed, for the same reason as the verifier above: the stand-in agent answers
-        # every stream with status=applied and a schedule that was never persisted. A
-        # deployment that injects a real verifier but forgets the sink would tell users their
-        # schedules were saved, and they would find out otherwise on the next sync.
+        # Fail closed like the verifier above: the stand-in agent reports commands as
+        # applied that were never carried out.
         if settings.environment != "development":
             raise RuntimeError(
                 "No AudioSink was injected and the stand-in agent is development-only; "

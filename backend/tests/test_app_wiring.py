@@ -46,13 +46,7 @@ def test_building_in_development_still_works_without_a_verifier() -> None:
 
 
 def test_building_outside_development_without_a_sink_fails_closed() -> None:
-    """A real verifier is not enough: the stand-in agent must not be reached for either.
-
-    It answers every stream with status=applied and a schedule that was never persisted, so
-    a deployment that wires authentication but forgets the sink would tell users their
-    schedules were saved. Injecting a verifier satisfies the guard above, which is exactly
-    the path that would otherwise slip through.
-    """
+    """A real verifier is not enough: a missing sink must be refused too."""
     try:
         _build_with_environment("production", token_verifier=_RealVerifier())
     except RuntimeError as error:

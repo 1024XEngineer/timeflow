@@ -15,11 +15,7 @@ class VoiceTtsStartPayload(BaseModel):
     format: str
     sample_rate_hz: int
     purpose: str
-    # Left empty when the wording already went out through voice.dialogue.reply, which a
-    # synthesizer that starts on the first finished sentence has to do -- at this point it
-    # does not yet know the rest, and a half sentence here would contradict what the client
-    # is already showing. A producer that does know the whole of it still states it, and
-    # then this is the value the client settles on.
+    # Empty when the wording already went out through voice.dialogue.reply.
     speech_text: str = ""
     schedule_id: str | None = None
     audio_version: int | None = None

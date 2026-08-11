@@ -63,11 +63,7 @@ def _result(tag: str) -> CommandResult:
 
 
 def test_deliver_transcript_sends_voice_asr_completed() -> None:
-    """The transcript goes out on its own, carrying the stream's identifiers.
-
-    Uses real Chinese speech so the assertion also covers non-ASCII surviving the
-    pydantic model and the JSON encoding, which every real transcript will need.
-    """
+    """The transcript goes out on its own, carrying the stream's identifiers."""
 
     async def scenario() -> None:
         """Deliver only a transcript to a connected session."""
@@ -111,11 +107,7 @@ def test_deliver_result_sends_voice_command_result() -> None:
 
 
 def test_the_two_messages_are_independent_calls() -> None:
-    """Each message is one call, so the caller decides when each goes out.
-
-    Pins the split: the sink no longer bundles a turn, so a transcript can be sent long
-    before its command result is known.
-    """
+    """Each message is one call, so the caller decides when each goes out."""
 
     async def scenario() -> None:
         """Send the transcript, then the result, as two separate calls."""
@@ -151,11 +143,7 @@ def test_delivering_to_a_gone_session_sends_nothing() -> None:
 
 
 def test_a_session_that_dies_after_the_transcript_gets_no_result() -> None:
-    """A connection that leaves after the first message is never written to again.
-
-    Pins the observable half-delivered turn: whatever delivery does internally, a socket
-    that has left the registry receives nothing further.
-    """
+    """A connection that leaves after the first message is never written to again."""
 
     async def scenario() -> None:
         """Let the connection unregister itself once the first frame lands."""
@@ -182,11 +170,7 @@ def test_a_session_that_dies_after_the_transcript_gets_no_result() -> None:
 
 
 def test_a_result_follows_a_reconnect_that_lands_before_it_is_written() -> None:
-    """A result addressed to a replaced connection is not written to the stale socket.
-
-    The reconnect is made to land while delivery is already waiting for the session's
-    write lock, which is the only moment the stale socket could still be written to.
-    """
+    """A result addressed to a replaced connection is not written to the stale socket."""
 
     async def scenario() -> None:
         """Hold the write lock, start delivery, reconnect, then let delivery proceed."""
@@ -250,11 +234,7 @@ async def _chunks(*payloads: bytes) -> AsyncIterator[bytes]:
 
 
 def test_deliver_audio_translates_the_reply_into_voice_tts_start() -> None:
-    """The reply description becomes a voice.tts.start carrying the stream's identifiers.
-
-    Only the translation is checked here; the framing and cancellation behaviour of the
-    burst itself belongs to the transport and is covered there.
-    """
+    """The reply description becomes a voice.tts.start carrying the stream's identifiers."""
 
     async def scenario() -> None:
         """Speak a one-chunk reply to a connected session."""
@@ -346,11 +326,7 @@ def test_deliver_reply_text_sends_voice_dialogue_reply() -> None:
 
 
 def test_reply_updates_go_out_in_the_order_they_were_delivered() -> None:
-    """The client must be able to trust the last message it got is the newest wording.
-
-    Each update is the whole reply so far, so an out-of-order pair would leave the display
-    showing less than the client had already been told.
-    """
+    """The last message a client got must be the newest wording."""
 
     async def scenario() -> None:
         """Deliver three updates for one reply."""
@@ -375,11 +351,7 @@ def test_reply_updates_go_out_in_the_order_they_were_delivered() -> None:
 
 
 def test_deliver_question_sends_voice_dialogue_question_in_the_documented_shape() -> None:
-    """A question goes out with the interface design's fields, and with no message_id.
-
-    message_id is given only to results the client acknowledges; a question is answered by
-    speaking again, so inventing one would ask for an ack that never comes.
-    """
+    """A question goes out with the interface design's fields, and with no message_id."""
 
     async def scenario() -> None:
         """Deliver one question to a connected session."""
@@ -462,11 +434,7 @@ def test_a_reply_or_question_for_a_session_that_left_is_dropped_not_raised() -> 
 
 
 def test_a_question_kind_outside_the_protocol_is_refused_not_forwarded() -> None:
-    """A kind the interface design does not define never reaches the wire.
-
-    Sending it would give the client an enum value it has no branch for, and no way to
-    recover: it cannot tell what is being asked or what would answer it.
-    """
+    """A kind the interface design does not define never reaches the wire."""
 
     async def scenario() -> None:
         """Deliver a question whose kind was invented by its producer."""
@@ -490,12 +458,7 @@ def test_a_question_kind_outside_the_protocol_is_refused_not_forwarded() -> None
 
 
 def test_the_accepted_kinds_are_the_four_the_interface_design_names() -> None:
-    """The set is pinned to the document, not to itself.
-
-    Spelled out rather than read from QUESTION_KINDS: a test that iterates the constant it
-    is checking would keep passing if a kind were dropped, because it would then simply
-    check fewer of them.
-    """
+    """The set is pinned to the document, not read from the constant being checked."""
     assert list(QUESTION_KINDS) == [
         "missing_field",
         "ambiguous_target",
@@ -505,11 +468,7 @@ def test_the_accepted_kinds_are_the_four_the_interface_design_names() -> None:
 
 
 def test_every_documented_question_kind_is_accepted() -> None:
-    """All four of the interface design's kinds go out unchanged.
-
-    Paired with the refusal above: a check that only proves invalid values are rejected
-    would also pass if valid ones had stopped working.
-    """
+    """All four of the interface design's kinds go out unchanged."""
 
     async def scenario() -> None:
         """Deliver one question per documented kind."""

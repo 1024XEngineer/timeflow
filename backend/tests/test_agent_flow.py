@@ -133,8 +133,6 @@ def test_a_finished_stream_yields_the_transcript_the_result_then_the_reply() -> 
         websocket.send_json(END)
         received = [websocket.receive_json() for _ in range(2 + len(FAKE_REPLY_STEPS))]
 
-    # Read to the end of the turn rather than stopping at the first two: a sequence test
-    # that stops early cannot tell a missing message from a message it never looked for.
     assert [message["type"] for message in received] == [
         "voice.asr.completed",
         "voice.command.result",
@@ -143,13 +141,7 @@ def test_a_finished_stream_yields_the_transcript_the_result_then_the_reply() -> 
 
 
 def test_the_reply_arrives_as_a_growing_whole_under_one_reply_id() -> None:
-    """Each update carries everything said so far, and only the last says it is done.
-
-    A client that replaces what it shows needs every update to be the whole reply; one
-    that appends fragments would double the text if it received these. The invariant is
-    asserted here rather than only in the translator, because this is the path a client
-    actually sees.
-    """
+    """Each update carries everything said so far, and only the last says it is done."""
     client = TestClient(_build_app())
 
     with client.websocket_connect("/ws?device_id=device_001") as websocket:
@@ -317,11 +309,7 @@ def test_disconnecting_before_the_stream_ends_delivers_nothing() -> None:
 
 
 def test_audio_beyond_the_budget_delivers_no_result() -> None:
-    """A stream cut off for exceeding its budget produces no turn at all.
-
-    The agent has already begun reading when the limit trips, so this pins down that
-    the abort leaves nothing half-delivered.
-    """
+    """A stream cut off for exceeding its budget produces no turn at all."""
     agent = CapturingAgent()
     # 10 ms of 16 kHz mono 16-bit audio is 320 bytes.
     client = TestClient(_build_app(agent, max_audio_duration_ms=10))
@@ -340,11 +328,7 @@ def test_audio_beyond_the_budget_delivers_no_result() -> None:
 
 
 def test_audio_survives_a_stream_longer_than_the_queue() -> None:
-    """Every byte reaches the agent even when the stream far exceeds the queue depth.
-
-    The queue between the receive loop and the agent is bounded, so a long stream makes
-    it block and resume repeatedly; this pins down that nothing is dropped in between.
-    """
+    """Every byte reaches the agent even when the stream far exceeds the queue depth."""
     agent = CapturingAgent()
     client = TestClient(_build_app(agent))
     frames = [bytes([index % 256]) * 320 for index in range(200)]
