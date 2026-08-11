@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS local_schedules (
   ),
   reminder_disposition_state TEXT NULL CHECK (
     reminder_disposition_state IS NULL
-    OR reminder_disposition_state IN ('confirmed', 'snoozed')
+    OR reminder_disposition_state IN ('pending', 'confirmed', 'snoozed')
   ),
   next_trigger_at TEXT NULL,
   snoozed_until TEXT NULL,

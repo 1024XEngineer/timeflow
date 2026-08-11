@@ -1,4 +1,4 @@
-import type { ReminderDispositionState } from '../src/contracts/schedule';
+import type { ReminderDispositionState as CloudReminderDispositionState } from '../src/contracts/schedule';
 import type {
   LocalReminderDispositionState,
   LocalScheduleOccurrenceOverrideRow,
@@ -14,11 +14,11 @@ type Equal<Left, Right> =
 type Assert<Condition extends true> = Condition;
 
 export type LocalReminderStateContract = Assert<
-  Equal<LocalReminderDispositionState, 'confirmed' | 'snoozed'>
+  Equal<LocalReminderDispositionState, 'pending' | 'confirmed' | 'snoozed'>
 >;
 
 export type LocalSnoozeDoesNotEnterCloudContract = Assert<
-  Equal<Extract<'snoozed', ReminderDispositionState>, never>
+  Equal<Extract<'snoozed', CloudReminderDispositionState>, never>
 >;
 
 export type LocalScheduleStorageColumnsContract = Assert<

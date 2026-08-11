@@ -1,16 +1,20 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
 import type {
-  OccurrenceOverrideAction,
+  ReminderDispositionState,
   ReminderStrength,
+  ReminderSyncStatus,
   ReminderType,
+} from '../../../../contracts/reminder';
+import type {
+  OccurrenceOverrideAction,
   ScheduleKind,
   ScheduleStatus,
   ScheduleType,
 } from '../../../../contracts/schedule';
 
-export type LocalReminderDispositionState = 'confirmed' | 'snoozed';
-export type LocalReminderSyncStatus = 'pending' | 'synced';
+export type LocalReminderDispositionState = ReminderDispositionState;
+export type LocalReminderSyncStatus = ReminderSyncStatus;
 
 export interface LocalScheduleRow {
   id: string;
