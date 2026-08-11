@@ -8,18 +8,28 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import Engine
 from sqlalchemy.engine import Connection
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from timeflow.business.calendar import (
+    CreateScheduleCommand,
+    DeleteOnceScheduleCommand,
+    DeleteRecurringScheduleCommand,
+    FindSchedulesQuery,
     OccurrenceOverrideAction,
+    RecurringDeleteScope,
+    ScheduleApplicationService,
+    ScheduleBusinessError,
+    ScheduleErrorCode,
     ScheduleKind,
     ScheduleOccurrenceOverrideSnapshot,
     ScheduleSnapshot,
     ScheduleStatus,
     ScheduleType,
+    UpdateScheduleCommand,
 )
 from timeflow.data.models import Account, ScheduleOccurrenceOverride
 from timeflow.data.repositories import ScheduleRepository, ScheduleRevisionConflictError
+from timeflow.data.schedule_unit_of_work import SqlAlchemyScheduleUnitOfWork
 
 
 @pytest.fixture
@@ -213,3 +223,112 @@ def test_postgres_repository_respects_caller_transaction_rollback(
     with Session(postgres_engine) as verification_session:
         repository = ScheduleRepository(verification_session)
         assert repository.get_schedule(account_id=account_id, schedule_id=schedule_id) is None
+
+
+def _application_service(
+    postgres_connection: Connection,
+    *,
+    account_id: str,
+    ids: Iterator[str],
+    now: datetime,
+) -> ScheduleApplicationService:
+    factory = sessionmaker(
+        bind=postgres_connection,
+        join_transaction_mode="create_savepoint",
+        expire_on_commit=False,
+    )
+    with factory() as session:
+        _seed_account(session, account_id)
+        session.commit()
+    return ScheduleApplicationService(
+        lambda: SqlAlchemyScheduleUnitOfWork(factory),
+        clock=lambda: now,
+        id_factory=lambda: next(ids),
+    )
+
+
+def test_postgres_application_service_commits_create_update_and_soft_delete(
+    postgres_connection: Connection,
+) -> None:
+    """The application service returns each PostgreSQL-committed final snapshot."""
+    account_id = "account-service-crud"
+    now = datetime(2026, 8, 11, 1, tzinfo=UTC)
+    service = _application_service(
+        postgres_connection,
+        account_id=account_id,
+        ids=iter(("schedule-service-crud",)),
+        now=now,
+    )
+    command = CreateScheduleCommand(
+        schedule_type=ScheduleType.TIME,
+        schedule_kind=ScheduleKind.ONCE,
+        title="Project sync",
+        timezone="Asia/Shanghai",
+        start_time=datetime(2026, 8, 12, 7, tzinfo=UTC),
+    )
+
+    created = service.create_schedule(account_id=account_id, command=command).schedules[0]
+    updated = service.update_schedule(
+        account_id=account_id,
+        command=UpdateScheduleCommand(created.id, 1, {"title": "Updated sync"}),
+    ).schedules[0]
+    deleted = service.delete_once_schedule(
+        account_id=account_id,
+        command=DeleteOnceScheduleCommand(updated.id, 2),
+    ).schedules[0]
+
+    assert created.revision == 1
+    assert updated.revision == 2
+    assert updated.title == "Updated sync"
+    assert deleted.revision == 3
+    assert deleted.status is ScheduleStatus.DELETED
+    found = service.find_schedules(
+        account_id=account_id,
+        query=FindSchedulesQuery(schedule_id=deleted.id, include_deleted=True),
+    )
+    assert found.schedules == (deleted,)
+
+    with pytest.raises(ScheduleBusinessError) as raised:
+        service.update_schedule(
+            account_id=account_id,
+            command=UpdateScheduleCommand(deleted.id, 2, {"title": "Stale"}),
+        )
+    assert raised.value.code is ScheduleErrorCode.SCHEDULE_NOT_FOUND
+
+
+def test_postgres_application_service_atomically_cancels_current_occurrence(
+    postgres_connection: Connection,
+) -> None:
+    """Occurrence cancellation and parent revision commit in one PostgreSQL transaction."""
+    account_id = "account-service-recurring"
+    now = datetime(2026, 8, 11, 1, tzinfo=UTC)
+    service = _application_service(
+        postgres_connection,
+        account_id=account_id,
+        ids=iter(("schedule-service-recurring", "override-service-recurring")),
+        now=now,
+    )
+    created = service.create_schedule(
+        account_id=account_id,
+        command=CreateScheduleCommand(
+            schedule_type=ScheduleType.TIME,
+            schedule_kind=ScheduleKind.RECURRING,
+            title="Weekly sync",
+            timezone="Asia/Shanghai",
+            start_time=datetime(2026, 8, 3, 2, tzinfo=UTC),
+            recurrence_rule="FREQ=WEEKLY;BYDAY=MO",
+        ),
+    ).schedules[0]
+
+    result = service.delete_recurring_schedule(
+        account_id=account_id,
+        command=DeleteRecurringScheduleCommand(
+            created.id,
+            1,
+            RecurringDeleteScope.THIS_OCCURRENCE,
+        ),
+    )
+
+    assert result.schedules[0].revision == 2
+    assert result.occurrence_overrides[0].action is OccurrenceOverrideAction.CANCEL
+    assert result.occurrence_overrides[0].occurrence_start == datetime(2026, 8, 17, 2, tzinfo=UTC)

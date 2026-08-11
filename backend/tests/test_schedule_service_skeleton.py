@@ -2,16 +2,23 @@
 
 import json
 from datetime import UTC, datetime
+from inspect import Parameter, signature
 
 import pytest
 
 from timeflow.business.calendar import (
+    CreateScheduleCommand,
+    DeleteOnceScheduleCommand,
+    DeleteRecurringScheduleCommand,
+    FindSchedulesQuery,
     RecurringDeleteScope,
     ReminderDispositionState,
     ScheduleAgentService,
     ScheduleBusinessError,
     ScheduleErrorCode,
     ScheduleKind,
+    ScheduleMutationResult,
+    ScheduleSearchResult,
     ScheduleSnapshot,
     ScheduleStatus,
     ScheduleType,
@@ -28,7 +35,6 @@ def test_agent_schedule_service_exposes_exactly_five_business_operations() -> No
         for name, value in ScheduleAgentService.__dict__.items()
         if callable(value) and getattr(value, "__isabstractmethod__", False)
     }
-
     assert operations == {
         "create_schedule",
         "find_schedules",
@@ -36,6 +42,37 @@ def test_agent_schedule_service_exposes_exactly_five_business_operations() -> No
         "delete_once_schedule",
         "delete_recurring_schedule",
     }
+
+
+def test_agent_schedule_service_keeps_all_five_public_signatures_stable() -> None:
+    """Agent integration code can keep calling the already-merged contract unchanged."""
+
+    expected = {
+        "create_schedule": ("command", CreateScheduleCommand, ScheduleMutationResult),
+        "find_schedules": ("query", FindSchedulesQuery, ScheduleSearchResult),
+        "update_schedule": ("command", UpdateScheduleCommand, ScheduleMutationResult),
+        "delete_once_schedule": (
+            "command",
+            DeleteOnceScheduleCommand,
+            ScheduleMutationResult,
+        ),
+        "delete_recurring_schedule": (
+            "command",
+            DeleteRecurringScheduleCommand,
+            ScheduleMutationResult,
+        ),
+    }
+
+    for operation, (input_name, input_type, return_type) in expected.items():
+        operation_signature = signature(getattr(ScheduleAgentService, operation))
+        assert list(operation_signature.parameters) == ["self", "account_id", input_name]
+        account = operation_signature.parameters["account_id"]
+        command = operation_signature.parameters[input_name]
+        assert account.kind is Parameter.KEYWORD_ONLY
+        assert account.annotation is str
+        assert command.kind is Parameter.KEYWORD_ONLY
+        assert command.annotation is input_type
+        assert operation_signature.return_annotation is return_type
 
 
 def test_recurring_delete_scope_matches_the_three_wiki_wire_values() -> None:

@@ -17,28 +17,8 @@ from timeflow.business.calendar.contracts import (
     ScheduleStatus,
     ScheduleType,
 )
+from timeflow.business.calendar.ports import ScheduleRevisionConflictError
 from timeflow.data.models import Schedule, ScheduleOccurrenceOverride
-
-
-class ScheduleRevisionConflictError(RuntimeError):
-    """An account-owned schedule no longer has the expected revision."""
-
-    __slots__ = ("actual_revision", "expected_revision", "schedule_id")
-
-    def __init__(
-        self,
-        *,
-        schedule_id: str,
-        expected_revision: int,
-        actual_revision: int,
-    ) -> None:
-        super().__init__(
-            f"Schedule {schedule_id!r} revision conflict: "
-            f"expected {expected_revision}, found {actual_revision}"
-        )
-        self.schedule_id = schedule_id
-        self.expected_revision = expected_revision
-        self.actual_revision = actual_revision
 
 
 class ScheduleRepository:
