@@ -489,11 +489,26 @@ def test_a_question_kind_outside_the_protocol_is_refused_not_forwarded() -> None
     asyncio.run(scenario())
 
 
+def test_the_accepted_kinds_are_the_four_the_interface_design_names() -> None:
+    """The set is pinned to the document, not to itself.
+
+    Spelled out rather than read from QUESTION_KINDS: a test that iterates the constant it
+    is checking would keep passing if a kind were dropped, because it would then simply
+    check fewer of them.
+    """
+    assert list(QUESTION_KINDS) == [
+        "missing_field",
+        "ambiguous_target",
+        "recurrence_scope",
+        "confirmation",
+    ]
+
+
 def test_every_documented_question_kind_is_accepted() -> None:
     """All four of the interface design's kinds go out unchanged.
 
     Paired with the refusal above: a check that only proves invalid values are rejected
-    would also pass if the set had been narrowed to fewer than the protocol defines.
+    would also pass if valid ones had stopped working.
     """
 
     async def scenario() -> None:
