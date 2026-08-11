@@ -44,8 +44,23 @@ def create_app(
     handshake = SessionHandshake(token_verifier)
     connections = ConnectionManager()
     limiter = UnauthenticatedConnectionLimiter(settings.ws_max_unauthenticated_connections)
+
+    if audio_sink is None:
+        # Fail closed, for the same reason as the verifier above: the stand-in agent answers
+        # every stream with status=applied and a schedule that was never persisted. A
+        # deployment that injects a real verifier but forgets the sink would tell users their
+        # schedules were saved, and they would find out otherwise on the next sync.
+        if settings.environment != "development":
+            raise RuntimeError(
+                "No AudioSink was injected and the stand-in agent is development-only; "
+                f"TIMEFLOW_ENVIRONMENT is {settings.environment!r}. "
+                "It reports commands as applied that were never carried out. "
+                "Inject a real sink before exposing /ws."
+            )
+        audio_sink = AgentAudioSink(FakeAgent(WebSocketResultSink(connections)))
+
     voice_streams = VoiceStreamHandlers(
-        audio_sink or AgentAudioSink(FakeAgent(WebSocketResultSink(connections))),
+        audio_sink,
         max_audio_duration_ms=settings.ws_max_audio_duration_ms,
         queue_max_chunks=settings.ws_audio_queue_max_chunks,
     )

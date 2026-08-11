@@ -5,8 +5,11 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
+import pytest
+
 from timeflow.gateway.websocket.connection_manager import ConnectionManager
 from timeflow.gateway.websocket.handlers.agent_result import WebSocketResultSink
+from timeflow.gateway.websocket.messages.dialogue import QUESTION_KINDS
 from timeflow.intelligence.ports import (
     AudioReply,
     CommandResult,
@@ -453,6 +456,61 @@ def test_a_reply_or_question_for_a_session_that_left_is_dropped_not_raised() -> 
                 question_id="question_001", question_kind="missing_field", speech_text="哪天？"
             ),
             _Identity(),
+        )
+
+    asyncio.run(scenario())
+
+
+def test_a_question_kind_outside_the_protocol_is_refused_not_forwarded() -> None:
+    """A kind the interface design does not define never reaches the wire.
+
+    Sending it would give the client an enum value it has no branch for, and no way to
+    recover: it cannot tell what is being asked or what would answer it.
+    """
+
+    async def scenario() -> None:
+        """Deliver a question whose kind was invented by its producer."""
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register(SESSION_ID, connection)
+
+        with pytest.raises(ValueError, match="question_kind"):
+            await WebSocketResultSink(connections).deliver_question(
+                DialogueQuestion(
+                    question_id="question_001",
+                    question_kind="which_one_lol",
+                    speech_text="哪一个？",
+                ),
+                _Identity(),
+            )
+
+        assert connection.frames == []
+
+    asyncio.run(scenario())
+
+
+def test_every_documented_question_kind_is_accepted() -> None:
+    """All four of the interface design's kinds go out unchanged.
+
+    Paired with the refusal above: a check that only proves invalid values are rejected
+    would also pass if the set had been narrowed to fewer than the protocol defines.
+    """
+
+    async def scenario() -> None:
+        """Deliver one question per documented kind."""
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register(SESSION_ID, connection)
+        sink = WebSocketResultSink(connections)
+
+        for kind in QUESTION_KINDS:
+            await sink.deliver_question(
+                DialogueQuestion(question_id="q", question_kind=kind, speech_text="？"),
+                _Identity(),
+            )
+
+        assert [frame["payload"]["question_kind"] for frame in connection.frames] == list(
+            QUESTION_KINDS
         )
 
     asyncio.run(scenario())

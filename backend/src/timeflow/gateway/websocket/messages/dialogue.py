@@ -1,8 +1,15 @@
 """What the assistant says back: its wording as it forms, and the questions it asks."""
 
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel
+
+# The interface design's four reasons for asking, stated as a closed set rather than a
+# plain string. Which one applies is the producer's decision, but whether the value is one
+# of these at all is the protocol's: a kind nobody defined reaches a client with no branch
+# for it, and there is nothing the client can do with it.
+QuestionKind = Literal["missing_field", "ambiguous_target", "recurrence_scope", "confirmation"]
+QUESTION_KINDS: tuple[QuestionKind, ...] = get_args(QuestionKind)
 
 
 class VoiceDialogueReplyPayload(BaseModel):
@@ -33,7 +40,7 @@ class VoiceDialogueQuestionPayload(BaseModel):
     """What is being asked, and what kind of answer would settle it."""
 
     question_id: str
-    question_kind: str
+    question_kind: QuestionKind
     speech_text: str
     required_response: str | None = None
     candidates: list[dict[str, Any]] = []

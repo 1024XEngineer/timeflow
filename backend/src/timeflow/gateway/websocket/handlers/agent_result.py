@@ -19,6 +19,8 @@ from timeflow.gateway.websocket.messages.agent import (
     VoiceCommandResultPayload,
 )
 from timeflow.gateway.websocket.messages.dialogue import (
+    QUESTION_KINDS,
+    QuestionKind,
     VoiceDialogueQuestion,
     VoiceDialogueQuestionPayload,
     VoiceDialogueReply,
@@ -31,6 +33,19 @@ from timeflow.gateway.websocket.messages.tts import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _question_kind(value: str) -> QuestionKind:
+    """Narrow a producer's string to the protocol's four kinds, refusing anything else.
+
+    Narrowed here because this is where a domain value becomes a wire value, and the wire
+    is where an undefined kind does its damage. Raising rather than substituting one: there
+    is no kind meaning "some other reason", so any stand-in would misdescribe the question.
+    A value outside the four is a bug in whatever produced it, and the traceback names it.
+    """
+    if value not in QUESTION_KINDS:
+        raise ValueError(f"question_kind must be one of {QUESTION_KINDS}, got {value!r}")
+    return value
 
 
 class WebSocketResultSink:
@@ -91,7 +106,7 @@ class WebSocketResultSink:
             conversation_id=stream.conversation_id,
             payload=VoiceDialogueQuestionPayload(
                 question_id=question.question_id,
-                question_kind=question.question_kind,
+                question_kind=_question_kind(question.question_kind),
                 speech_text=question.speech_text,
                 required_response=question.required_response,
                 candidates=list(question.candidates),
