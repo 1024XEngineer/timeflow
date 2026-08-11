@@ -17,7 +17,7 @@ describe('apiFetch', () => {
       jest.isolateModules(() => {
         const isolatedClient = jest.requireActual<typeof import('./client')>('./client');
 
-        expect(isolatedClient.API_BASE_URL).toBe('http://127.0.0.1:8000/v1');
+        expect(isolatedClient.API_BASE_URL).toBe('http://127.0.0.1:8000/api/v1');
       });
     } finally {
       process.env.EXPO_PUBLIC_API_URL = configuredUrl;
