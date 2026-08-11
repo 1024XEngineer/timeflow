@@ -63,7 +63,6 @@ class Observer(Protocol):
         ...
 
 
-
 @dataclass(frozen=True, slots=True)
 class QwenAudioConfig:
     """Where to reach the model and how to authenticate."""
