@@ -17,6 +17,7 @@ from timeflow.business.calendar import (
     ScheduleType,
 )
 from timeflow.data.database import Base
+from timeflow.data.models import Account
 from timeflow.data.repositories import ScheduleRepository
 
 
@@ -26,6 +27,20 @@ def session() -> Generator[Session, None, None]:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)
     with Session(engine) as database_session:
+        now = datetime.now(UTC)
+        database_session.add_all(
+            [
+                Account(
+                    id=account_id,
+                    username=f"{account_id}@example.com",
+                    password_hash="test-password-hash",
+                    created_at=now,
+                    updated_at=now,
+                )
+                for account_id in ("account-a", "account-b")
+            ]
+        )
+        database_session.flush()
         yield database_session
 
 

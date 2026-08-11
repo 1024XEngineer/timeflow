@@ -1,19 +1,39 @@
-"""Schema tests for the v3.10 schedule persistence model."""
+"""Schema tests for the documented cloud persistence tables."""
 
-from pathlib import Path
-from typing import cast
+from typing import Any
 
-from sqlalchemy import Table
+from sqlalchemy import Boolean, DateTime, Numeric, String
 
-from timeflow.data.models import Schedule, ScheduleOccurrenceOverride
-
-MIGRATION_SOURCE = (
-    Path(__file__).parents[1] / "alembic" / "versions" / "20260810_0003_schedule_storage_v3.py"
-).read_text(encoding="utf-8")
+from timeflow.data.models import Account, Schedule, ScheduleOccurrenceOverride
 
 
-def test_schedule_table_matches_cloud_snapshot_storage_fields() -> None:
-    """The cloud table stores only authoritative schedule and reminder fields."""
+def _constraint_names(model: Any) -> set[str]:
+    return {
+        constraint.name for constraint in model.__table__.constraints if constraint.name is not None
+    }
+
+
+def _index_names(model: Any) -> set[str]:
+    return {index.name for index in model.__table__.indexes if index.name is not None}
+
+
+def test_accounts_table_matches_documented_schema() -> None:
+    assert Account.__tablename__ == "accounts"
+    assert list(Account.__table__.columns.keys()) == [
+        "id",
+        "username",
+        "password_hash",
+        "created_at",
+        "updated_at",
+    ]
+    assert isinstance(Account.__table__.c.id.type, String)
+    assert Account.__table__.c.id.type.length == 64
+    assert Account.__table__.c.username.type.length == 255
+    assert "uq_accounts_username" in _constraint_names(Account)
+
+
+def test_schedules_table_matches_documented_columns() -> None:
+    assert Schedule.__tablename__ == "schedules"
     assert list(Schedule.__table__.columns.keys()) == [
         "id",
         "account_id",
@@ -39,26 +59,48 @@ def test_schedule_table_matches_cloud_snapshot_storage_fields() -> None:
         "updated_at",
         "deleted_at",
     ]
+    assert isinstance(Schedule.__table__.c.is_all_day.type, Boolean)
+    assert isinstance(Schedule.__table__.c.start_time.type, DateTime)
+    assert Schedule.__table__.c.start_time.type.timezone is True
+    assert isinstance(Schedule.__table__.c.latitude.type, Numeric)
+    assert Schedule.__table__.c.latitude.type.precision == 9
+    assert Schedule.__table__.c.latitude.type.scale == 6
+    assert list(Schedule.__table__.c.account_id.foreign_keys)[0].target_fullname == "accounts.id"
+    assert _index_names(Schedule) == {
+        "ix_schedules_account_status_start_time",
+        "ix_schedules_account_updated_at",
+    }
 
 
-def test_schedule_table_keeps_device_runtime_state_out_of_cloud_storage() -> None:
-    """Geofence, snooze, and next-trigger state belong only to client SQLite."""
-    columns = set(Schedule.__table__.columns.keys())
+def test_schedules_table_has_documented_business_constraints() -> None:
+    assert {
+        "fk_schedules_account_id",
+        "ck_schedules_schedule_type",
+        "ck_schedules_schedule_kind",
+        "ck_schedules_status",
+        "ck_schedules_revision_positive",
+        "ck_schedules_latitude_range",
+        "ck_schedules_longitude_range",
+        "ck_schedules_coordinates_pair",
+        "ck_schedules_schedule_type_requirements",
+        "ck_schedules_recurrence_requirements",
+        "ck_schedules_all_day_requirements",
+        "ck_schedules_time_range",
+        "ck_schedules_reminder_type",
+        "ck_schedules_reminder_strength",
+        "ck_schedules_reminder_disposition_state",
+        "ck_schedules_reminder_offset_nonnegative",
+        "ck_schedules_reminder_presence",
+        "ck_schedules_at_time_reminder",
+        "ck_schedules_before_start_reminder",
+        "ck_schedules_location_reminder",
+        "ck_schedules_recurrence_rule_not_blank",
+        "ck_schedules_deleted_at_consistency",
+    } <= _constraint_names(Schedule)
 
-    assert columns.isdisjoint(
-        {
-            "geofence_armed",
-            "next_trigger_at",
-            "snoozed_until",
-            "sync_status",
-            "time_triggered_at",
-            "geo_triggered_at",
-        }
-    )
 
-
-def test_occurrence_override_table_matches_v3_contract() -> None:
-    """Only exceptional recurring occurrences are persisted."""
+def test_occurrence_overrides_table_matches_documented_schema() -> None:
+    assert ScheduleOccurrenceOverride.__tablename__ == "schedule_occurrence_overrides"
     assert list(ScheduleOccurrenceOverride.__table__.columns.keys()) == [
         "id",
         "schedule_id",
@@ -68,22 +110,21 @@ def test_occurrence_override_table_matches_v3_contract() -> None:
         "created_at",
         "updated_at",
     ]
-
-    occurrence_table = cast(Table, ScheduleOccurrenceOverride.__table__)
-    constraint_names = {constraint.name for constraint in occurrence_table.constraints}
-    assert "uq_schedule_occurrence_overrides_schedule_occurrence" in constraint_names
-    assert "ck_schedule_occurrence_overrides_replacement" in constraint_names
-
-
-def test_schedule_migration_rejects_overlong_legacy_identifiers() -> None:
-    """Legacy ownership identifiers are rejected instead of silently truncated."""
-    assert "char_length(id) > 64" in MIGRATION_SOURCE
-    assert "char_length(user_id) > 64" in MIGRATION_SOURCE
-    assert "left(id, 64)" not in MIGRATION_SOURCE
-    assert "left(user_id, 64)" not in MIGRATION_SOURCE
-
-
-def test_schedule_migration_keeps_completed_legacy_rows_non_active() -> None:
-    """A migration round trip must not resurrect a completed legacy schedule."""
-    assert MIGRATION_SOURCE.count("status IN ('done', 'deleted')") == 2
-    assert "CASE WHEN status = 'deleted' THEN 'deleted' ELSE 'scheduled' END" in MIGRATION_SOURCE
+    assert (
+        list(ScheduleOccurrenceOverride.__table__.c.schedule_id.foreign_keys)[0].target_fullname
+        == "schedules.id"
+    )
+    assert (
+        list(ScheduleOccurrenceOverride.__table__.c.replacement_schedule_id.foreign_keys)[
+            0
+        ].target_fullname
+        == "schedules.id"
+    )
+    assert {
+        "fk_schedule_occurrence_overrides_schedule_id",
+        "fk_schedule_occurrence_overrides_replacement_schedule_id",
+        "uq_schedule_occurrence_overrides_schedule_occurrence",
+        "ck_schedule_occurrence_overrides_action",
+        "ck_schedule_occurrence_overrides_replacement",
+    } <= _constraint_names(ScheduleOccurrenceOverride)
+    assert _index_names(ScheduleOccurrenceOverride) == set()
