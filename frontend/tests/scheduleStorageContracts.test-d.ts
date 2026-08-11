@@ -1,6 +1,8 @@
 import type { ReminderDispositionState as CloudReminderDispositionState } from '../src/contracts/schedule';
 import type {
+  CloudScheduleRow,
   LocalReminderDispositionState,
+  LocalReminderRuntimeUpdate,
   LocalScheduleOccurrenceOverrideRow,
   LocalScheduleRow,
   ScheduleLocalRepository,
@@ -53,6 +55,45 @@ export type LocalScheduleStorageColumnsContract = Assert<
   >
 >;
 
+export type CloudScheduleStorageColumnsContract = Assert<
+  Equal<
+    keyof CloudScheduleRow,
+    | 'id'
+    | 'account_id'
+    | 'schedule_type'
+    | 'schedule_kind'
+    | 'title'
+    | 'is_all_day'
+    | 'start_time'
+    | 'end_time'
+    | 'timezone'
+    | 'recurrence_rule'
+    | 'location_name'
+    | 'latitude'
+    | 'longitude'
+    | 'reminder_type'
+    | 'reminder_trigger_at'
+    | 'reminder_offset_minutes'
+    | 'reminder_strength'
+    | 'reminder_disposition_state'
+    | 'status'
+    | 'cloud_revision'
+    | 'updated_at'
+  >
+>;
+
+export type LocalReminderRuntimeColumnsContract = Assert<
+  Equal<
+    keyof LocalReminderRuntimeUpdate,
+    | 'reminder_disposition_state'
+    | 'next_trigger_at'
+    | 'snoozed_until'
+    | 'geofence_armed'
+    | 'disposition_updated_at'
+    | 'sync_status'
+  >
+>;
+
 export type LocalOccurrenceOverrideStorageColumnsContract = Assert<
   Equal<
     keyof LocalScheduleOccurrenceOverrideRow,
@@ -65,8 +106,9 @@ export type LocalRepositoryOperationsContract = Assert<
     keyof ScheduleLocalRepository,
     | 'getSchedule'
     | 'listSchedules'
-    | 'upsertSchedule'
-    | 'deleteSchedule'
+    | 'applyCloudSchedule'
+    | 'updateReminderRuntime'
+    | 'purgeSchedule'
     | 'upsertOccurrenceOverride'
     | 'listOccurrenceOverrides'
   >

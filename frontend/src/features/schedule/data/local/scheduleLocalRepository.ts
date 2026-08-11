@@ -8,6 +8,7 @@ import type {
 } from '../../../../contracts/reminder';
 import type {
   OccurrenceOverrideAction,
+  ReminderDispositionState as CloudReminderDispositionState,
   ScheduleKind,
   ScheduleStatus,
   ScheduleType,
@@ -16,7 +17,7 @@ import type {
 export type LocalReminderDispositionState = ReminderDispositionState;
 export type LocalReminderSyncStatus = ReminderSyncStatus;
 
-export interface LocalScheduleRow {
+export interface CloudScheduleRow {
   id: string;
   account_id: string;
   schedule_type: ScheduleType;
@@ -34,16 +35,30 @@ export interface LocalScheduleRow {
   reminder_trigger_at: string | null;
   reminder_offset_minutes: number | null;
   reminder_strength: ReminderStrength | null;
+  reminder_disposition_state: CloudReminderDispositionState | null;
+  status: ScheduleStatus;
+  cloud_revision: number;
+  updated_at: string;
+}
+
+export interface LocalScheduleRow extends Omit<CloudScheduleRow, 'reminder_disposition_state'> {
   reminder_disposition_state: LocalReminderDispositionState | null;
   next_trigger_at: string | null;
   snoozed_until: string | null;
   geofence_armed: 0 | 1;
   disposition_updated_at: string | null;
   sync_status: LocalReminderSyncStatus;
-  status: ScheduleStatus;
-  cloud_revision: number;
-  updated_at: string;
 }
+
+export type LocalReminderRuntimeUpdate = Pick<
+  LocalScheduleRow,
+  | 'reminder_disposition_state'
+  | 'next_trigger_at'
+  | 'snoozed_until'
+  | 'geofence_armed'
+  | 'disposition_updated_at'
+  | 'sync_status'
+>;
 
 export interface LocalScheduleOccurrenceOverrideRow {
   id: string;
@@ -74,7 +89,8 @@ export class ScheduleLocalRepository {
     );
   }
 
-  public async upsertSchedule(row: LocalScheduleRow): Promise<boolean> {
+  /** Apply cloud-owned fields while preserving existing device runtime state. */
+  public async applyCloudSchedule(row: CloudScheduleRow): Promise<boolean> {
     const result = await this.database.runAsync(
       `INSERT INTO local_schedules (
          id, account_id, schedule_type, schedule_kind, title, is_all_day,
@@ -88,8 +104,7 @@ export class ScheduleLocalRepository {
          $start_time, $end_time, $timezone, $recurrence_rule, $location_name,
          $latitude, $longitude, $reminder_type, $reminder_trigger_at,
          $reminder_offset_minutes, $reminder_strength, $reminder_disposition_state,
-         $next_trigger_at, $snoozed_until, $geofence_armed, $disposition_updated_at,
-         $sync_status, $status, $cloud_revision, $updated_at
+         NULL, NULL, 0, NULL, 'synced', $status, $cloud_revision, $updated_at
        )
        ON CONFLICT(id) DO UPDATE SET
          schedule_type = excluded.schedule_type,
@@ -107,12 +122,6 @@ export class ScheduleLocalRepository {
          reminder_trigger_at = excluded.reminder_trigger_at,
          reminder_offset_minutes = excluded.reminder_offset_minutes,
          reminder_strength = excluded.reminder_strength,
-         reminder_disposition_state = excluded.reminder_disposition_state,
-         next_trigger_at = excluded.next_trigger_at,
-         snoozed_until = excluded.snoozed_until,
-         geofence_armed = excluded.geofence_armed,
-         disposition_updated_at = excluded.disposition_updated_at,
-         sync_status = excluded.sync_status,
          status = excluded.status,
          cloud_revision = excluded.cloud_revision,
          updated_at = excluded.updated_at
@@ -136,11 +145,6 @@ export class ScheduleLocalRepository {
         $reminder_offset_minutes: row.reminder_offset_minutes,
         $reminder_strength: row.reminder_strength,
         $reminder_disposition_state: row.reminder_disposition_state,
-        $next_trigger_at: row.next_trigger_at,
-        $snoozed_until: row.snoozed_until,
-        $geofence_armed: row.geofence_armed,
-        $disposition_updated_at: row.disposition_updated_at,
-        $sync_status: row.sync_status,
         $status: row.status,
         $cloud_revision: row.cloud_revision,
         $updated_at: row.updated_at,
@@ -149,7 +153,37 @@ export class ScheduleLocalRepository {
     return result.changes === 1;
   }
 
-  public async deleteSchedule(accountId: string, scheduleId: string): Promise<boolean> {
+  /** Update only reminder state owned by the current device. */
+  public async updateReminderRuntime(
+    accountId: string,
+    scheduleId: string,
+    runtime: LocalReminderRuntimeUpdate,
+  ): Promise<boolean> {
+    const result = await this.database.runAsync(
+      `UPDATE local_schedules SET
+         reminder_disposition_state = $reminder_disposition_state,
+         next_trigger_at = $next_trigger_at,
+         snoozed_until = $snoozed_until,
+         geofence_armed = $geofence_armed,
+         disposition_updated_at = $disposition_updated_at,
+         sync_status = $sync_status
+       WHERE account_id = $account_id AND id = $id`,
+      {
+        $account_id: accountId,
+        $id: scheduleId,
+        $reminder_disposition_state: runtime.reminder_disposition_state,
+        $next_trigger_at: runtime.next_trigger_at,
+        $snoozed_until: runtime.snoozed_until,
+        $geofence_armed: runtime.geofence_armed,
+        $disposition_updated_at: runtime.disposition_updated_at,
+        $sync_status: runtime.sync_status,
+      },
+    );
+    return result.changes === 1;
+  }
+
+  /** Physically remove one local row for recovery or maintenance cleanup only. */
+  public async purgeSchedule(accountId: string, scheduleId: string): Promise<boolean> {
     const result = await this.database.runAsync(
       `DELETE FROM local_schedules WHERE account_id = ? AND id = ?`,
       accountId,
