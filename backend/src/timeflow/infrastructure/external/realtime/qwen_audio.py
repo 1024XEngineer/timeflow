@@ -9,8 +9,7 @@ from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
-# The client controls turn boundaries: our own protocol already opens and closes a stream
-# with voice.stream.start / end, so the model must not also decide when a turn ended.
+# Our protocol owns turn boundaries; the model must not also decide when a turn ended.
 PUSH_TO_TALK: None = None
 
 # The model accepts 16 kHz mono PCM in and emits 24 kHz mono PCM out.
@@ -35,12 +34,7 @@ class Transport(Protocol):
 
 
 class Observer(Protocol):
-    """Where this adapter reports what the model says.
-
-    The dialogue layer declares the same shape for its own use. Restating it here rather
-    than importing it keeps the dependency direction outward-only: infrastructure never
-    reaches into a product layer.
-    """
+    """Where this adapter reports what the model says; restated, never imported."""
 
     async def heard(self, text: str) -> None:
         """The model reported what the user said."""
@@ -90,16 +84,11 @@ class QwenAudioSession:
         """Store the open transport and the config it was opened with."""
         self._transport = transport
         self._config = config
-        # A turn is one response unless a tool runs: answering a tool asks the model to
-        # respond again, and that second response is the one that carries the audio.
+        # A tool makes a turn two responses; the second one carries the audio.
         self._open_responses = 0
 
     async def configure(self, instructions: str, tools: list[dict[str, Any]]) -> None:
-        """Set the session up before any audio is sent.
-
-        turn_detection is only settable before the first audio frame, so this must run
-        first; push-to-talk is required because our own protocol owns turn boundaries.
-        """
+        """Set the session up before any audio; turn_detection only takes effect here."""
         session: dict[str, Any] = {
             "modalities": ["text", "audio"],
             "voice": self._config.voice,
@@ -151,17 +140,7 @@ class QwenAudioSession:
         await self._transport.send(json.dumps(event, ensure_ascii=False))
 
     async def pump(self, observer: Observer) -> None:
-        """Report what the model says until the turn ends or the session fails.
-
-        Vendor event names and base64 stay inside this method: whatever the observer
-        receives is already decoded and named in the dialogue layer's terms.
-
-        The reply's own text is reported from its increments rather than from the vendor's
-        terminal event. Measured against the real model, the increments finish about 600 ms
-        before the first audio chunk arrives while the terminal event lands 500 ms after it,
-        so waiting for that event would mean either sending audio with no text beside it or
-        holding the audio back and losing the latency the model exists for.
-        """
+        """Report what the model says, decoded and renamed, until the turn ends or fails."""
         spoken = ""
         while True:
             try:
@@ -190,9 +169,7 @@ class QwenAudioSession:
                 spoken += str(event.get("delta", ""))
                 await observer.spoke(spoken)
             elif kind == "response.audio_transcript.done":
-                # Terminal marker only; the text was already reported from its increments.
-                # It still gets reported once more, because a reply short enough to arrive
-                # without increments would otherwise never be reported at all.
+                # Reported again in case the reply was short enough to skip increments.
                 final = str(event.get("transcript", ""))
                 if final and final != spoken:
                     spoken = final
@@ -208,9 +185,7 @@ class QwenAudioSession:
                     return
                 await observer.tool_requested(**requested)
             elif kind == "response.done":
-                # A response that only asked for a tool is not the end of the turn: the
-                # answer to that tool triggers another response, and that is the one that
-                # speaks. Returning here would leave its audio unread.
+                # Not the turn's end if a tool ran: the next response is the one that speaks.
                 self._open_responses -= 1
                 if self._open_responses <= 0:
                     return

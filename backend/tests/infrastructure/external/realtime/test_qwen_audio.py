@@ -38,9 +38,7 @@ class FakeTransport:
     async def recv(self) -> str:
         """Return the next scripted frame, raising once the script runs out.
 
-        Raising rather than blocking is deliberate: if a change makes the pump read past
-        the end of a turn, the test fails immediately instead of hanging until CI times
-        out, and the reason is visible in the failure.
+        Raising rather than blocking: reading past a turn fails now, not on CI timeout.
         """
         if not self._inbound:
             raise AssertionError("the pump read past the end of the scripted turn")
@@ -440,14 +438,10 @@ def test_a_reply_with_no_increments_is_still_reported() -> None:
 
 
 def test_the_adapter_satisfies_the_dialogue_layer_s_ports() -> None:
-    """The two sides of the seam are the same shape, and this is what checks it.
+    """The two declarations of the seam are the same shape.
 
-    The dialogue layer declares RealtimeSession and TurnObserver; the adapter declares
-    Transport and Observer. Neither imports the other, because infrastructure must not
-    depend on a product layer -- which also means nothing at all notices when one side
-    grows a parameter the other does not have. These assignments are that notice: mypy
-    rejects them the moment the shapes drift apart, and no call site is needed to provoke
-    it.
+    Neither side imports the other, so nothing else would notice one of them drifting.
+    mypy rejects these assignments the moment they stop matching; no call site needed.
     """
     session: RealtimeSession = QwenAudioSession(FakeTransport(), CONFIG)
     factory: RealtimeSessionFactory = QwenAudioSessionFactory(CONFIG)

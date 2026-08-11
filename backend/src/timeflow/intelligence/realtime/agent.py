@@ -16,8 +16,7 @@ logger = logging.getLogger(__name__)
 REPLY_SAMPLE_RATE_HZ = 24_000
 REPLY_AUDIO_FORMAT = "pcm"
 
-# Why the reply is being spoken. Only answers exist this round; a question sounds the same
-# on the wire, so the round that adds them will set this per turn instead.
+# Only answers exist this round; the round that adds questions sets this per turn.
 REPLY_PURPOSE = "command_result"
 
 # Language is reported as the model's own, not detected here.
@@ -52,8 +51,7 @@ class RealtimeAgent:
         """Store the session source, the sink, and the id seams."""
         self._sessions = sessions
         self._result_sink = result_sink
-        # Called per turn rather than stored, so a server running for days keeps telling
-        # the model what day it is now rather than what day it started.
+        # Called per turn, so a long-running server keeps saying what day it is now.
         self._instructions = instructions or (lambda: "")
         self._audio_id_factory = audio_id_factory or new_audio_id
         self._reply_id_factory = reply_id_factory or new_reply_id
@@ -63,8 +61,6 @@ class RealtimeAgent:
         try:
             session = await self._sessions.open(self._instructions(), [])
         except Exception:
-            # Returning rather than raising: the transport only asked us to take the audio,
-            # and a model we cannot reach is not a transport fault to report as one.
             logger.exception("could not open a realtime session")
             return
 
@@ -92,13 +88,7 @@ class RealtimeAgent:
 
 
 class _Turn:
-    """One turn's worth of model output, translated into ResultSink calls.
-
-    Exists because the two sides disagree about who drives. The session reports by
-    calling methods; ResultSink.deliver_audio wants to pull an iterator. A queue in
-    between lets audio go out chunk by chunk as it arrives, instead of being collected
-    and sent once the reply is over.
-    """
+    """One turn's model output, translated into ResultSink calls as it arrives."""
 
     def __init__(
         self,
@@ -136,35 +126,20 @@ class _Turn:
         )
 
     async def spoke(self, text: str) -> None:
-        """Push the reply's wording, and keep it for the audio's opening message.
-
-        The session already reports accumulations rather than fragments, which is the shape
-        ReplyText wants, so this forwards them as they come. Measured against the real
-        model the wording finishes about 600 ms before the first audio chunk arrives, so
-        holding it back until the audio starts would waste that whole gap.
-        """
+        """Push the reply's wording so far, and keep it for the audio's opening message."""
         self._spoken = text
         await self._result_sink.deliver_reply_text(
             ReplyText(reply_id=self._reply_id, speech_text=text), self._stream
         )
 
     async def audio(self, data: bytes) -> None:
-        """Queue one chunk, starting the delivery on the first one.
-
-        Delivery starts here rather than at the top of the turn because the opening message
-        carries the reply's text, and that is only known once the model has begun speaking.
-        """
+        """Queue one chunk, starting the delivery on the first one."""
         if self._speaking is None:
             self._speaking = asyncio.create_task(self._speak())
         await self._audio.put(data)
 
     async def tool_requested(self, call_id: str, name: str, arguments: dict[str, Any]) -> None:
-        """Note that a tool was asked for while none are offered.
-
-        No tools are registered this round, so the model should not be asking. It is
-        logged rather than answered: writing an invented result back would have it speak
-        about schedules that were never looked up.
-        """
+        """Note that a tool was asked for while none are offered, and answer nothing."""
         del arguments
         logger.warning(
             "realtime model asked for a tool while none are registered",
@@ -176,14 +151,7 @@ class _Turn:
         logger.warning("realtime session failed", extra={"reason": message})
 
     async def close(self) -> None:
-        """Settle the reply's wording, then finish the audio if any started.
-
-        The settling update has to precede the audio's closing message, because that
-        message is what ends a turn: a client that stops reading on voice.tts.end -- the
-        reasonable thing to do -- would never see an update sent after it. The wording is
-        in fact final well before this point; the session reports no completion for it, so
-        the end of the turn is the earliest moment this side can be sure.
-        """
+        """Settle the wording, then finish the audio -- in that order; see close's test."""
         if self._spoken:
             await self._result_sink.deliver_reply_text(
                 ReplyText(reply_id=self._reply_id, speech_text=self._spoken, done=True),

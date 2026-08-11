@@ -4,12 +4,7 @@ from typing import Any, Protocol
 
 
 class TurnObserver(Protocol):
-    """What a realtime session reports while a turn runs.
-
-    Named in the dialogue layer's terms rather than a vendor's event names, so swapping
-    providers never reaches orchestration. The adapter calls these; it never imports this
-    module -- it declares the same shape on its own side.
-    """
+    """What a realtime session reports while a turn runs, in this layer's own terms."""
 
     async def heard(self, text: str) -> None:
         """The model reported what the user said."""
