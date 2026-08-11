@@ -3,7 +3,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session
 
 from timeflow.business.calendar.contracts import (
@@ -68,6 +68,38 @@ class ScheduleRepository:
             statement = statement.where(Schedule.status == ScheduleStatus.ACTIVE.value)
         statement = statement.order_by(Schedule.start_time, Schedule.created_at, Schedule.id)
 
+        return tuple(_to_schedule_snapshot(model) for model in self._session.scalars(statement))
+
+    def list_schedule_candidates(
+        self,
+        *,
+        account_id: str,
+        starts_at_or_after: datetime | None,
+        starts_before: datetime | None,
+        include_deleted: bool = False,
+    ) -> tuple[ScheduleSnapshot, ...]:
+        """Coarsely filter one-time rows and possible recurring matches.
+
+        PostgreSQL never parses RRULE. One-time rows are bounded directly by
+        their start, while recurring rows remain candidates when their series
+        started before the exclusive query end. The application service makes
+        the final occurrence and override decision.
+        """
+        once_filters = [Schedule.schedule_kind == ScheduleKind.ONCE.value]
+        recurring_filters = [Schedule.schedule_kind == ScheduleKind.RECURRING.value]
+        if starts_at_or_after is not None:
+            once_filters.append(Schedule.start_time >= starts_at_or_after)
+        if starts_before is not None:
+            once_filters.append(Schedule.start_time < starts_before)
+            recurring_filters.append(Schedule.start_time < starts_before)
+
+        statement = select(Schedule).where(
+            Schedule.account_id == account_id,
+            or_(and_(*once_filters), and_(*recurring_filters)),
+        )
+        if not include_deleted:
+            statement = statement.where(Schedule.status == ScheduleStatus.ACTIVE.value)
+        statement = statement.order_by(Schedule.start_time, Schedule.created_at, Schedule.id)
         return tuple(_to_schedule_snapshot(model) for model in self._session.scalars(statement))
 
     def update_schedule(

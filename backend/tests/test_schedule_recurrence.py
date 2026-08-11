@@ -14,6 +14,7 @@ from timeflow.business.calendar import (
 from timeflow.business.calendar.recurrence import (
     InvalidRecurrenceRuleError,
     first_active_occurrence_on_or_after_local_date,
+    first_occurrence_in_window,
     normalize_recurrence_rule,
     parse_recurrence_rule,
     truncate_rule_before_occurrence,
@@ -143,3 +144,43 @@ def test_shanghai_occurrence_keeps_its_non_dst_wall_time() -> None:
 
     assert occurrence == datetime(2026, 8, 17, 2, tzinfo=UTC)
     assert occurrence.astimezone(timezone).hour == 10
+
+
+def test_occurrence_window_is_lower_inclusive_and_upper_exclusive() -> None:
+    schedule = _recurring_schedule(
+        timezone="Asia/Shanghai",
+        start_time=datetime(2026, 8, 3, 2, tzinfo=UTC),
+    )
+
+    at_lower = first_occurrence_in_window(
+        schedule,
+        starts_at_or_after=datetime(2026, 8, 17, 2, tzinfo=UTC),
+        starts_before=datetime(2026, 8, 24, 2, tzinfo=UTC),
+        excluded_occurrence_starts=frozenset(),
+    )
+    before_upper = first_occurrence_in_window(
+        schedule,
+        starts_at_or_after=None,
+        starts_before=datetime(2026, 8, 17, 2, tzinfo=UTC),
+        excluded_occurrence_starts=frozenset(),
+    )
+
+    assert at_lower == datetime(2026, 8, 17, 2, tzinfo=UTC)
+    assert before_upper == datetime(2026, 8, 10, 2, tzinfo=UTC)
+
+
+def test_occurrence_window_skips_overridden_starts_without_replaying_history() -> None:
+    schedule = _recurring_schedule(
+        timezone="Asia/Shanghai",
+        start_time=datetime(2026, 8, 3, 2, tzinfo=UTC),
+    )
+    overridden = datetime(2026, 8, 17, 2, tzinfo=UTC)
+
+    occurrence = first_occurrence_in_window(
+        schedule,
+        starts_at_or_after=overridden,
+        starts_before=datetime(2026, 8, 31, 2, tzinfo=UTC),
+        excluded_occurrence_starts=frozenset({overridden}),
+    )
+
+    assert occurrence == datetime(2026, 8, 24, 2, tzinfo=UTC)

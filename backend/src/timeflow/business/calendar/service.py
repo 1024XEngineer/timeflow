@@ -37,6 +37,7 @@ from timeflow.business.calendar.recurrence import (
     InvalidRecurrenceRuleError,
     InvalidTimezoneKeyError,
     first_active_occurrence_on_or_after_local_date,
+    first_occurrence_in_window,
     get_schedule_timezone,
     normalize_recurrence_rule,
     parse_recurrence_rule,
@@ -184,13 +185,22 @@ class ScheduleApplicationService(ScheduleAgentService):
         """Return account-scoped schedules matching every supplied criterion."""
         _validate_account_id(account_id)
         _validate_query(query)
+        has_time_window = query.starts_at_or_after is not None or query.starts_before is not None
 
         with self._unit_of_work_factory() as unit_of_work:
             if query.schedule_id is None:
-                candidates = unit_of_work.schedules.list_schedules(
-                    account_id=account_id,
-                    include_deleted=query.include_deleted,
-                )
+                if has_time_window:
+                    candidates = unit_of_work.schedules.list_schedule_candidates(
+                        account_id=account_id,
+                        starts_at_or_after=query.starts_at_or_after,
+                        starts_before=query.starts_before,
+                        include_deleted=query.include_deleted,
+                    )
+                else:
+                    candidates = unit_of_work.schedules.list_schedules(
+                        account_id=account_id,
+                        include_deleted=query.include_deleted,
+                    )
             else:
                 match = unit_of_work.schedules.get_schedule(
                     account_id=account_id,
@@ -198,32 +208,38 @@ class ScheduleApplicationService(ScheduleAgentService):
                     include_deleted=query.include_deleted,
                 )
                 candidates = () if match is None else (match,)
+            candidates = tuple(
+                schedule for schedule in candidates if _matches_static_query(schedule, query)
+            )
+            if not has_time_window:
+                return ScheduleSearchResult(schedules=candidates)
 
-        title = None if query.title is None else query.title.casefold()
-        location = None if query.location_name is None else query.location_name.casefold()
-        matches = tuple(
-            schedule
-            for schedule in candidates
-            if (title is None or title in schedule.title.casefold())
-            and (
-                location is None
-                or (
-                    schedule.location_name is not None
-                    and location in schedule.location_name.casefold()
+            recurring_ids = {
+                schedule.id
+                for schedule in candidates
+                if schedule.schedule_kind is ScheduleKind.RECURRING
+            }
+            overrides_by_schedule: dict[str, list[ScheduleOccurrenceOverrideSnapshot]] = {
+                schedule_id: [] for schedule_id in recurring_ids
+            }
+            if recurring_ids:
+                for override in unit_of_work.schedules.list_occurrence_overrides(
+                    account_id=account_id
+                ):
+                    if override.schedule_id in overrides_by_schedule:
+                        overrides_by_schedule[override.schedule_id].append(override)
+
+            matches = tuple(
+                schedule
+                for schedule in candidates
+                if _has_effective_occurrence_in_window(
+                    unit_of_work.schedules,
+                    account_id=account_id,
+                    schedule=schedule,
+                    query=query,
+                    overrides=tuple(overrides_by_schedule.get(schedule.id, ())),
                 )
             )
-            and (
-                query.starts_at_or_after is None
-                or (
-                    schedule.start_time is not None
-                    and schedule.start_time >= query.starts_at_or_after
-                )
-            )
-            and (
-                query.starts_before is None
-                or (schedule.start_time is not None and schedule.start_time < query.starts_before)
-            )
-        )
         return ScheduleSearchResult(schedules=matches)
 
     def update_schedule(
@@ -244,10 +260,11 @@ class ScheduleApplicationService(ScheduleAgentService):
                 schedule_id=command.schedule_id,
             )
             candidate = replace(current, **command.changes, updated_at=now)
-            candidate = replace(
-                candidate,
-                recurrence_rule=_normalize_optional_recurrence_rule(candidate.recurrence_rule),
-            )
+            if "recurrence_rule" in command.changes:
+                candidate = replace(
+                    candidate,
+                    recurrence_rule=_normalize_optional_recurrence_rule(candidate.recurrence_rule),
+                )
             _validate_snapshot(candidate)
             persisted = _persist_update(
                 unit_of_work.schedules,
@@ -418,6 +435,67 @@ class ScheduleApplicationService(ScheduleAgentService):
         return ScheduleMutationResult(schedules=(persisted,))
 
 
+def _matches_static_query(schedule: ScheduleSnapshot, query: FindSchedulesQuery) -> bool:
+    title = None if query.title is None else query.title.casefold()
+    location = None if query.location_name is None else query.location_name.casefold()
+    return (title is None or title in schedule.title.casefold()) and (
+        location is None
+        or (schedule.location_name is not None and location in schedule.location_name.casefold())
+    )
+
+
+def _has_effective_occurrence_in_window(
+    repository: ScheduleRepositoryPort,
+    *,
+    account_id: str,
+    schedule: ScheduleSnapshot,
+    query: FindSchedulesQuery,
+    overrides: tuple[ScheduleOccurrenceOverrideSnapshot, ...],
+) -> bool:
+    if schedule.schedule_kind is ScheduleKind.ONCE:
+        return _start_is_in_window(schedule.start_time, query)
+
+    excluded_starts = frozenset(override.occurrence_start for override in overrides)
+    for override in overrides:
+        if (
+            override.action is not OccurrenceOverrideAction.REPLACE
+            or override.replacement_schedule_id is None
+        ):
+            continue
+        replacement = repository.get_schedule(
+            account_id=account_id,
+            schedule_id=override.replacement_schedule_id,
+        )
+        if replacement is not None and _start_is_in_window(replacement.start_time, query):
+            return True
+
+    try:
+        occurrence = first_occurrence_in_window(
+            schedule,
+            starts_at_or_after=query.starts_at_or_after,
+            starts_before=query.starts_before,
+            excluded_occurrence_starts=excluded_starts,
+        )
+    except InvalidTimezoneKeyError:
+        _invalid_timezone(schedule.timezone)
+    except InvalidRecurrenceRuleError:
+        _raise_business_error(
+            ScheduleErrorCode.VALIDATION_FAILED,
+            "The persisted recurrence_rule cannot be expanded.",
+            schedule_id=schedule.id,
+            field="recurrence_rule",
+        )
+    return occurrence is not None
+
+
+def _start_is_in_window(start_time: datetime | None, query: FindSchedulesQuery) -> bool:
+    if start_time is None:
+        return False
+    return (query.starts_at_or_after is None or start_time >= query.starts_at_or_after) and (
+        query.starts_before is None or start_time < query.starts_before
+    )
+
+
 def _persist_update(
     repository: ScheduleRepositoryPort,
     snapshot: ScheduleSnapshot,
@@ -571,10 +649,33 @@ def _validate_snapshot(snapshot: ScheduleSnapshot) -> None:
     if snapshot.end_time is not None:
         if snapshot.start_time is None or snapshot.end_time <= snapshot.start_time:
             _validation_error("end_time must be later than start_time", field="end_time")
-    if snapshot.is_all_day and (
-        snapshot.schedule_type is not ScheduleType.TIME or snapshot.end_time is None
-    ):
-        _validation_error("all-day schedules require an exclusive end_time", field="end_time")
+    if snapshot.is_all_day:
+        if (
+            snapshot.schedule_type is not ScheduleType.TIME
+            or snapshot.start_time is None
+            or snapshot.end_time is None
+        ):
+            _validation_error(
+                "all-day schedules require time-schedule date boundaries",
+                field="end_time",
+            )
+        local_start = snapshot.start_time.astimezone(timezone)
+        local_end = snapshot.end_time.astimezone(timezone)
+        if not _is_local_midnight(local_start):
+            _validation_error(
+                "all-day start_time must be local midnight",
+                field="start_time",
+            )
+        if not _is_local_midnight(local_end):
+            _validation_error(
+                "all-day end_time must be local midnight",
+                field="end_time",
+            )
+        if local_end.date() <= local_start.date():
+            _validation_error(
+                "all-day end date must be later than its start date",
+                field="end_time",
+            )
 
     if snapshot.schedule_kind is ScheduleKind.ONCE:
         if snapshot.recurrence_rule is not None:
@@ -669,6 +770,10 @@ def _validate_reminder(snapshot: ScheduleSnapshot) -> None:
 def _validate_optional_datetime(value: datetime | None, field: str) -> None:
     if value is not None and (value.tzinfo is None or value.utcoffset() is None):
         _validation_error(f"{field} must include a UTC offset", field=field)
+
+
+def _is_local_midnight(value: datetime) -> bool:
+    return (value.hour, value.minute, value.second, value.microsecond) == (0, 0, 0, 0)
 
 
 def _aware_now(clock: Callable[[], datetime]) -> datetime:

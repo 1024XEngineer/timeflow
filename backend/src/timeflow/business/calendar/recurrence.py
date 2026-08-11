@@ -81,6 +81,47 @@ def first_active_occurrence_on_or_after_local_date(
     return None if occurrence is None else occurrence.astimezone(UTC)
 
 
+def first_occurrence_in_window(
+    schedule: ScheduleSnapshot,
+    *,
+    starts_at_or_after: datetime | None,
+    starts_before: datetime | None,
+    excluded_occurrence_starts: frozenset[datetime],
+) -> datetime | None:
+    """Find one non-overridden occurrence in a half-open query window.
+
+    ``after``/``before`` jump directly to the window edge. Iteration advances
+    only when that occurrence has an override, rather than replaying history
+    from the schedule start.
+    """
+    if schedule.start_time is None or schedule.recurrence_rule is None:
+        return None
+    timezone = get_schedule_timezone(schedule.timezone)
+    local_start = schedule.start_time.astimezone(timezone)
+    rule = parse_recurrence_rule(schedule.recurrence_rule, start_time=local_start)
+    local_lower = None if starts_at_or_after is None else starts_at_or_after.astimezone(timezone)
+    local_upper = None if starts_before is None else starts_before.astimezone(timezone)
+
+    if local_lower is not None:
+        occurrence = rule.after(local_lower, inc=True)
+        while occurrence is not None and (local_upper is None or occurrence < local_upper):
+            utc_occurrence = occurrence.astimezone(UTC)
+            if utc_occurrence not in excluded_occurrence_starts:
+                return utc_occurrence
+            occurrence = rule.after(occurrence, inc=False)
+        return None
+
+    if local_upper is None:
+        return None
+    occurrence = rule.before(local_upper, inc=False)
+    while occurrence is not None and occurrence >= local_start:
+        utc_occurrence = occurrence.astimezone(UTC)
+        if utc_occurrence not in excluded_occurrence_starts:
+            return utc_occurrence
+        occurrence = rule.before(occurrence, inc=False)
+    return None
+
+
 def truncate_rule_before_occurrence(
     schedule: ScheduleSnapshot,
     occurrence: datetime,
@@ -111,6 +152,7 @@ __all__ = [
     "InvalidRecurrenceRuleError",
     "InvalidTimezoneKeyError",
     "first_active_occurrence_on_or_after_local_date",
+    "first_occurrence_in_window",
     "get_schedule_timezone",
     "normalize_recurrence_rule",
     "parse_recurrence_rule",

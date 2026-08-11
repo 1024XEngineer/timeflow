@@ -1,6 +1,7 @@
 """Persistence abstractions owned by the schedule business layer."""
 
 from collections.abc import Callable
+from datetime import datetime
 from types import TracebackType
 from typing import Protocol, Self
 
@@ -48,6 +49,15 @@ class ScheduleRepositoryPort(Protocol):
         self,
         *,
         account_id: str,
+        include_deleted: bool = False,
+    ) -> tuple[ScheduleSnapshot, ...]: ...
+
+    def list_schedule_candidates(
+        self,
+        *,
+        account_id: str,
+        starts_at_or_after: datetime | None,
+        starts_before: datetime | None,
         include_deleted: bool = False,
     ) -> tuple[ScheduleSnapshot, ...]: ...
 

@@ -126,6 +126,45 @@ def test_postgres_repository_reports_conflict_and_preserves_account_isolation(
     assert persisted.revision == 5
 
 
+def test_postgres_schedule_candidates_keep_old_recurring_series_and_bound_once_rows(
+    postgres_session: Session,
+) -> None:
+    """PostgreSQL performs only the safe coarse filter needed before RRULE expansion."""
+    _seed_account(postgres_session, "account-a")
+    _seed_account(postgres_session, "account-b")
+    repository = ScheduleRepository(postgres_session)
+    lower = datetime(2026, 8, 17, tzinfo=UTC)
+    upper = datetime(2026, 8, 18, tzinfo=UTC)
+    recurring = replace(
+        _schedule("recurring-old", "account-a"),
+        schedule_kind=ScheduleKind.RECURRING,
+        start_time=datetime(2026, 8, 3, 2, tzinfo=UTC),
+        recurrence_rule="FREQ=WEEKLY;BYDAY=MO",
+    )
+    rows = (
+        recurring,
+        replace(_schedule("once-inside", "account-a"), start_time=lower),
+        replace(_schedule("once-at-end", "account-a"), start_time=upper),
+        replace(
+            _schedule("deleted-inside", "account-a"),
+            start_time=lower,
+            status=ScheduleStatus.DELETED,
+            deleted_at=lower,
+        ),
+        replace(_schedule("other-account", "account-b"), start_time=lower),
+    )
+    for row in rows:
+        repository.add_schedule(row)
+
+    candidates = repository.list_schedule_candidates(
+        account_id="account-a",
+        starts_at_or_after=lower,
+        starts_before=upper,
+    )
+
+    assert [schedule.id for schedule in candidates] == ["recurring-old", "once-inside"]
+
+
 def test_postgres_repository_updates_one_unique_occurrence_override(
     postgres_session: Session,
 ) -> None:

@@ -80,6 +80,34 @@ class _Repository:
             and (include_deleted or snapshot.status is ScheduleStatus.ACTIVE)
         )
 
+    def list_schedule_candidates(
+        self,
+        *,
+        account_id: str,
+        starts_at_or_after: datetime | None,
+        starts_before: datetime | None,
+        include_deleted: bool = False,
+    ) -> tuple[ScheduleSnapshot, ...]:
+        schedules = self.list_schedules(
+            account_id=account_id,
+            include_deleted=include_deleted,
+        )
+        return tuple(
+            schedule
+            for schedule in schedules
+            if (
+                schedule.schedule_kind is ScheduleKind.RECURRING
+                and schedule.start_time is not None
+                and (starts_before is None or schedule.start_time < starts_before)
+            )
+            or (
+                schedule.schedule_kind is ScheduleKind.ONCE
+                and schedule.start_time is not None
+                and (starts_at_or_after is None or schedule.start_time >= starts_at_or_after)
+                and (starts_before is None or schedule.start_time < starts_before)
+            )
+        )
+
     def update_schedule(
         self,
         *,
@@ -223,6 +251,23 @@ def _time_command(
     )
 
 
+def _all_day_command(
+    *,
+    timezone: str,
+    start_time: datetime,
+    end_time: datetime,
+) -> CreateScheduleCommand:
+    return CreateScheduleCommand(
+        schedule_type=ScheduleType.TIME,
+        schedule_kind=ScheduleKind.ONCE,
+        title="All-day event",
+        timezone=timezone,
+        is_all_day=True,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+
 def _assert_error(
     expected: ScheduleErrorCode,
     operation: Callable[[], object],
@@ -231,6 +276,26 @@ def _assert_error(
         operation()
     assert raised.value.code is expected
     return raised.value
+
+
+def _add_override(
+    store: _Store,
+    *,
+    override_id: str,
+    schedule_id: str,
+    occurrence_start: datetime,
+    action: OccurrenceOverrideAction,
+    replacement_schedule_id: str | None = None,
+) -> None:
+    store.overrides[override_id] = ScheduleOccurrenceOverrideSnapshot(
+        id=override_id,
+        schedule_id=schedule_id,
+        occurrence_start=occurrence_start,
+        action=action,
+        replacement_schedule_id=replacement_schedule_id,
+        created_at=NOW,
+        updated_at=NOW,
+    )
 
 
 def test_create_schedule_returns_the_committed_cloud_snapshot() -> None:
@@ -340,6 +405,80 @@ def test_create_schedule_accepts_location_recurring_and_reminder_shapes() -> Non
     assert recurring_result.schedules[0].schedule_kind is ScheduleKind.RECURRING
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        _all_day_command(
+            timezone="Asia/Shanghai",
+            start_time=datetime(2026, 8, 16, 16, tzinfo=UTC),
+            end_time=datetime(2026, 8, 17, 16, tzinfo=UTC),
+        ),
+        _all_day_command(
+            timezone="Asia/Shanghai",
+            start_time=datetime(2026, 8, 16, 16, tzinfo=UTC),
+            end_time=datetime(2026, 8, 20, 16, tzinfo=UTC),
+        ),
+        _all_day_command(
+            timezone="America/New_York",
+            start_time=datetime(2026, 3, 8, 5, tzinfo=UTC),
+            end_time=datetime(2026, 3, 9, 4, tzinfo=UTC),
+        ),
+    ],
+)
+def test_create_schedule_accepts_local_all_day_boundaries(
+    command: CreateScheduleCommand,
+) -> None:
+    service, _ = _service()
+
+    result = service.create_schedule(account_id="account-a", command=command)
+
+    assert result.schedules[0].is_all_day is True
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        _all_day_command(
+            timezone="Asia/Shanghai",
+            start_time=datetime(2026, 8, 17, 2, tzinfo=UTC),
+            end_time=datetime(2026, 8, 17, 16, tzinfo=UTC),
+        ),
+        _all_day_command(
+            timezone="Asia/Shanghai",
+            start_time=datetime(2026, 8, 16, 16, tzinfo=UTC),
+            end_time=datetime(2026, 8, 17, 3, tzinfo=UTC),
+        ),
+        _all_day_command(
+            timezone="Asia/Shanghai",
+            start_time=datetime(2026, 8, 16, 16, tzinfo=UTC),
+            end_time=datetime(2026, 8, 16, 16, tzinfo=UTC),
+        ),
+        CreateScheduleCommand(
+            schedule_type=ScheduleType.LOCATION,
+            schedule_kind=ScheduleKind.ONCE,
+            title="Invalid all-day location",
+            timezone="Asia/Shanghai",
+            is_all_day=True,
+            start_time=datetime(2026, 8, 16, 16, tzinfo=UTC),
+            end_time=datetime(2026, 8, 17, 16, tzinfo=UTC),
+            latitude=31.2304,
+            longitude=121.4737,
+        ),
+    ],
+)
+def test_create_schedule_rejects_non_boundary_all_day_values(
+    command: CreateScheduleCommand,
+) -> None:
+    service, store = _service()
+
+    _assert_error(
+        ScheduleErrorCode.VALIDATION_FAILED,
+        lambda: service.create_schedule(account_id="account-a", command=command),
+    )
+
+    assert store.schedules == {}
+
+
 @pytest.mark.parametrize("timezone", ["UTC", "Asia/Shanghai", "America/New_York"])
 def test_create_schedule_accepts_valid_iana_timezones(timezone: str) -> None:
     service, _ = _service()
@@ -433,6 +572,238 @@ def test_find_schedules_filters_without_leaking_other_accounts_or_deleted_rows()
     assert with_deleted.schedules[0].status is ScheduleStatus.DELETED
 
 
+def test_find_schedules_filters_one_time_occurrences_by_half_open_window() -> None:
+    service, _ = _service()
+    inside = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(start_time=datetime(2026, 8, 17, 1, tzinfo=UTC)),
+    ).schedules[0]
+    service.create_schedule(
+        account_id="account-a",
+        command=_time_command(start_time=datetime(2026, 8, 18, 1, tzinfo=UTC)),
+    )
+    query = FindSchedulesQuery(
+        starts_at_or_after=datetime(2026, 8, 16, 16, tzinfo=UTC),
+        starts_before=datetime(2026, 8, 17, 16, tzinfo=UTC),
+    )
+
+    result = service.find_schedules(account_id="account-a", query=query)
+
+    assert result.schedules == (inside,)
+
+
+def test_find_schedules_expands_recurring_occurrences_only_in_query_window() -> None:
+    service, _ = _service()
+    recurring = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(
+            start_time=datetime(2026, 8, 3, 1, tzinfo=UTC),
+            schedule_kind=ScheduleKind.RECURRING,
+            recurrence_rule="FREQ=WEEKLY;BYDAY=MO",
+        ),
+    ).schedules[0]
+
+    august_17 = service.find_schedules(
+        account_id="account-a",
+        query=FindSchedulesQuery(
+            starts_at_or_after=datetime(2026, 8, 16, 16, tzinfo=UTC),
+            starts_before=datetime(2026, 8, 17, 16, tzinfo=UTC),
+        ),
+    )
+    august_18 = service.find_schedules(
+        account_id="account-a",
+        query=FindSchedulesQuery(
+            starts_at_or_after=datetime(2026, 8, 17, 16, tzinfo=UTC),
+            starts_before=datetime(2026, 8, 18, 16, tzinfo=UTC),
+        ),
+    )
+
+    assert august_17.schedules == (recurring,)
+    assert august_18.schedules == ()
+
+
+def test_find_schedules_excludes_a_cancelled_recurring_occurrence() -> None:
+    service, store = _service()
+    recurring = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(
+            start_time=datetime(2026, 8, 3, 1, tzinfo=UTC),
+            schedule_kind=ScheduleKind.RECURRING,
+            recurrence_rule="FREQ=WEEKLY;BYDAY=MO",
+        ),
+    ).schedules[0]
+    _add_override(
+        store,
+        override_id="cancel-august-17",
+        schedule_id=recurring.id,
+        occurrence_start=datetime(2026, 8, 17, 1, tzinfo=UTC),
+        action=OccurrenceOverrideAction.CANCEL,
+    )
+
+    result = service.find_schedules(
+        account_id="account-a",
+        query=FindSchedulesQuery(
+            starts_at_or_after=datetime(2026, 8, 16, 16, tzinfo=UTC),
+            starts_before=datetime(2026, 8, 17, 16, tzinfo=UTC),
+        ),
+    )
+
+    assert result.schedules == ()
+
+
+def test_find_schedules_uses_same_day_replacement_effective_time() -> None:
+    service, store = _service()
+    recurring = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(
+            start_time=datetime(2026, 8, 3, 1, tzinfo=UTC),
+            schedule_kind=ScheduleKind.RECURRING,
+            recurrence_rule="FREQ=WEEKLY;BYDAY=MO",
+        ),
+    ).schedules[0]
+    replacement = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(start_time=datetime(2026, 8, 17, 6, tzinfo=UTC)),
+    ).schedules[0]
+    _add_override(
+        store,
+        override_id="replace-august-17",
+        schedule_id=recurring.id,
+        occurrence_start=datetime(2026, 8, 17, 1, tzinfo=UTC),
+        action=OccurrenceOverrideAction.REPLACE,
+        replacement_schedule_id=replacement.id,
+    )
+
+    effective_window = service.find_schedules(
+        account_id="account-a",
+        query=FindSchedulesQuery(
+            starts_at_or_after=datetime(2026, 8, 17, 5, tzinfo=UTC),
+            starts_before=datetime(2026, 8, 17, 7, tzinfo=UTC),
+        ),
+    )
+    original_window = service.find_schedules(
+        account_id="account-a",
+        query=FindSchedulesQuery(
+            starts_at_or_after=datetime(2026, 8, 17, 0, tzinfo=UTC),
+            starts_before=datetime(2026, 8, 17, 2, tzinfo=UTC),
+        ),
+    )
+
+    assert recurring in effective_window.schedules
+    assert recurring not in original_window.schedules
+
+
+def test_find_schedules_includes_replacement_that_crosses_into_window() -> None:
+    service, store = _service()
+    recurring = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(
+            start_time=datetime(2026, 8, 2, 1, tzinfo=UTC),
+            schedule_kind=ScheduleKind.RECURRING,
+            recurrence_rule="FREQ=WEEKLY;BYDAY=SU",
+        ),
+    ).schedules[0]
+    replacement = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(start_time=datetime(2026, 8, 17, 6, tzinfo=UTC)),
+    ).schedules[0]
+    _add_override(
+        store,
+        override_id="replace-cross-in",
+        schedule_id=recurring.id,
+        occurrence_start=datetime(2026, 8, 16, 1, tzinfo=UTC),
+        action=OccurrenceOverrideAction.REPLACE,
+        replacement_schedule_id=replacement.id,
+    )
+
+    result = service.find_schedules(
+        account_id="account-a",
+        query=FindSchedulesQuery(
+            starts_at_or_after=datetime(2026, 8, 16, 16, tzinfo=UTC),
+            starts_before=datetime(2026, 8, 17, 16, tzinfo=UTC),
+        ),
+    )
+
+    assert recurring in result.schedules
+
+
+def test_find_schedules_excludes_replacement_that_crosses_out_of_window() -> None:
+    service, store = _service()
+    recurring = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(
+            start_time=datetime(2026, 8, 3, 1, tzinfo=UTC),
+            schedule_kind=ScheduleKind.RECURRING,
+            recurrence_rule="FREQ=WEEKLY;BYDAY=MO",
+        ),
+    ).schedules[0]
+    replacement = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(start_time=datetime(2026, 8, 18, 6, tzinfo=UTC)),
+    ).schedules[0]
+    _add_override(
+        store,
+        override_id="replace-cross-out",
+        schedule_id=recurring.id,
+        occurrence_start=datetime(2026, 8, 17, 1, tzinfo=UTC),
+        action=OccurrenceOverrideAction.REPLACE,
+        replacement_schedule_id=replacement.id,
+    )
+
+    result = service.find_schedules(
+        account_id="account-a",
+        query=FindSchedulesQuery(
+            starts_at_or_after=datetime(2026, 8, 16, 16, tzinfo=UTC),
+            starts_before=datetime(2026, 8, 17, 16, tzinfo=UTC),
+        ),
+    )
+
+    assert recurring not in result.schedules
+
+
+def test_find_schedules_preserves_dst_and_non_dst_wall_times() -> None:
+    service, _ = _service()
+    new_york = service.create_schedule(
+        account_id="account-a",
+        command=replace(
+            _time_command(
+                title="New York weekly",
+                start_time=datetime(2026, 1, 5, 14, tzinfo=UTC),
+                schedule_kind=ScheduleKind.RECURRING,
+                recurrence_rule="FREQ=WEEKLY;BYDAY=MO",
+            ),
+            timezone="America/New_York",
+        ),
+    ).schedules[0]
+    shanghai = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(
+            title="Shanghai weekly",
+            start_time=datetime(2026, 8, 3, 1, tzinfo=UTC),
+            schedule_kind=ScheduleKind.RECURRING,
+            recurrence_rule="FREQ=WEEKLY;BYDAY=MO",
+        ),
+    ).schedules[0]
+
+    new_york_result = service.find_schedules(
+        account_id="account-a",
+        query=FindSchedulesQuery(
+            starts_at_or_after=datetime(2026, 3, 9, 12, tzinfo=UTC),
+            starts_before=datetime(2026, 3, 9, 14, tzinfo=UTC),
+        ),
+    )
+    shanghai_result = service.find_schedules(
+        account_id="account-a",
+        query=FindSchedulesQuery(
+            starts_at_or_after=datetime(2026, 8, 17, 0, tzinfo=UTC),
+            starts_before=datetime(2026, 8, 17, 2, tzinfo=UTC),
+        ),
+    )
+
+    assert new_york in new_york_result.schedules
+    assert shanghai in shanghai_result.schedules
+
+
 def test_update_schedule_applies_patch_and_translates_revision_conflict() -> None:
     service, store = _service(now=NOW)
     created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
@@ -457,6 +828,49 @@ def test_update_schedule_applies_patch_and_translates_revision_conflict() -> Non
     assert updated.updated_at == later
     assert conflict.field == "expected_revision"
     assert store.schedules[created.id] == updated
+
+
+def test_update_preserves_unmentioned_recurrence_rule_byte_for_byte() -> None:
+    service, store = _service()
+    created = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(
+            schedule_kind=ScheduleKind.RECURRING,
+            recurrence_rule="FREQ=WEEKLY;BYDAY=MO",
+        ),
+    ).schedules[0]
+    legacy_rule = "RRULE:FREQ=WEEKLY;BYDAY=MO"
+    store.schedules[created.id] = replace(created, recurrence_rule=legacy_rule)
+
+    updated = service.update_schedule(
+        account_id="account-a",
+        command=UpdateScheduleCommand(created.id, 1, {"title": "项目周会"}),
+    ).schedules[0]
+
+    assert updated.title == "项目周会"
+    assert updated.recurrence_rule == legacy_rule
+
+
+def test_update_normalizes_explicit_recurrence_rule_change() -> None:
+    service, _ = _service()
+    created = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(
+            schedule_kind=ScheduleKind.RECURRING,
+            recurrence_rule="FREQ=WEEKLY;BYDAY=MO",
+        ),
+    ).schedules[0]
+
+    updated = service.update_schedule(
+        account_id="account-a",
+        command=UpdateScheduleCommand(
+            created.id,
+            1,
+            {"recurrence_rule": "RRULE:FREQ=DAILY"},
+        ),
+    ).schedules[0]
+
+    assert updated.recurrence_rule == "FREQ=DAILY"
 
 
 def test_update_rejects_empty_or_protected_patch_without_writing() -> None:
