@@ -11,5 +11,5 @@ uv lock --check
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy
-uv run pytest
+uv run pytest --cov --cov-report=term-missing --cov-report=xml --cov-fail-under=80
 uv run alembic heads

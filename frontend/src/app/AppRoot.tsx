@@ -1,14 +1,17 @@
 import { StatusBar } from 'expo-status-bar';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { colors, spacing } from '../constants/theme';
+import { colors, spacing } from '../shared/ui/theme';
+import { AppProviders } from './AppProviders';
 
-export function HomeScreen() {
+export function AppRoot() {
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Timeflow</Text>
-      <StatusBar style="auto" />
-    </View>
+    <AppProviders>
+      <View style={styles.container}>
+        <Text style={styles.title}>Timeflow</Text>
+        <StatusBar style="auto" />
+      </View>
+    </AppProviders>
   );
 }
 

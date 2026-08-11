@@ -1,0 +1,73 @@
+import type { LocalReminderSchedule } from '../../domain';
+
+const MOCK_RUNTIME = {
+  reminder_disposition_state: null,
+  next_trigger_at: '2026-08-07T01:00:00.000Z',
+  snoozed_until: null,
+  geofence_armed: false,
+  disposition_updated_at: null,
+  sync_status: 'synced' as const,
+  recorded_location: null,
+};
+
+/** 接入本地数据库读取器前使用的固定快照。 */
+export const MOCK_REMINDER_SCHEDULES: readonly LocalReminderSchedule[] = [
+  {
+    id: 'mock-schedule-time-001',
+    account_id: 'mock-account-001',
+    title: '项目例会',
+    schedule_type: 'time',
+    schedule_kind: 'once',
+    is_all_day: false,
+    start_time: '2026-08-07T01:15:00.000Z',
+    end_time: null,
+    timezone: 'Asia/Shanghai',
+    recurrence_rule: null,
+    location_name: '203 会议室',
+    latitude: null,
+    longitude: null,
+    geofence_radius_meters: 100,
+    reminder: {
+      reminder_type: 'before_start',
+      reminder_trigger_at: null,
+      reminder_offset_minutes: 15,
+      reminder_strength: 'medium',
+    },
+    runtime: { ...MOCK_RUNTIME },
+    status: 'active',
+    revision: 1,
+    cloud_revision: 1,
+    updated_at: '2026-08-06T09:00:00.000Z',
+  },
+  {
+    id: 'mock-schedule-location-001',
+    account_id: 'mock-account-001',
+    title: '取车提醒',
+    schedule_type: 'location',
+    schedule_kind: 'once',
+    is_all_day: false,
+    start_time: null,
+    end_time: null,
+    timezone: 'Asia/Shanghai',
+    recurrence_rule: null,
+    location_name: '停车场',
+    latitude: 31.2304,
+    longitude: 121.4737,
+    geofence_radius_meters: 100,
+    reminder: {
+      reminder_type: 'return_to_recorded_location',
+      reminder_trigger_at: null,
+      reminder_offset_minutes: null,
+      reminder_strength: 'high',
+    },
+    runtime: {
+      ...MOCK_RUNTIME,
+      next_trigger_at: null,
+      recorded_location: { latitude: 31.2304, longitude: 121.4737 },
+    },
+    status: 'active',
+    revision: 1,
+    cloud_revision: 1,
+    updated_at: '2026-08-06T09:00:00.000Z',
+  },
+];
