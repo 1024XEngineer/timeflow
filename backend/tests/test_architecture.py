@@ -1,7 +1,11 @@
 """Static dependency checks enforcing the direction between layers."""
 
 import ast
+from dataclasses import FrozenInstanceError, fields, is_dataclass
 from pathlib import Path
+from typing import Any, get_args
+
+from timeflow.intelligence.conversation import asr
 
 VENDOR_MODEL_SDKS = ("openai", "dashscope")
 TRANSPORT_LIBRARIES = ("websockets", "httpx", "httpx2")
@@ -53,7 +57,6 @@ FORBIDDEN_IMPORTS: dict[str, frozenset[str]] = {
             "timeflow.business",
             "timeflow.data",
             "timeflow.gateway",
-            "timeflow.intelligence",
         }
     ),
     # A.5: orchestration through ports; no frameworks, no direct SDK or database access.
@@ -64,8 +67,10 @@ FORBIDDEN_IMPORTS: dict[str, frozenset[str]] = {
             "sqlalchemy",
             "openai",
             "dashscope",
+            *TRANSPORT_LIBRARIES,
             "timeflow.data",
             "timeflow.gateway",
+            "timeflow.infrastructure",
         }
     ),
 }
@@ -118,3 +123,59 @@ def test_gateway_does_not_import_vendor_adapters() -> None:
     violations = _violations("gateway", frozenset({"timeflow.infrastructure"}))
 
     assert violations == []
+
+
+def test_only_external_infrastructure_imports_intelligence_ports() -> None:
+    """Only external provider adapters may implement intelligence-owned ports."""
+    violations: list[str] = []
+    infrastructure_root = PACKAGE_ROOT / "infrastructure"
+    for path in sorted(infrastructure_root.rglob("*.py")):
+        relative_path = path.relative_to(infrastructure_root)
+        if relative_path.parts[0] == "external":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for lineno, module in _imported_modules(tree):
+            if module == "timeflow.intelligence" or module.startswith("timeflow.intelligence."):
+                violations.append(f"infrastructure/{relative_path}:{lineno} {module}")
+
+    assert violations == []
+
+
+def test_asr_public_contract_is_provider_neutral() -> None:
+    """The ASR port exposes only provider-neutral events, errors, and stream API."""
+    for event_type in (asr.TranscriptPreview, asr.TranscriptCompleted):
+        assert is_dataclass(event_type)
+        dataclass_type: Any = event_type
+        assert dataclass_type.__slots__ == ("text",)
+        assert [field.name for field in fields(dataclass_type)] == ["text"]
+        instance: Any = dataclass_type("hello")
+        assert instance.text == "hello"
+        try:
+            instance.text = "changed"
+        except FrozenInstanceError:
+            pass
+        else:  # pragma: no cover - assertion branch only runs on regression
+            raise AssertionError(f"{dataclass_type.__name__} must be frozen")
+
+    assert set(get_args(asr.AsrEvent)) == {asr.TranscriptPreview, asr.TranscriptCompleted}
+    assert asr.AsrPort.stream.__annotations__ == {
+        "audio_chunks": "AsyncIterable[bytes]",
+        "return": "AsyncIterator[AsrEvent]",
+    }
+
+    assert issubclass(asr.AsrConnectionError, asr.AsrError)
+    assert issubclass(asr.AsrProtocolError, asr.AsrError)
+    assert issubclass(asr.AsrTranscriptionError, asr.AsrError)
+
+    asr_path = PACKAGE_ROOT / "intelligence" / "conversation" / "asr.py"
+    source = asr_path.read_text(encoding="utf-8")
+    provider_specific_terms = {
+        "item_id",
+        "content_index",
+        "stash",
+        "emotion",
+        "qwen",
+        "base64",
+        "websocket",
+    }
+    assert not any(term in source.lower() for term in provider_specific_terms)
