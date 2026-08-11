@@ -12,20 +12,6 @@ import type {
   ReminderTrigger,
 } from '../../domain';
 
-const MOCK_REGISTRATION: ReminderRegistration = {
-  schedule_id: 'mock-schedule-time-001',
-  time_listener_id: 'mock-time-listener-001',
-  location_listener_id: null,
-  alarm_id: 'mock-alarm-001',
-};
-
-const MOCK_LOCATION_REGISTRATION: ReminderRegistration = {
-  schedule_id: 'mock-schedule-location-001',
-  time_listener_id: null,
-  location_listener_id: 'mock-location-listener-001',
-  alarm_id: null,
-};
-
 const MOCK_DELIVERY: ReminderDeliveryReceipt = {
   delivery_id: 'mock-delivery-001',
   schedule_id: 'mock-schedule-time-001',
@@ -33,6 +19,24 @@ const MOCK_DELIVERY: ReminderDeliveryReceipt = {
   channels: ['system_notification', 'popup', 'vibration'],
   used_fallback_audio: false,
 };
+
+function registrationFor(schedule: LocalReminderSchedule): ReminderRegistration {
+  if (schedule.schedule_type === 'location') {
+    return {
+      schedule_id: schedule.id,
+      time_listener_id: null,
+      location_listener_id: `mock-location-listener-${schedule.id}`,
+      alarm_id: null,
+    };
+  }
+
+  return {
+    schedule_id: schedule.id,
+    time_listener_id: `mock-time-listener-${schedule.id}`,
+    location_listener_id: null,
+    alarm_id: `mock-alarm-${schedule.id}`,
+  };
+}
 
 /** 真实协调器完成前供应用外壳使用的应用门面。 */
 export class MockReminderApplication implements ReminderApplicationPort {
@@ -47,13 +51,12 @@ export class MockReminderApplication implements ReminderApplicationPort {
   }
 
   async register(schedule: LocalReminderSchedule): Promise<ReminderRegistration> {
-    const fixture =
-      schedule.schedule_type === 'location' ? MOCK_LOCATION_REGISTRATION : MOCK_REGISTRATION;
-    return { ...fixture, schedule_id: schedule.id };
+    return registrationFor(schedule);
   }
 
   async rebuild(): Promise<readonly ReminderRegistration[]> {
-    return [MOCK_REGISTRATION, MOCK_LOCATION_REGISTRATION];
+    const schedules = await this.dependencies.schedules.listReminderSchedules();
+    return schedules.map(registrationFor);
   }
 
   async handleTime(_tick: { observed_at: string }): Promise<void> {
