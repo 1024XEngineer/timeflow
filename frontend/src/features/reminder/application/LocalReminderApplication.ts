@@ -2,6 +2,7 @@ import type {
   ReminderApplicationDependencies,
   ReminderApplicationPort,
   ReminderApplicationResult,
+  ReminderConfirmedDisposition,
   ReminderSnoozeRequest,
   LocationMonitorEvent,
   LocationWatchHandle,
@@ -18,6 +19,7 @@ import type {
   ReminderTrigger,
   ReminderTriggerReason,
 } from '../domain';
+import { DEFAULT_SNOOZE_MINUTES } from '../domain';
 import { evaluateGeofence, resolveGeofenceCenter, resolveWatchMode } from '../domain/geofence';
 import {
   isSnoozeActive,
@@ -292,7 +294,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   async confirm(scheduleId: string, confirmedAt: string): Promise<ReminderApplicationResult> {
     await this.teardownDelivery(scheduleId);
 
-    const disposition: ReminderDisposition = {
+    const disposition: ReminderConfirmedDisposition = {
       schedule_id: scheduleId,
       state: 'confirmed',
       updated_at: confirmedAt,
@@ -477,7 +479,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
       await this.confirm(scheduleId, new Date().toISOString());
       return;
     }
-    await this.snooze({ schedule_id: scheduleId, snooze_until: null });
+    await this.snooze({ schedule_id: scheduleId, snooze_minutes: DEFAULT_SNOOZE_MINUTES });
   }
 
   private async handleLocationMonitorEvent(event: LocationMonitorEvent): Promise<void> {
