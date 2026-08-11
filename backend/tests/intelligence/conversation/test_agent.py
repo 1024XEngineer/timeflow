@@ -134,7 +134,34 @@ async def test_run_turn_streams_text_and_completion_without_tools() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_arguments_are_joined_and_result_is_sent_back() -> None:
+async def test_tool_round_text_is_not_exposed_as_agent_text_delta() -> None:
+    tool = RecordingTool(
+        ToolDefinition("schedule_create", "创建日程", {"type": "object"}),
+        result='{"status":"not_implemented"}',
+    )
+    llm = FakeLlm(
+        [
+            [
+                TextDelta("我先处理一下。"),
+                ToolCallDelta(0, "call_1", "schedule_create", "{}"),
+                completed(),
+            ],
+            [TextDelta("日程服务尚未接入。"), completed()],
+        ]
+    )
+
+    events = [
+        event
+        async for event in Agent(llm, ToolRegistry([tool])).run_turn(
+            AgentConversation(), "创建日程"
+        )
+    ]
+
+    assert events == [
+        AgentTextDelta("日程服务尚未接入。"),
+        AgentCompleted(LlmUsage(2, 4, 6)),
+    ]
+
     tool = RecordingTool(
         ToolDefinition(
             "schedule_create",

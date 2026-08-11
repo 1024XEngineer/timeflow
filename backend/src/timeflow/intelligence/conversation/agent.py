@@ -124,6 +124,13 @@ class _ToolCallAccumulator:
         self.argument_parts.append(delta.arguments)
 
 
+@dataclass(slots=True)
+class _TurnResponse:
+    text_parts: list[str] = field(default_factory=list)
+    tool_calls: dict[int, _ToolCallAccumulator] = field(default_factory=dict)
+    completed: LlmStreamCompleted | None = None
+
+
 class Agent:
     """Run serial provider-neutral Function Calling turns."""
 
@@ -153,19 +160,8 @@ class Agent:
         usage_complete = True
 
         while True:
-            accumulators: dict[int, _ToolCallAccumulator] = {}
-            assistant_content: list[str] = []
-            completed: LlmStreamCompleted | None = None
-
-            async for event in self._llm.stream(conversation.messages, self._tools.definitions()):
-                self._collect_llm_event(event, accumulators, assistant_content)
-                if isinstance(event, TextDelta):
-                    yield AgentTextDelta(event.text)
-                elif isinstance(event, LlmStreamCompleted):
-                    if completed is not None:
-                        raise AgentProtocolError("LLM stream completed more than once")
-                    completed = event
-
+            response = await self._collect_response(conversation)
+            completed = response.completed
             if completed is None:
                 raise AgentProtocolError("LLM stream ended without a completion event")
             if completed.usage is None:
@@ -173,19 +169,21 @@ class Agent:
             else:
                 usages.append(completed.usage)
 
-            if not accumulators:
+            if not response.tool_calls:
+                for text in response.text_parts:
+                    yield AgentTextDelta(text)
                 yield AgentCompleted(_sum_usage(usages) if usage_complete else None)
                 return
-            if len(accumulators) != 1:
+            if len(response.tool_calls) != 1:
                 raise AgentProtocolError("Parallel Agent tool calls are not supported")
             if tool_rounds >= self._max_tool_rounds:
                 raise AgentToolRoundLimitError("Agent tool round limit exceeded")
 
-            accumulator = next(iter(accumulators.values()))
+            accumulator = next(iter(response.tool_calls.values()))
             tool_call = _complete_tool_call(accumulator)
             arguments = _parse_tool_arguments(tool_call.arguments)
             assistant_message = AssistantToolCallMessage(
-                content="".join(assistant_content),
+                content="".join(response.text_parts),
                 tool_calls=(tool_call,),
             )
             tool_rounds += 1
@@ -219,6 +217,24 @@ class Agent:
                     ToolResultMessage(tool_call_id=tool_call.call_id, content=result),
                 ]
             )
+
+    async def _collect_response(self, conversation: AgentConversation) -> _TurnResponse:
+        response = _TurnResponse()
+        async for event in self._llm.stream(
+            conversation.messages,
+            self._tools.definitions(),
+        ):
+            if isinstance(event, TextDelta):
+                response.text_parts.append(event.text)
+            elif isinstance(event, ToolCallDelta):
+                response.tool_calls.setdefault(event.index, _ToolCallAccumulator()).add(event)
+            elif isinstance(event, LlmStreamCompleted):
+                if response.completed is not None:
+                    raise AgentProtocolError("LLM stream completed more than once")
+                response.completed = event
+            else:
+                raise AgentProtocolError("Unsupported LLM stream event")
+        return response
 
     @staticmethod
     def _prepare_turn(conversation: AgentConversation, user_text: str) -> None:
