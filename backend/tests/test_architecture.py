@@ -5,7 +5,7 @@ from dataclasses import FrozenInstanceError, fields, is_dataclass
 from pathlib import Path
 from typing import Any, get_args
 
-from timeflow.intelligence.conversation import asr
+from timeflow.intelligence.conversation import asr, llm
 
 VENDOR_MODEL_SDKS = ("openai", "dashscope")
 TRANSPORT_LIBRARIES = ("websockets", "httpx", "httpx2")
@@ -181,3 +181,37 @@ def test_asr_public_contract_is_provider_neutral() -> None:
         "websocket",
     }
     assert not any(term in source.lower() for term in provider_specific_terms)
+
+
+def test_llm_public_contract_is_provider_neutral() -> None:
+    """The LLM port exposes immutable provider-neutral messages and events."""
+    event_types = (llm.TextDelta, llm.ToolCallDelta, llm.LlmUsage, llm.LlmStreamCompleted)
+    for event_type in event_types:
+        assert is_dataclass(event_type)
+        dataclass_type: Any = event_type
+        assert dataclass_type.__dataclass_params__.frozen is True
+
+    assert set(get_args(llm.LlmEvent)) == {
+        llm.TextDelta,
+        llm.ToolCallDelta,
+        llm.LlmStreamCompleted,
+    }
+    assert llm.LlmPort.stream.__annotations__ == {
+        "messages": "Sequence[LlmMessage]",
+        "tools": "Sequence[ToolDefinition]",
+        "return": "AsyncIterator[LlmEvent]",
+    }
+    assert issubclass(llm.LlmProviderError, llm.LlmError)
+    assert issubclass(llm.LlmProtocolError, llm.LlmError)
+
+    llm_path = PACKAGE_ROOT / "intelligence" / "conversation" / "llm.py"
+    source = llm_path.read_text(encoding="utf-8").lower()
+    provider_specific_terms = {
+        "openai",
+        "qwen",
+        "dashscope",
+        "base_url",
+        "extra_body",
+        "asyncopenai",
+    }
+    assert not any(term in source for term in provider_specific_terms)

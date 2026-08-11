@@ -27,6 +27,11 @@ class Settings:
     aliyun_asr_vad_silence_duration_ms: int = 400
     aliyun_asr_connect_timeout_seconds: float = 10.0
     aliyun_asr_finish_timeout_seconds: float = 10.0
+    openai_base_url: str = ""
+    openai_api_key: str = ""
+    openai_model: str = "qwen-flash"
+    openai_timeout_seconds: float = 30.0
+    agent_max_tool_rounds: int = 4
 
     @classmethod
     def from_environment(cls, env_file: Path | str = ".env") -> "Settings":
@@ -44,6 +49,9 @@ class Settings:
             environ.get("TIMEFLOW_ALIYUN_ASR_FINISH_TIMEOUT_SECONDS", "10.0")
         )
 
+        openai_timeout_seconds = float(environ.get("TIMEFLOW_OPENAI_TIMEOUT_SECONDS", "30.0"))
+        agent_max_tool_rounds = int(environ.get("TIMEFLOW_AGENT_MAX_TOOL_ROUNDS", "4"))
+
         if not -1.0 <= aliyun_asr_vad_threshold <= 1.0:
             raise ValueError("TIMEFLOW_ALIYUN_ASR_VAD_THRESHOLD must be between -1 and 1")
         if not 200 <= aliyun_asr_vad_silence_duration_ms <= 6000:
@@ -52,6 +60,10 @@ class Settings:
             )
         if aliyun_asr_connect_timeout_seconds <= 0 or aliyun_asr_finish_timeout_seconds <= 0:
             raise ValueError("ASR timeouts must be greater than zero")
+        if openai_timeout_seconds <= 0:
+            raise ValueError("TIMEFLOW_OPENAI_TIMEOUT_SECONDS must be greater than zero")
+        if agent_max_tool_rounds <= 0:
+            raise ValueError("TIMEFLOW_AGENT_MAX_TOOL_ROUNDS must be a positive integer")
 
         return cls(
             app_name=environ.get("TIMEFLOW_APP_NAME", "TimeFlow API"),
@@ -81,6 +93,11 @@ class Settings:
             aliyun_asr_vad_silence_duration_ms=aliyun_asr_vad_silence_duration_ms,
             aliyun_asr_connect_timeout_seconds=aliyun_asr_connect_timeout_seconds,
             aliyun_asr_finish_timeout_seconds=aliyun_asr_finish_timeout_seconds,
+            openai_base_url=environ.get("TIMEFLOW_OPENAI_BASE_URL", ""),
+            openai_api_key=environ.get("TIMEFLOW_OPENAI_API_KEY", ""),
+            openai_model=environ.get("TIMEFLOW_OPENAI_MODEL", "qwen-flash"),
+            openai_timeout_seconds=openai_timeout_seconds,
+            agent_max_tool_rounds=agent_max_tool_rounds,
         )
 
 
