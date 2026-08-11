@@ -43,6 +43,7 @@ export type {
   ReminderApplicationDependencies,
   ReminderApplicationPort,
   ReminderApplicationResult,
+  ReminderConfirmedDisposition,
   ReminderDeliveryPort,
   ReminderDispositionSyncPort,
   ReminderDispositionSyncReceipt,

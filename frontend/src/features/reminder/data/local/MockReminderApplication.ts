@@ -83,6 +83,10 @@ export class MockReminderApplication implements ReminderApplicationPort {
   }
 
   async snooze(request: ReminderSnoozeRequest): Promise<ReminderApplicationResult> {
+    // 确定性 mock：绝对时间原样回传；相对分钟映射到固定 fixture 时刻。
+    const snoozed_until =
+      'snooze_minutes' in request ? '2026-08-07T01:10:00.000Z' : request.snooze_until;
+
     return {
       accepted: true,
       schedule_id: request.schedule_id,
@@ -90,7 +94,7 @@ export class MockReminderApplication implements ReminderApplicationPort {
         schedule_id: request.schedule_id,
         state: 'snoozed',
         updated_at: '2026-08-07T01:00:00.000Z',
-        snoozed_until: request.snooze_until,
+        snoozed_until,
         sync_status: 'pending',
       },
     };
