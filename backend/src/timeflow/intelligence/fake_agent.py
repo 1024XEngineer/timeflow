@@ -5,7 +5,13 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any
 from uuid import uuid4
 
-from timeflow.intelligence.ports import CommandResult, ResultSink, StreamInfo, Transcript
+from timeflow.intelligence.ports import (
+    CommandResult,
+    ReplyText,
+    ResultSink,
+    StreamInfo,
+    Transcript,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -14,10 +20,20 @@ FAKE_LANGUAGE = "zh"
 FAKE_OPERATION = "create_schedule"
 FAKE_STATUS = "applied"
 
+# Each entry is everything said so far, not the newest fragment -- the port carries
+# accumulations. A stand-in that sent fragments instead would let a client that
+# concatenates them pass against it and then garble every reply from a real agent.
+FAKE_REPLY_STEPS = ("好，", "好，明天下午三点", "好，明天下午三点在203，记下了")
+
 
 def new_message_id() -> str:
     """Return a fresh identifier for a result the client must acknowledge."""
     return f"msg_{uuid4().hex}"
+
+
+def new_reply_id() -> str:
+    """Return a fresh identifier tying one reply's updates together."""
+    return f"reply_{uuid4().hex}"
 
 
 def fake_schedule(schedule_id: str) -> dict[str, Any]:
@@ -54,15 +70,21 @@ class FakeAgent:
         result_sink: ResultSink,
         *,
         message_id_factory: Callable[[], str] | None = None,
+        reply_id_factory: Callable[[], str] | None = None,
         schedule_id: str = "schedule_fake_001",
     ) -> None:
         """Store the sink plus the id seams."""
         self._result_sink = result_sink
         self._message_id_factory = message_id_factory or new_message_id
+        self._reply_id_factory = reply_id_factory or new_reply_id
         self._schedule_id = schedule_id
 
     async def handle_audio(self, chunks: AsyncIterator[bytes], stream: StreamInfo) -> None:
-        """Read the audio to its end, then deliver the fixed transcript and result."""
+        """Read the audio to its end, then deliver the fixed transcript, result and reply.
+
+        The order mirrors what a real agent does: it can only say the schedule was recorded
+        once the command has actually been carried out.
+        """
         byte_count = 0
         async for chunk in chunks:
             byte_count += len(chunk)
@@ -86,6 +108,14 @@ class FakeAgent:
             schedule=fake_schedule(self._schedule_id),
         )
         await self._result_sink.deliver_result(result, stream)
+
+        reply_id = self._reply_id_factory()
+        last = len(FAKE_REPLY_STEPS) - 1
+        for step, speech_text in enumerate(FAKE_REPLY_STEPS):
+            await self._result_sink.deliver_reply_text(
+                ReplyText(reply_id=reply_id, speech_text=speech_text, done=step == last),
+                stream,
+            )
 
 
 def _duration_ms_of(byte_count: int) -> int:

@@ -43,6 +43,36 @@ class Transcript:
 
 
 @dataclass(frozen=True, slots=True)
+class ReplyText:
+    """The words of a reply as they become known, ahead of any audio for them.
+
+    Carries what has been said so far rather than the newest fragment. A client that
+    replaces its display cannot corrupt it by losing one of these or seeing two out of
+    order, which a client that appends fragments can. A spoken reply is a sentence or two,
+    so resending the whole of it costs little next to that.
+    """
+
+    reply_id: str
+    speech_text: str
+    done: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class DialogueQuestion:
+    """One thing the user must supply before the turn can be acted on.
+
+    Holds candidates as a tuple so a question cannot be passed around and then edited
+    into having offered different choices than it did.
+    """
+
+    question_id: str
+    question_kind: str
+    speech_text: str
+    required_response: str | None = None
+    candidates: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class AudioReply:
     """What a spoken reply says and how it is encoded, sent ahead of the audio itself.
 
@@ -77,8 +107,25 @@ class ResultSink(Protocol):
         """Send what the user was heard to say; call as soon as it is known."""
         ...
 
+    async def deliver_reply_text(self, reply: ReplyText, stream: StreamInfo) -> None:
+        """Send the reply's words; call again as more of them are known.
+
+        Separate from deliver_audio because the words are ready first. Announcing them on
+        the audio's opening message would hold them until the first byte of speech exists,
+        which for a synthesizer fed by a language model is well after the sentence is.
+        """
+        ...
+
     async def deliver_result(self, result: CommandResult, stream: StreamInfo) -> None:
         """Send the outcome of a command; call once it has actually been carried out."""
+        ...
+
+    async def deliver_question(self, question: DialogueQuestion, stream: StreamInfo) -> None:
+        """Ask the user for one more thing, instead of acting on a guess.
+
+        The question is spoken as well; this carries the structured form, so the client
+        knows what kind of answer is expected and that one is expected at all.
+        """
         ...
 
     async def deliver_audio(

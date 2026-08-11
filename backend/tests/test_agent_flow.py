@@ -21,7 +21,11 @@ from timeflow.gateway.websocket.handlers.session import SessionHandshake
 from timeflow.gateway.websocket.handlers.voice_stream import VoiceStreamHandlers
 from timeflow.gateway.websocket.router import MessageRouter
 from timeflow.infrastructure.security.token_verifier import FakeTokenVerifier
-from timeflow.intelligence.fake_agent import FAKE_TRANSCRIPT, FakeAgent
+from timeflow.intelligence.fake_agent import (
+    FAKE_REPLY_STEPS,
+    FAKE_TRANSCRIPT,
+    FakeAgent,
+)
 
 VALID_HELLO: dict[str, Any] = {
     "type": "session.hello",
@@ -116,8 +120,8 @@ def _build_app(agent: Agent | None = None, *, max_audio_duration_ms: int = 120_0
     return application
 
 
-def test_a_finished_stream_yields_a_transcript_then_a_command_result() -> None:
-    """Closing a stream pushes the transcript first and the command result second."""
+def test_a_finished_stream_yields_the_transcript_the_result_then_the_reply() -> None:
+    """Closing a stream pushes what was heard, then what was done, then what is said."""
     client = TestClient(_build_app())
 
     with client.websocket_connect("/ws?device_id=device_001") as websocket:
@@ -127,11 +131,45 @@ def test_a_finished_stream_yields_a_transcript_then_a_command_result() -> None:
         websocket.receive_json()
         websocket.send_bytes(b"\x01\x02" * 160)
         websocket.send_json(END)
-        first = websocket.receive_json()
-        second = websocket.receive_json()
+        received = [websocket.receive_json() for _ in range(2 + len(FAKE_REPLY_STEPS))]
 
-    assert first["type"] == "voice.asr.completed"
-    assert second["type"] == "voice.command.result"
+    # Read to the end of the turn rather than stopping at the first two: a sequence test
+    # that stops early cannot tell a missing message from a message it never looked for.
+    assert [message["type"] for message in received] == [
+        "voice.asr.completed",
+        "voice.command.result",
+        *["voice.dialogue.reply"] * len(FAKE_REPLY_STEPS),
+    ]
+
+
+def test_the_reply_arrives_as_a_growing_whole_under_one_reply_id() -> None:
+    """Each update carries everything said so far, and only the last says it is done.
+
+    A client that replaces what it shows needs every update to be the whole reply; one
+    that appends fragments would double the text if it received these. The invariant is
+    asserted here rather than only in the translator, because this is the path a client
+    actually sees.
+    """
+    client = TestClient(_build_app())
+
+    with client.websocket_connect("/ws?device_id=device_001") as websocket:
+        websocket.send_json(VALID_HELLO)
+        websocket.receive_json()
+        websocket.send_json(START)
+        websocket.receive_json()
+        websocket.send_bytes(b"\x01\x02" * 160)
+        websocket.send_json(END)
+        websocket.receive_json()
+        websocket.receive_json()
+        replies = [websocket.receive_json() for _ in FAKE_REPLY_STEPS]
+
+    payloads = [reply["payload"] for reply in replies]
+    assert len({payload["reply_id"] for payload in payloads}) == 1
+    texts = [payload["speech_text"] for payload in payloads]
+    assert texts == list(FAKE_REPLY_STEPS)
+    for earlier, later in zip(texts, texts[1:], strict=False):
+        assert later.startswith(earlier)
+    assert [payload["done"] for payload in payloads] == [False, False, True]
 
 
 def test_the_transcript_message_matches_the_documented_shape() -> None:

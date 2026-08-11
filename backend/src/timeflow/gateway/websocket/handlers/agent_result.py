@@ -1,4 +1,4 @@
-"""Result sink that pushes transcripts, command results and spoken replies to the client."""
+"""Result sink translating each of the agent's outlets into the protocol message for it."""
 
 import logging
 from collections.abc import AsyncIterator
@@ -6,6 +6,8 @@ from collections.abc import AsyncIterator
 from timeflow.gateway.websocket.agent_ports import (
     AudioReplyInfo,
     CommandOutcome,
+    DialogueQuestionInfo,
+    ReplyTextProgress,
     StreamIdentity,
     TranscriptResult,
 )
@@ -15,6 +17,12 @@ from timeflow.gateway.websocket.messages.agent import (
     VoiceAsrCompletedPayload,
     VoiceCommandResult,
     VoiceCommandResultPayload,
+)
+from timeflow.gateway.websocket.messages.dialogue import (
+    VoiceDialogueQuestion,
+    VoiceDialogueQuestionPayload,
+    VoiceDialogueReply,
+    VoiceDialogueReplyPayload,
 )
 from timeflow.gateway.websocket.messages.tts import (
     VoiceTtsEnd,
@@ -47,6 +55,19 @@ class WebSocketResultSink:
         )
         await self._send(stream.session_id, message.type, message.model_dump())
 
+    async def deliver_reply_text(self, reply: ReplyTextProgress, stream: StreamIdentity) -> None:
+        """Push how much of the reply's wording is known so far."""
+        message = VoiceDialogueReply(
+            request_id=stream.request_id,
+            conversation_id=stream.conversation_id,
+            payload=VoiceDialogueReplyPayload(
+                reply_id=reply.reply_id,
+                speech_text=reply.speech_text,
+                done=reply.done,
+            ),
+        )
+        await self._send(stream.session_id, message.type, message.model_dump())
+
     async def deliver_result(self, result: CommandOutcome, stream: StreamIdentity) -> None:
         """Push the outcome of a command the agent carried out."""
         message = VoiceCommandResult(
@@ -57,6 +78,23 @@ class WebSocketResultSink:
                 operation=result.operation,
                 status=result.status,
                 schedule=result.schedule,
+            ),
+        )
+        await self._send(stream.session_id, message.type, message.model_dump())
+
+    async def deliver_question(
+        self, question: DialogueQuestionInfo, stream: StreamIdentity
+    ) -> None:
+        """Push a question the user has to answer before the turn can go further."""
+        message = VoiceDialogueQuestion(
+            request_id=stream.request_id,
+            conversation_id=stream.conversation_id,
+            payload=VoiceDialogueQuestionPayload(
+                question_id=question.question_id,
+                question_kind=question.question_kind,
+                speech_text=question.speech_text,
+                required_response=question.required_response,
+                candidates=list(question.candidates),
             ),
         )
         await self._send(stream.session_id, message.type, message.model_dump())

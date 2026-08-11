@@ -47,6 +47,54 @@ class TranscriptResult(Protocol):
         ...
 
 
+class ReplyTextProgress(Protocol):
+    """How much of a reply's wording is known so far."""
+
+    @property
+    def reply_id(self) -> str:
+        """Identifier tying one reply's run of updates together."""
+        ...
+
+    @property
+    def speech_text(self) -> str:
+        """Everything said so far, not only the newest part."""
+        ...
+
+    @property
+    def done(self) -> bool:
+        """Whether this is the last update for this reply."""
+        ...
+
+
+class DialogueQuestionInfo(Protocol):
+    """A question the agent needs answered before it can act."""
+
+    @property
+    def question_id(self) -> str:
+        """Identifier of this question."""
+        ...
+
+    @property
+    def question_kind(self) -> str:
+        """Why it is being asked."""
+        ...
+
+    @property
+    def speech_text(self) -> str:
+        """The question as it is spoken."""
+        ...
+
+    @property
+    def required_response(self) -> str | None:
+        """Field the answer should supply, when the question names one."""
+        ...
+
+    @property
+    def candidates(self) -> tuple[dict[str, Any], ...]:
+        """Choices the user is being asked to pick between, when there are any."""
+        ...
+
+
 class CommandOutcome(Protocol):
     """A command that was carried out, ready to be sent to the client."""
 

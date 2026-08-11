@@ -7,7 +7,13 @@ from typing import Any
 
 from timeflow.gateway.websocket.connection_manager import ConnectionManager
 from timeflow.gateway.websocket.handlers.agent_result import WebSocketResultSink
-from timeflow.intelligence.ports import AudioReply, CommandResult, Transcript
+from timeflow.intelligence.ports import (
+    AudioReply,
+    CommandResult,
+    DialogueQuestion,
+    ReplyText,
+    Transcript,
+)
 
 SESSION_ID = "ws_session_test"
 
@@ -303,5 +309,150 @@ def test_speaking_to_a_gone_session_sends_nothing() -> None:
         connections = ConnectionManager()
 
         await WebSocketResultSink(connections).deliver_audio(_reply(), _chunks(b"aa"), _Identity())
+
+    asyncio.run(scenario())
+
+
+def test_deliver_reply_text_sends_voice_dialogue_reply() -> None:
+    """The reply's wording goes out on its own message, before any audio exists."""
+
+    async def scenario() -> None:
+        """Deliver one reply update to a connected session."""
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register(SESSION_ID, connection)
+
+        await WebSocketResultSink(connections).deliver_reply_text(
+            ReplyText(reply_id="reply_001", speech_text="好，明天下午三点", done=False),
+            _Identity(),
+        )
+
+        assert len(connection.frames) == 1
+        frame = connection.frames[0]
+        assert frame["type"] == "voice.dialogue.reply"
+        assert frame["request_id"] == "req_voice_001"
+        assert frame["conversation_id"] == "conversation_test"
+        assert "ok" not in frame
+        assert frame["payload"] == {
+            "reply_id": "reply_001",
+            "speech_text": "好，明天下午三点",
+            "done": False,
+        }
+
+    asyncio.run(scenario())
+
+
+def test_reply_updates_go_out_in_the_order_they_were_delivered() -> None:
+    """The client must be able to trust the last message it got is the newest wording.
+
+    Each update is the whole reply so far, so an out-of-order pair would leave the display
+    showing less than the client had already been told.
+    """
+
+    async def scenario() -> None:
+        """Deliver three updates for one reply."""
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register(SESSION_ID, connection)
+        sink = WebSocketResultSink(connections)
+
+        for text, done in (("好，", False), ("好，明天", False), ("好，明天三点", True)):
+            await sink.deliver_reply_text(
+                ReplyText(reply_id="reply_001", speech_text=text, done=done), _Identity()
+            )
+
+        assert [frame["payload"]["speech_text"] for frame in connection.frames] == [
+            "好，",
+            "好，明天",
+            "好，明天三点",
+        ]
+        assert [frame["payload"]["done"] for frame in connection.frames] == [False, False, True]
+
+    asyncio.run(scenario())
+
+
+def test_deliver_question_sends_voice_dialogue_question_in_the_documented_shape() -> None:
+    """A question goes out with the interface design's fields, and with no message_id.
+
+    message_id is given only to results the client acknowledges; a question is answered by
+    speaking again, so inventing one would ask for an ack that never comes.
+    """
+
+    async def scenario() -> None:
+        """Deliver one question to a connected session."""
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register(SESSION_ID, connection)
+
+        await WebSocketResultSink(connections).deliver_question(
+            DialogueQuestion(
+                question_id="question_001",
+                question_kind="ambiguous_target",
+                speech_text="你说的是早会还是周会？",
+                required_response="schedule_id",
+                candidates=({"id": "schedule_1"}, {"id": "schedule_2"}),
+            ),
+            _Identity(),
+        )
+
+        assert len(connection.frames) == 1
+        frame = connection.frames[0]
+        assert frame["type"] == "voice.dialogue.question"
+        assert frame["request_id"] == "req_voice_001"
+        assert frame["conversation_id"] == "conversation_test"
+        assert "message_id" not in frame
+        assert "ok" not in frame
+        assert frame["payload"] == {
+            "question_id": "question_001",
+            "question_kind": "ambiguous_target",
+            "speech_text": "你说的是早会还是周会？",
+            "required_response": "schedule_id",
+            "candidates": [{"id": "schedule_1"}, {"id": "schedule_2"}],
+        }
+
+    asyncio.run(scenario())
+
+
+def test_a_question_needing_no_particular_field_omits_it() -> None:
+    """Confirming something asks for no field, so required_response stays null."""
+
+    async def scenario() -> None:
+        """Deliver a confirmation question."""
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register(SESSION_ID, connection)
+
+        await WebSocketResultSink(connections).deliver_question(
+            DialogueQuestion(
+                question_id="question_001",
+                question_kind="confirmation",
+                speech_text="确定要删掉早会吗？",
+            ),
+            _Identity(),
+        )
+
+        payload = connection.frames[0]["payload"]
+        assert payload["required_response"] is None
+        assert payload["candidates"] == []
+
+    asyncio.run(scenario())
+
+
+def test_a_reply_or_question_for_a_session_that_left_is_dropped_not_raised() -> None:
+    """Nobody is there to read them, and the turn must not die on the way out."""
+
+    async def scenario() -> None:
+        """Deliver both to a session that was never registered."""
+        sink = WebSocketResultSink(ConnectionManager())
+
+        await sink.deliver_reply_text(
+            ReplyText(reply_id="reply_001", speech_text="好"), _Identity()
+        )
+        await sink.deliver_question(
+            DialogueQuestion(
+                question_id="question_001", question_kind="missing_field", speech_text="哪天？"
+            ),
+            _Identity(),
+        )
 
     asyncio.run(scenario())
