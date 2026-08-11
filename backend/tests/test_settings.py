@@ -2,13 +2,32 @@
 
 from pathlib import Path
 
+import pytest
 from pytest import MonkeyPatch
 
 from timeflow.infrastructure.settings import Settings, get_settings
 
+ASR_ENVIRONMENT_VARIABLES = (
+    "TIMEFLOW_ALIYUN_ASR_WS_URL",
+    "TIMEFLOW_ALIYUN_ASR_API_KEY",
+    "TIMEFLOW_ALIYUN_ASR_MODEL",
+    "TIMEFLOW_ALIYUN_ASR_LANGUAGE",
+    "TIMEFLOW_ALIYUN_ASR_VAD_THRESHOLD",
+    "TIMEFLOW_ALIYUN_ASR_VAD_SILENCE_DURATION_MS",
+    "TIMEFLOW_ALIYUN_ASR_CONNECT_TIMEOUT_SECONDS",
+    "TIMEFLOW_ALIYUN_ASR_FINISH_TIMEOUT_SECONDS",
+)
+
+
+def clear_asr_environment(monkeypatch: MonkeyPatch) -> None:
+    """Remove ASR variables so local environments do not affect assertions."""
+    for name in ASR_ENVIRONMENT_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+
 
 def test_settings_use_timeflow_environment(monkeypatch: MonkeyPatch) -> None:
     """TIMEFLOW-prefixed variables override development defaults."""
+    clear_asr_environment(monkeypatch)
     monkeypatch.setenv("TIMEFLOW_APP_NAME", "Test API")
     monkeypatch.setenv("TIMEFLOW_ENVIRONMENT", "test")
     monkeypatch.setenv("TIMEFLOW_DATABASE_URL", "sqlite+pysqlite:///:memory:")
@@ -23,6 +42,7 @@ def test_settings_use_timeflow_environment(monkeypatch: MonkeyPatch) -> None:
 
 def test_settings_load_dotenv_file(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     """A fresh clone can configure the backend through backend/.env."""
+    clear_asr_environment(monkeypatch)
     monkeypatch.delenv("TIMEFLOW_APP_NAME", raising=False)
     monkeypatch.delenv("TIMEFLOW_ENVIRONMENT", raising=False)
     monkeypatch.delenv("TIMEFLOW_DATABASE_URL", raising=False)
@@ -43,3 +63,79 @@ def test_settings_load_dotenv_file(tmp_path: Path, monkeypatch: MonkeyPatch) -> 
     assert settings.app_name == "Dotenv API"
     assert settings.environment == "dotenv-test"
     assert settings.database_url == "sqlite+pysqlite:///:memory:"
+
+
+def test_settings_use_qwen_asr_defaults(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    clear_asr_environment(monkeypatch)
+
+    settings = Settings.from_environment(tmp_path / "missing.env")
+
+    assert settings.aliyun_asr_ws_url == ""
+    assert settings.aliyun_asr_api_key == ""
+    assert settings.aliyun_asr_model == "qwen3-asr-flash-realtime"
+    assert settings.aliyun_asr_language == "zh"
+    assert settings.aliyun_asr_vad_threshold == 0.0
+    assert settings.aliyun_asr_vad_silence_duration_ms == 400
+    assert settings.aliyun_asr_connect_timeout_seconds == 10.0
+    assert settings.aliyun_asr_finish_timeout_seconds == 10.0
+
+
+def test_settings_convert_asr_environment_values(monkeypatch: MonkeyPatch) -> None:
+    clear_asr_environment(monkeypatch)
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_ASR_WS_URL", "wss://example.invalid/ws")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_ASR_API_KEY", "test-key")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_ASR_MODEL", "custom-model")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_ASR_LANGUAGE", "en")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_ASR_VAD_THRESHOLD", "1.0")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_ASR_VAD_SILENCE_DURATION_MS", "1000")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_ASR_CONNECT_TIMEOUT_SECONDS", "12.5")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_ASR_FINISH_TIMEOUT_SECONDS", "15")
+
+    settings = Settings.from_environment()
+
+    assert settings.aliyun_asr_ws_url == "wss://example.invalid/ws"
+    assert settings.aliyun_asr_api_key == "test-key"
+    assert settings.aliyun_asr_model == "custom-model"
+    assert settings.aliyun_asr_language == "en"
+    assert settings.aliyun_asr_vad_threshold == 1.0
+    assert settings.aliyun_asr_vad_silence_duration_ms == 1000
+    assert settings.aliyun_asr_connect_timeout_seconds == 12.5
+    assert settings.aliyun_asr_finish_timeout_seconds == 15.0
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        (
+            "TIMEFLOW_ALIYUN_ASR_VAD_THRESHOLD",
+            "1.5",
+            "TIMEFLOW_ALIYUN_ASR_VAD_THRESHOLD must be between -1 and 1",
+        ),
+        (
+            "TIMEFLOW_ALIYUN_ASR_VAD_SILENCE_DURATION_MS",
+            "100",
+            "TIMEFLOW_ALIYUN_ASR_VAD_SILENCE_DURATION_MS must be between 200 and 6000",
+        ),
+        (
+            "TIMEFLOW_ALIYUN_ASR_CONNECT_TIMEOUT_SECONDS",
+            "0",
+            "ASR timeouts must be greater than zero",
+        ),
+        (
+            "TIMEFLOW_ALIYUN_ASR_FINISH_TIMEOUT_SECONDS",
+            "-1",
+            "ASR timeouts must be greater than zero",
+        ),
+    ],
+)
+def test_settings_reject_invalid_asr_values(
+    monkeypatch: MonkeyPatch, name: str, value: str, message: str
+) -> None:
+    clear_asr_environment(monkeypatch)
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValueError, match=message):
+        Settings.from_environment()

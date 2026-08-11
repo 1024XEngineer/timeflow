@@ -1,0 +1,99 @@
+"""The session.hello handshake that opens an authenticated session."""
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
+from uuid import uuid4
+
+from pydantic import ValidationError
+
+from timeflow.gateway.websocket.envelope import (
+    ERROR_MALFORMED_MESSAGE,
+    ERROR_UNAUTHENTICATED,
+    build_error_envelope,
+)
+from timeflow.gateway.websocket.messages.session import (
+    SessionHello,
+    SessionReady,
+    SessionReadyPayload,
+)
+from timeflow.gateway.websocket.ports import SessionContext, TokenVerifier
+
+
+@dataclass(frozen=True, slots=True)
+class HandshakeResult:
+    """Outcome of a handshake attempt: the reply, and the session when accepted."""
+
+    reply: dict[str, Any]
+    session: SessionContext | None
+
+
+def new_session_id() -> str:
+    """Return a fresh session identifier."""
+    return f"ws_session_{uuid4().hex}"
+
+
+class SessionHandshake:
+    """Authenticate the opening frame of a connection."""
+
+    def __init__(
+        self,
+        token_verifier: TokenVerifier,
+        *,
+        session_id_factory: Callable[[], str] | None = None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        """Store the verifier and the test seams for ids and time."""
+        self._token_verifier = token_verifier
+        self._session_id_factory = session_id_factory or new_session_id
+        self._clock = clock or self._now
+
+    async def perform(self, raw_message: dict[str, Any]) -> HandshakeResult:
+        """Validate the opening frame and either open a session or reject it."""
+        request_id = raw_message.get("request_id")
+        if not isinstance(request_id, str):
+            request_id = None
+
+        if raw_message.get("type") != "session.hello":
+            return self._rejected(
+                request_id, ERROR_UNAUTHENTICATED, "The first message must be session.hello"
+            )
+
+        try:
+            hello = SessionHello.model_validate(raw_message)
+        except ValidationError:
+            return self._rejected(
+                request_id, ERROR_MALFORMED_MESSAGE, "session.hello payload is invalid"
+            )
+
+        account_id = await self._token_verifier.verify(hello.payload.access_token)
+        if account_id is None:
+            return self._rejected(request_id, ERROR_UNAUTHENTICATED, "Access token is not valid")
+
+        session = SessionContext(
+            session_id=self._session_id_factory(),
+            account_id=account_id,
+            device_id=hello.payload.device_id,
+        )
+        reply = SessionReady(
+            request_id=hello.request_id,
+            payload=SessionReadyPayload(
+                session_id=session.session_id,
+                server_time=self._clock().isoformat(),
+            ),
+        )
+        return HandshakeResult(reply=reply.model_dump(), session=session)
+
+    @staticmethod
+    def _rejected(request_id: str | None, code: str, message: str) -> HandshakeResult:
+        """Build a rejection carrying no session."""
+        return HandshakeResult(
+            reply=build_error_envelope("session.error", request_id, code, message),
+            session=None,
+        )
+
+    @staticmethod
+    def _now() -> datetime:
+        """Return the current UTC time."""
+        return datetime.now(UTC)
