@@ -1,4 +1,4 @@
-"""Agent tool registry and placeholder behavior tests."""
+"""Agent tool registry and dialogue-control behavior tests."""
 
 from __future__ import annotations
 
@@ -8,8 +8,13 @@ from dataclasses import dataclass
 
 import pytest
 
+from timeflow.business.calendar import ScheduleAgentService
 from timeflow.intelligence.conversation.llm import ToolDefinition
-from timeflow.intelligence.conversation.tools import ToolRegistry, build_default_tool_registry
+from timeflow.intelligence.conversation.tools import (
+    ToolRegistry,
+    build_agent_tool_registry,
+    request_user_input_definition,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +23,23 @@ class FakeTool:
 
     async def execute(self, arguments: Mapping[str, object]) -> str:
         return json.dumps({"arguments": dict(arguments)}, ensure_ascii=False)
+
+
+class EmptyScheduleService(ScheduleAgentService):
+    def create_schedule(self, **kwargs: object) -> object:
+        raise AssertionError(kwargs)
+
+    def find_schedules(self, **kwargs: object) -> object:
+        raise AssertionError(kwargs)
+
+    def update_schedule(self, **kwargs: object) -> object:
+        raise AssertionError(kwargs)
+
+    def delete_once_schedule(self, **kwargs: object) -> object:
+        raise AssertionError(kwargs)
+
+    def delete_recurring_schedule(self, **kwargs: object) -> object:
+        raise AssertionError(kwargs)
 
 
 def test_registry_rejects_duplicate_names() -> None:
@@ -32,8 +54,8 @@ def test_registry_raises_key_error_for_unknown_name() -> None:
         ToolRegistry([]).get("missing")
 
 
-def test_default_tool_definitions_have_unique_expected_names() -> None:
-    registry = build_default_tool_registry()
+def test_agent_tool_definitions_have_unique_expected_names() -> None:
+    registry = build_agent_tool_registry(EmptyScheduleService(), "account-1")
     names = tuple(definition.name for definition in registry.definitions())
 
     assert names == (
@@ -47,41 +69,8 @@ def test_default_tool_definitions_have_unique_expected_names() -> None:
     assert len(names) == len(set(names))
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "tool_name",
-    ["schedule_create", "schedule_query", "schedule_update", "schedule_delete"],
-)
-async def test_schedule_placeholders_do_not_fake_success(tool_name: str) -> None:
-    tool = build_default_tool_registry().get(tool_name)
-
-    result = json.loads(await tool.execute({"title": "开会"}))
-
-    assert result == {
-        "message": "日程业务服务尚未接入",
-        "status": "not_implemented",
-        "tool": tool_name,
-    }
-    assert "schedule_id" not in result
-    assert "success" not in result
-
-
-@pytest.mark.asyncio
-async def test_location_placeholder_does_not_fake_candidates() -> None:
-    tool = build_default_tool_registry().get("location_search")
-
-    result = json.loads(await tool.execute({"query": "万达广场"}))
-
-    assert result == {
-        "message": "地图地点搜索服务尚未接入",
-        "status": "not_implemented",
-        "tool": "location_search",
-    }
-    assert not {"candidates", "latitude", "longitude", "address"} & result.keys()
-
-
 def test_request_user_input_definition_has_strict_control_schema() -> None:
-    definition = build_default_tool_registry().get("request_user_input").definition
+    definition = request_user_input_definition()
     properties = definition.parameters["properties"]
 
     assert definition.name == "request_user_input"
@@ -106,7 +95,7 @@ def test_request_user_input_definition_has_strict_control_schema() -> None:
 
 @pytest.mark.asyncio
 async def test_request_user_input_is_not_executed_as_a_regular_tool() -> None:
-    tool = build_default_tool_registry().get("request_user_input")
+    tool = build_agent_tool_registry(EmptyScheduleService(), "account-1").get("request_user_input")
 
     with pytest.raises(RuntimeError, match="handled by Agent"):
         await tool.execute({})

@@ -1,13 +1,14 @@
-"""Provider-neutral Agent tool definitions and placeholders."""
+"""Provider-neutral Agent tool registry and dialogue-control definition."""
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from timeflow.business.calendar import ScheduleAgentService
 from timeflow.intelligence.conversation.llm import ToolDefinition
+from timeflow.intelligence.conversation.schedule_tools import build_schedule_tools
 
 
 class Tool(Protocol):
@@ -43,25 +44,6 @@ class ToolRegistry:
 
 
 @dataclass(frozen=True, slots=True)
-class _PlaceholderTool:
-    definition: ToolDefinition
-    message: str
-
-    async def execute(self, arguments: Mapping[str, object]) -> str:
-        del arguments
-        return json.dumps(
-            {
-                "message": self.message,
-                "status": "not_implemented",
-                "tool": self.definition.name,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-
-
-@dataclass(frozen=True, slots=True)
 class _RequestUserInputTool:
     definition: ToolDefinition
 
@@ -70,15 +52,8 @@ class _RequestUserInputTool:
         raise RuntimeError("request_user_input is handled by Agent")
 
 
-def _placeholder_definition(name: str, description: str) -> ToolDefinition:
-    return ToolDefinition(
-        name=name,
-        description=description,
-        parameters={"type": "object", "additionalProperties": True},
-    )
-
-
-def _request_user_input_definition() -> ToolDefinition:
+def request_user_input_definition() -> ToolDefinition:
+    """Return the strict schema for structured Agent questions."""
     return ToolDefinition(
         name="request_user_input",
         description=(
@@ -112,47 +87,22 @@ def _request_user_input_definition() -> ToolDefinition:
     )
 
 
-def build_default_tool_registry() -> ToolRegistry:
-    """Build the six tools supported by the first Agent implementation."""
-    schedule_message = "日程业务服务尚未接入"
-    location_message = "地图地点搜索服务尚未接入"
+def build_agent_tool_registry(
+    schedule_service: ScheduleAgentService,
+    account_id: str,
+) -> ToolRegistry:
+    """Build the authenticated PR 2 tool registry."""
     return ToolRegistry(
         [
-            _PlaceholderTool(
-                _placeholder_definition(
-                    "schedule_create",
-                    "Create a schedule. Never claim success without calling this tool.",
-                ),
-                schedule_message,
-            ),
-            _PlaceholderTool(
-                _placeholder_definition(
-                    "schedule_query",
-                    "Query schedules before selecting, updating, or deleting one.",
-                ),
-                schedule_message,
-            ),
-            _PlaceholderTool(
-                _placeholder_definition(
-                    "schedule_update",
-                    "Update a schedule after its target and recurrence scope are clear.",
-                ),
-                schedule_message,
-            ),
-            _PlaceholderTool(
-                _placeholder_definition(
-                    "schedule_delete",
-                    "Delete a schedule only after explicit user confirmation.",
-                ),
-                schedule_message,
-            ),
-            _PlaceholderTool(
-                _placeholder_definition(
-                    "location_search",
-                    "Search for a location instead of inventing an address or coordinates.",
-                ),
-                location_message,
-            ),
-            _RequestUserInputTool(_request_user_input_definition()),
+            *build_schedule_tools(schedule_service, account_id),
+            _RequestUserInputTool(request_user_input_definition()),
         ]
     )
+
+
+__all__ = [
+    "Tool",
+    "ToolRegistry",
+    "build_agent_tool_registry",
+    "request_user_input_definition",
+]

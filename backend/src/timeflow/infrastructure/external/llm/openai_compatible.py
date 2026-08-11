@@ -188,4 +188,4 @@ class OpenAICompatibleLlm(LlmPort):
             raise LlmProtocolError("LLM tool call name must be a string")
         if not isinstance(arguments, str):
             raise LlmProtocolError("LLM tool call arguments must be a string")
-        return ToolCallDelta(index, call_id, name, arguments)
+        return ToolCallDelta(index, call_id or None, name or None, arguments)

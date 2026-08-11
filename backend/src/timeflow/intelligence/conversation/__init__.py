@@ -1,5 +1,19 @@
 """Provider-neutral conversation interfaces."""
 
+from timeflow.intelligence.conversation.agent import (
+    Agent,
+    AgentCompleted,
+    AgentConversation,
+    AgentError,
+    AgentEvent,
+    AgentProtocolError,
+    AgentQuestion,
+    AgentTextDelta,
+    AgentToolError,
+    AgentToolRoundLimitError,
+    PendingQuestion,
+    QuestionKind,
+)
 from timeflow.intelligence.conversation.asr import (
     AsrConnectionError,
     AsrError,
@@ -30,10 +44,21 @@ from timeflow.intelligence.conversation.llm import (
 from timeflow.intelligence.conversation.tools import (
     Tool,
     ToolRegistry,
-    build_default_tool_registry,
+    build_agent_tool_registry,
+    request_user_input_definition,
 )
 
 __all__ = [
+    "Agent",
+    "AgentCompleted",
+    "AgentConversation",
+    "AgentError",
+    "AgentEvent",
+    "AgentProtocolError",
+    "AgentQuestion",
+    "AgentTextDelta",
+    "AgentToolError",
+    "AgentToolRoundLimitError",
     "AsrConnectionError",
     "AsrError",
     "AsrEvent",
@@ -50,6 +75,8 @@ __all__ = [
     "LlmProviderError",
     "LlmStreamCompleted",
     "LlmUsage",
+    "PendingQuestion",
+    "QuestionKind",
     "TextDelta",
     "Tool",
     "ToolCall",
@@ -59,5 +86,6 @@ __all__ = [
     "ToolResultMessage",
     "TranscriptCompleted",
     "TranscriptPreview",
-    "build_default_tool_registry",
+    "build_agent_tool_registry",
+    "request_user_input_definition",
 ]
