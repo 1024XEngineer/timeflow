@@ -1,5 +1,6 @@
 """SQLAlchemy persistence adapter for schedules and occurrence overrides."""
 
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import select, update
@@ -17,6 +18,27 @@ from timeflow.business.calendar.contracts import (
     ScheduleType,
 )
 from timeflow.data.models import Schedule, ScheduleOccurrenceOverride
+
+
+class ScheduleRevisionConflictError(RuntimeError):
+    """An account-owned schedule no longer has the expected revision."""
+
+    __slots__ = ("actual_revision", "expected_revision", "schedule_id")
+
+    def __init__(
+        self,
+        *,
+        schedule_id: str,
+        expected_revision: int,
+        actual_revision: int,
+    ) -> None:
+        super().__init__(
+            f"Schedule {schedule_id!r} revision conflict: "
+            f"expected {expected_revision}, found {actual_revision}"
+        )
+        self.schedule_id = schedule_id
+        self.expected_revision = expected_revision
+        self.actual_revision = actual_revision
 
 
 class ScheduleRepository:
@@ -74,7 +96,12 @@ class ScheduleRepository:
         snapshot: ScheduleSnapshot,
         expected_revision: int,
     ) -> ScheduleSnapshot | None:
-        """Conditionally replace mutable persisted fields using optimistic revision."""
+        """Atomically replace mutable fields and increment the persisted revision.
+
+        Returns ``None`` when the schedule is absent from the account. Raises
+        ``ScheduleRevisionConflictError`` when the account owns the schedule but
+        its current revision differs from ``expected_revision``.
+        """
         statement = (
             update(Schedule)
             .where(
@@ -82,11 +109,29 @@ class ScheduleRepository:
                 Schedule.account_id == snapshot.account_id,
                 Schedule.revision == expected_revision,
             )
-            .values(**_schedule_update_values(snapshot))
+            .values(
+                **_schedule_update_values(snapshot),
+                revision=Schedule.revision + 1,
+            )
             .returning(Schedule)
         )
         model = self._session.scalars(statement).one_or_none()
-        return None if model is None else _to_schedule_snapshot(model)
+        if model is not None:
+            return _to_schedule_snapshot(model)
+
+        actual_revision = self._session.scalar(
+            select(Schedule.revision).where(
+                Schedule.id == snapshot.id,
+                Schedule.account_id == snapshot.account_id,
+            )
+        )
+        if actual_revision is not None:
+            raise ScheduleRevisionConflictError(
+                schedule_id=snapshot.id,
+                expected_revision=expected_revision,
+                actual_revision=actual_revision,
+            )
+        return None
 
     def add_occurrence_override(
         self,
@@ -131,6 +176,46 @@ class ScheduleRepository:
             )
         )
         model = self._session.scalar(statement)
+        return None if model is None else _to_override_snapshot(model)
+
+    def update_occurrence_override(
+        self,
+        *,
+        account_id: str,
+        schedule_id: str,
+        occurrence_start: datetime,
+        action: OccurrenceOverrideAction,
+        replacement_schedule_id: str | None,
+        updated_at: datetime,
+    ) -> ScheduleOccurrenceOverrideSnapshot | None:
+        """Update the existing override identified by its schedule occurrence.
+
+        This persistence operation deliberately does not increment the parent
+        schedule revision. The application service must call ``update_schedule``
+        with the expected revision in the same Session transaction so a conflict
+        rolls back both aggregate changes together.
+        """
+        if not self._schedule_belongs_to_account(account_id, schedule_id):
+            return None
+        if replacement_schedule_id is not None and not self._schedule_belongs_to_account(
+            account_id, replacement_schedule_id
+        ):
+            return None
+
+        statement = (
+            update(ScheduleOccurrenceOverride)
+            .where(
+                ScheduleOccurrenceOverride.schedule_id == schedule_id,
+                ScheduleOccurrenceOverride.occurrence_start == occurrence_start,
+            )
+            .values(
+                action=action.value,
+                replacement_schedule_id=replacement_schedule_id,
+                updated_at=updated_at,
+            )
+            .returning(ScheduleOccurrenceOverride)
+        )
+        model = self._session.scalars(statement).one_or_none()
         return None if model is None else _to_override_snapshot(model)
 
     def list_occurrence_overrides(
@@ -217,7 +302,6 @@ def _schedule_update_values(snapshot: ScheduleSnapshot) -> dict[str, object]:
         "reminder_strength",
         "reminder_disposition_state",
         "status",
-        "revision",
         "updated_at",
         "deleted_at",
     )
@@ -274,4 +358,4 @@ def _to_override_snapshot(
     )
 
 
-__all__ = ["ScheduleRepository"]
+__all__ = ["ScheduleRepository", "ScheduleRevisionConflictError"]

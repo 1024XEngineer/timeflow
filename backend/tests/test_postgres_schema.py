@@ -1,7 +1,5 @@
 """PostgreSQL integration contract for the cloud schedule schema."""
 
-import os
-from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -98,32 +96,6 @@ def _canonical_type(column_type: sa.types.TypeEngine[object]) -> str:
     if isinstance(column_type, sa.Boolean):
         return "BOOLEAN"
     raise AssertionError(f"Unexpected reflected type: {column_type!r}")
-
-
-@pytest.fixture(scope="module")
-def postgres_engine() -> Iterator[Engine]:
-    """Connect only when an explicit disposable integration database is supplied."""
-
-    database_url = os.getenv("TIMEFLOW_TEST_DATABASE_URL")
-    if database_url is None:
-        pytest.skip("TIMEFLOW_TEST_DATABASE_URL is not set")
-    engine = sa.create_engine(database_url)
-    try:
-        yield engine
-    finally:
-        engine.dispose()
-
-
-@pytest.fixture
-def postgres_connection(postgres_engine: Engine) -> Iterator[Connection]:
-    """Roll back behavior-test data after each test."""
-
-    with postgres_engine.connect() as connection:
-        transaction = connection.begin()
-        try:
-            yield connection
-        finally:
-            transaction.rollback()
 
 
 def _account_values(account_id: str = "acct-test") -> dict[str, Any]:

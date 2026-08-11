@@ -84,6 +84,7 @@ jobs:
           --health-retries 10
     env:
       TIMEFLOW_DATABASE_URL: postgresql+psycopg://timeapp:timeapp@127.0.0.1:5432/timeapp
+      TIMEFLOW_TEST_DATABASE_URL: postgresql+psycopg://timeapp:timeapp@127.0.0.1:5432/timeapp
     steps:
       - uses: actions/checkout@v4
 
@@ -103,6 +104,13 @@ jobs:
       # Validate the migration chain against a real Postgres, both directions.
       - name: Apply migrations (upgrade head)
         run: uv run alembic upgrade head
+
+      - name: PostgreSQL schema and repository integration tests
+        run: >-
+          uv run pytest
+          tests/test_postgres_schema.py
+          tests/test_postgres_schedule_repository.py
+          --no-cov
 
       - name: Verify downgrade path (downgrade base)
         run: uv run alembic downgrade base
