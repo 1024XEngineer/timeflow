@@ -689,8 +689,8 @@ def test_find_schedules_uses_same_day_replacement_effective_time() -> None:
         ),
     )
 
-    assert recurring in effective_window.schedules
-    assert recurring not in original_window.schedules
+    assert effective_window.schedules == (replacement,)
+    assert original_window.schedules == ()
 
 
 def test_find_schedules_includes_replacement_that_crosses_into_window() -> None:
@@ -724,7 +724,7 @@ def test_find_schedules_includes_replacement_that_crosses_into_window() -> None:
         ),
     )
 
-    assert recurring in result.schedules
+    assert result.schedules == (replacement,)
 
 
 def test_find_schedules_excludes_replacement_that_crosses_out_of_window() -> None:
@@ -758,7 +758,7 @@ def test_find_schedules_excludes_replacement_that_crosses_out_of_window() -> Non
         ),
     )
 
-    assert recurring not in result.schedules
+    assert result.schedules == ()
 
 
 def test_find_schedules_preserves_dst_and_non_dst_wall_times() -> None:

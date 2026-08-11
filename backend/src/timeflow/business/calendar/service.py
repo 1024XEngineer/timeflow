@@ -233,8 +233,6 @@ class ScheduleApplicationService(ScheduleAgentService):
                 schedule
                 for schedule in candidates
                 if _has_effective_occurrence_in_window(
-                    unit_of_work.schedules,
-                    account_id=account_id,
                     schedule=schedule,
                     query=query,
                     overrides=tuple(overrides_by_schedule.get(schedule.id, ())),
@@ -445,9 +443,7 @@ def _matches_static_query(schedule: ScheduleSnapshot, query: FindSchedulesQuery)
 
 
 def _has_effective_occurrence_in_window(
-    repository: ScheduleRepositoryPort,
     *,
-    account_id: str,
     schedule: ScheduleSnapshot,
     query: FindSchedulesQuery,
     overrides: tuple[ScheduleOccurrenceOverrideSnapshot, ...],
@@ -456,19 +452,6 @@ def _has_effective_occurrence_in_window(
         return _start_is_in_window(schedule.start_time, query)
 
     excluded_starts = frozenset(override.occurrence_start for override in overrides)
-    for override in overrides:
-        if (
-            override.action is not OccurrenceOverrideAction.REPLACE
-            or override.replacement_schedule_id is None
-        ):
-            continue
-        replacement = repository.get_schedule(
-            account_id=account_id,
-            schedule_id=override.replacement_schedule_id,
-        )
-        if replacement is not None and _start_is_in_window(replacement.start_time, query):
-            return True
-
     try:
         occurrence = first_occurrence_in_window(
             schedule,
