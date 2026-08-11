@@ -27,6 +27,11 @@ from timeflow.intelligence.conversation.llm import (
     ToolDefinition,
     ToolResultMessage,
 )
+from timeflow.intelligence.conversation.tools import (
+    Tool,
+    ToolRegistry,
+    build_default_tool_registry,
+)
 
 __all__ = [
     "AsrConnectionError",
@@ -46,10 +51,13 @@ __all__ = [
     "LlmStreamCompleted",
     "LlmUsage",
     "TextDelta",
+    "Tool",
     "ToolCall",
     "ToolCallDelta",
     "ToolDefinition",
+    "ToolRegistry",
     "ToolResultMessage",
     "TranscriptCompleted",
     "TranscriptPreview",
+    "build_default_tool_registry",
 ]
