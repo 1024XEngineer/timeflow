@@ -9,6 +9,11 @@ class StreamInfo(Protocol):
     """Identifiers of the audio stream a result belongs to."""
 
     @property
+    def account_id(self) -> str:
+        """Account that owns this stream."""
+        ...
+
+    @property
     def session_id(self) -> str:
         """Session the stream belongs to."""
         ...

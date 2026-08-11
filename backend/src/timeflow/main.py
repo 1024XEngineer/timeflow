@@ -25,7 +25,10 @@ from timeflow.infrastructure.external.realtime.qwen_audio import (
 from timeflow.infrastructure.security.token_verifier import FakeTokenVerifier
 from timeflow.infrastructure.settings import Settings, get_settings
 from timeflow.intelligence.fake_agent import FakeAgent
+from timeflow.intelligence.fake_schedules import SeededScheduleService
 from timeflow.intelligence.realtime.agent import RealtimeAgent
+from timeflow.intelligence.realtime.instructions import build_instructions
+from timeflow.intelligence.realtime.schedule_tools import ToolBox
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +102,12 @@ def _build_agent(settings: Settings, result_sink: WebSocketResultSink) -> Agent:
     """
     if settings.aliyun_audio_is_configured():
         logger.info("using the realtime model", extra={"model": settings.aliyun_audio_model})
+
+        def bind_account(account_id: str) -> ToolBox:
+            return ToolBox(account_id, SeededScheduleService())
+
+        # Seeded rather than real: ScheduleAgentService's five methods all raise
+        # NotImplementedError. Swapping in the real service is this one line.
         return RealtimeAgent(
             QwenAudioSessionFactory(
                 QwenAudioConfig(
@@ -110,6 +119,8 @@ def _build_agent(settings: Settings, result_sink: WebSocketResultSink) -> Agent:
                 )
             ),
             result_sink,
+            tools_factory=bind_account,
+            instructions=build_instructions,
         )
 
     if settings.environment != "development":
