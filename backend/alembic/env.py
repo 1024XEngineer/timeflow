@@ -6,7 +6,7 @@ from sqlalchemy import engine_from_config, pool
 
 from alembic import context
 from timeflow.data.database import Base
-from timeflow.data.models import Schedule  # noqa: F401
+from timeflow.data.models import Account, Schedule, ScheduleOccurrenceOverride  # noqa: F401
 from timeflow.infrastructure.settings import get_settings
 
 config = context.config
