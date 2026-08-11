@@ -468,3 +468,35 @@ class _SeamObserver:
 
     async def failed(self, message: str) -> None:
         """Ignore the failure."""
+
+
+def test_a_session_that_cannot_be_configured_closes_its_transport() -> None:
+    """A socket the caller never receives is a socket nobody can close."""
+
+    class RefusingTransport(FakeTransport):
+        """A transport that connects and then refuses the session update."""
+
+        async def send(self, message: str) -> None:
+            """Fail the way a rejected session.update would."""
+            raise ConnectionResetError("session.update rejected")
+
+    async def scenario() -> None:
+        """Open a session whose configuration fails."""
+        transport = RefusingTransport()
+        factory = QwenAudioSessionFactory(CONFIG, connect=lambda config: _ready(transport))
+
+        try:
+            await factory.open("", [])
+        except ConnectionResetError:
+            pass
+        else:
+            raise AssertionError("expected the configuration failure to propagate")
+
+        assert transport.closed is True
+
+    asyncio.run(scenario())
+
+
+async def _ready(transport: FakeTransport) -> FakeTransport:
+    """Hand back an already-built transport, as a connect seam would."""
+    return transport

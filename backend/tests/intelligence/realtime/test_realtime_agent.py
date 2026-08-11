@@ -364,3 +364,47 @@ def test_the_wording_is_settled_before_the_audio_closes_the_turn() -> None:
         assert kinds.index("done") < kinds.index("audio_end")
 
     asyncio.run(scenario())
+
+
+def test_a_failure_while_sending_audio_does_not_leave_the_pump_running() -> None:
+    """The pump is cancelled on any exit, not only on the caller being cancelled."""
+
+    class BlockingSession(ScriptedSession):
+        """A session whose pump waits forever unless it is cancelled."""
+
+        def __init__(self) -> None:
+            """Start with nothing scripted and no cancellation seen."""
+            super().__init__([])
+            self.pump_cancelled = False
+
+        async def pump(self, observer: Any) -> None:
+            """Wait to be cancelled, recording that it was."""
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.pump_cancelled = True
+                raise
+
+    async def failing_chunks() -> AsyncIterator[bytes]:
+        """Yield one chunk, let the pump start, then fail as a broken stream would."""
+        yield b"a"
+        await asyncio.sleep(0)
+        raise RuntimeError("the inbound stream broke")
+
+    async def scenario() -> None:
+        """Run a turn whose audio source fails partway."""
+        session = BlockingSession()
+
+        try:
+            await RealtimeAgent(ScriptedFactory(session), RecordingSink()).handle_audio(
+                failing_chunks(), _Stream()
+            )
+        except RuntimeError as error:
+            assert "inbound stream broke" in str(error)
+        else:
+            raise AssertionError("expected the stream failure to reach the caller")
+
+        assert session.pump_cancelled is True
+        assert session.closed is True
+
+    asyncio.run(scenario())

@@ -250,12 +250,18 @@ class QwenAudioSessionFactory:
         self._open_timeout_seconds = open_timeout_seconds
 
     async def open(self, instructions: str, tools: list[dict[str, Any]]) -> QwenAudioSession:
-        """Connect, configure, and return a session ready for audio."""
+        """Connect, configure, and return a session ready for audio.
+        Closes on failure: a socket the caller never receives is one nobody can close.
+        """
         connect = self._connect or _default_connect
         async with asyncio.timeout(self._open_timeout_seconds):
             transport = await connect(self._config)
-        session = QwenAudioSession(transport, self._config)
-        await session.configure(instructions, tools)
+            session = QwenAudioSession(transport, self._config)
+            try:
+                await session.configure(instructions, tools)
+            except BaseException:
+                await session.close()
+                raise
         return session
 
 

@@ -1,6 +1,7 @@
 """Agent that hands one turn to a realtime speech model and reports what it says."""
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Any
@@ -79,8 +80,11 @@ class RealtimeAgent:
             await session.finish_input()
             turn.note_input(sent_bytes)
             await pumping
-        except asyncio.CancelledError:
+        except BaseException:
+            # Cancelled on every exit, not just the caller's: an orphaned pump sits in recv().
             pumping.cancel()
+            with contextlib.suppress(BaseException):
+                await pumping
             raise
         finally:
             await turn.close()
