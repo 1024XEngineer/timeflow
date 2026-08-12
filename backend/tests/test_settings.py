@@ -24,6 +24,14 @@ LLM_ENVIRONMENT_VARIABLES = (
     "TIMEFLOW_OPENAI_TIMEOUT_SECONDS",
     "TIMEFLOW_AGENT_MAX_TOOL_ROUNDS",
 )
+TTS_ENVIRONMENT_VARIABLES = (
+    "TIMEFLOW_ALIYUN_TTS_WS_URL",
+    "TIMEFLOW_ALIYUN_TTS_API_KEY",
+    "TIMEFLOW_ALIYUN_TTS_MODEL",
+    "TIMEFLOW_ALIYUN_TTS_VOICE",
+    "TIMEFLOW_ALIYUN_TTS_CONNECT_TIMEOUT_SECONDS",
+    "TIMEFLOW_ALIYUN_TTS_TASK_TIMEOUT_SECONDS",
+)
 
 
 def clear_asr_environment(monkeypatch: MonkeyPatch) -> None:
@@ -38,10 +46,17 @@ def clear_llm_environment(monkeypatch: MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
+def clear_tts_environment(monkeypatch: MonkeyPatch) -> None:
+    """Remove TTS variables so local environments do not affect assertions."""
+    for name in TTS_ENVIRONMENT_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+
+
 def clear_model_environment(monkeypatch: MonkeyPatch) -> None:
     """Remove model-specific variables before settings assertions."""
     clear_asr_environment(monkeypatch)
     clear_llm_environment(monkeypatch)
+    clear_tts_environment(monkeypatch)
 
 
 def test_settings_use_timeflow_environment(monkeypatch: MonkeyPatch) -> None:
@@ -117,6 +132,22 @@ def test_settings_use_qwen_llm_defaults(
     assert settings.agent_max_tool_rounds == 4
 
 
+def test_settings_use_qwen_tts_defaults(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    clear_model_environment(monkeypatch)
+
+    settings = Settings.from_environment(tmp_path / "missing.env")
+
+    assert settings.aliyun_tts_ws_url == ""
+    assert settings.aliyun_tts_api_key == ""
+    assert settings.aliyun_tts_model == "qwen-audio-3.0-tts-flash"
+    assert settings.aliyun_tts_voice == "longanhuan_v3.6"
+    assert settings.aliyun_tts_connect_timeout_seconds == 10.0
+    assert settings.aliyun_tts_task_timeout_seconds == 30.0
+
+
 def test_settings_convert_asr_environment_values(monkeypatch: MonkeyPatch) -> None:
     clear_model_environment(monkeypatch)
     monkeypatch.setenv("TIMEFLOW_ALIYUN_ASR_WS_URL", "wss://example.invalid/ws")
@@ -155,6 +186,25 @@ def test_settings_convert_llm_environment_values(monkeypatch: MonkeyPatch) -> No
     assert settings.openai_model == "custom-model"
     assert settings.openai_timeout_seconds == 12.5
     assert settings.agent_max_tool_rounds == 6
+
+
+def test_settings_convert_tts_environment_values(monkeypatch: MonkeyPatch) -> None:
+    clear_model_environment(monkeypatch)
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_TTS_WS_URL", "wss://example.invalid/inference")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_TTS_API_KEY", "test-key")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_TTS_MODEL", "custom-tts")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_TTS_VOICE", "custom-voice")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_TTS_CONNECT_TIMEOUT_SECONDS", "8.5")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_TTS_TASK_TIMEOUT_SECONDS", "20")
+
+    settings = Settings.from_environment()
+
+    assert settings.aliyun_tts_ws_url == "wss://example.invalid/inference"
+    assert settings.aliyun_tts_api_key == "test-key"
+    assert settings.aliyun_tts_model == "custom-tts"
+    assert settings.aliyun_tts_voice == "custom-voice"
+    assert settings.aliyun_tts_connect_timeout_seconds == 8.5
+    assert settings.aliyun_tts_task_timeout_seconds == 20.0
 
 
 @pytest.mark.parametrize(
@@ -199,6 +249,16 @@ def test_settings_convert_llm_environment_values(monkeypatch: MonkeyPatch) -> No
             "TIMEFLOW_AGENT_MAX_TOOL_ROUNDS",
             "-1",
             "TIMEFLOW_AGENT_MAX_TOOL_ROUNDS must be a positive integer",
+        ),
+        (
+            "TIMEFLOW_ALIYUN_TTS_CONNECT_TIMEOUT_SECONDS",
+            "0",
+            "TTS timeouts must be greater than zero",
+        ),
+        (
+            "TIMEFLOW_ALIYUN_TTS_TASK_TIMEOUT_SECONDS",
+            "-1",
+            "TTS timeouts must be greater than zero",
         ),
     ],
 )
