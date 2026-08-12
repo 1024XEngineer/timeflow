@@ -3,8 +3,12 @@
 import logging
 
 from fastapi import FastAPI, WebSocket
+from sqlalchemy.orm import Session, sessionmaker
 
+from timeflow.business.calendar.service import ScheduleApplicationService
 from timeflow.business.health import HealthService
+from timeflow.data.database import build_engine, build_session_factory
+from timeflow.data.schedule_unit_of_work import SqlAlchemyScheduleUnitOfWork
 from timeflow.gateway.websocket.agent_ports import Agent
 from timeflow.gateway.websocket.connection_manager import ConnectionManager
 from timeflow.gateway.websocket.endpoint import (
@@ -25,7 +29,6 @@ from timeflow.infrastructure.external.realtime.qwen_audio import (
 from timeflow.infrastructure.security.token_verifier import FakeTokenVerifier
 from timeflow.infrastructure.settings import Settings, get_settings
 from timeflow.intelligence.fake_agent import FakeAgent
-from timeflow.intelligence.fake_schedules import SeededScheduleService
 from timeflow.intelligence.realtime.agent import RealtimeAgent
 from timeflow.intelligence.realtime.instructions import build_instructions
 from timeflow.intelligence.realtime.schedule_tools import ToolBox
@@ -43,6 +46,8 @@ def create_app(
     application = FastAPI(title=settings.app_name, version="0.1.0")
     health_service = HealthService()
 
+    session_factory = build_session_factory(build_engine(settings.database_url))
+
     if token_verifier is None:
         # Fail closed: the stand-in verifier accepts any non-empty token, so falling back
         # to it outside development would leave /ws effectively unauthenticated.
@@ -59,7 +64,9 @@ def create_app(
     limiter = UnauthenticatedConnectionLimiter(settings.ws_max_unauthenticated_connections)
 
     if audio_sink is None:
-        audio_sink = AgentAudioSink(_build_agent(settings, WebSocketResultSink(connections)))
+        audio_sink = AgentAudioSink(
+            _build_agent(settings, WebSocketResultSink(connections), session_factory)
+        )
 
     voice_streams = VoiceStreamHandlers(
         audio_sink,
@@ -93,7 +100,29 @@ def create_app(
     return application
 
 
-def _build_agent(settings: Settings, result_sink: WebSocketResultSink) -> Agent:
+def _build_agent(
+    settings: Settings,
+    result_sink: WebSocketResultSink,
+    session_factory: sessionmaker[Session],
+) -> Agent:
+    """Dispatch on TIMEFLOW_VOICE_AGENT_MODE to the agent backend it selects."""
+    if settings.voice_agent_mode == "1":
+        return _build_realtime_agent(settings, result_sink, session_factory)
+    if settings.voice_agent_mode == "2":
+        raise RuntimeError(
+            "TIMEFLOW_VOICE_AGENT_MODE=2 selects the LLM+ASR+TTS conversation agent, "
+            "which is not wired into the gateway yet (it does not implement the Agent "
+            "port). Set TIMEFLOW_VOICE_AGENT_MODE=1 to use the realtime agent."
+        )
+    # Settings.from_environment already rejects anything but "1" or "2".
+    raise AssertionError(f"unreachable voice_agent_mode: {settings.voice_agent_mode!r}")
+
+
+def _build_realtime_agent(
+    settings: Settings,
+    result_sink: WebSocketResultSink,
+    session_factory: sessionmaker[Session],
+) -> Agent:
     """Return the realtime agent when it is configured, otherwise the stand-in.
 
     Fails closed on the stand-in rather than on the absence of credentials: a configured
@@ -103,11 +132,13 @@ def _build_agent(settings: Settings, result_sink: WebSocketResultSink) -> Agent:
     if settings.aliyun_audio_is_configured():
         logger.info("using the realtime model", extra={"model": settings.aliyun_audio_model})
 
-        def bind_account(account_id: str) -> ToolBox:
-            return ToolBox(account_id, SeededScheduleService())
+        schedule_service = ScheduleApplicationService(
+            lambda: SqlAlchemyScheduleUnitOfWork(session_factory)
+        )
 
-        # Seeded rather than real: ScheduleAgentService's five methods all raise
-        # NotImplementedError. Swapping in the real service is this one line.
+        def bind_account(account_id: str) -> ToolBox:
+            return ToolBox(account_id, schedule_service)
+
         return RealtimeAgent(
             QwenAudioSessionFactory(
                 QwenAudioConfig(
