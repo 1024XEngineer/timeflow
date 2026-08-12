@@ -1,28 +1,43 @@
-import { DEFAULT_SNOOZE_MINUTES, type LocalReminderSchedule } from './reminder';
+import {
+  DEFAULT_SNOOZE_MINUTES,
+  type LocalReminderSchedule,
+  type ReminderConfiguration,
+} from './reminder';
+
+/** 以锚点时刻解析 at_time / before_start 触发时刻。 */
+function resolveFromAnchor(reminder: ReminderConfiguration, anchorIso: string): string | null {
+  if (reminder.reminder_type === 'before_start') {
+    const offsetMinutes = reminder.reminder_offset_minutes ?? 0;
+    const startMs = Date.parse(anchorIso);
+    if (Number.isNaN(startMs)) return null;
+    return new Date(startMs - offsetMinutes * 60_000).toISOString();
+  }
+
+  if (reminder.reminder_type === 'at_time') {
+    return anchorIso;
+  }
+
+  return null;
+}
 
 /** 计算时间型提醒的应触发时刻（ISO）。无有效时间则返回 null。 */
 export function resolveTimeTriggerAt(schedule: LocalReminderSchedule): string | null {
   const reminder = schedule.reminder;
   if (reminder == null) return null;
 
+  // 重复日程必须用运行时 occurrence 光标；缺失时明确拒绝，避免回退到系列 start_time。
+  if (schedule.schedule_kind === 'recurring') {
+    const occurrenceAt = schedule.runtime.next_trigger_at;
+    if (occurrenceAt == null) return null;
+    return resolveFromAnchor(reminder, occurrenceAt);
+  }
+
   if (reminder.reminder_trigger_at != null) {
     return reminder.reminder_trigger_at;
   }
 
   if (schedule.start_time == null) return null;
-
-  if (reminder.reminder_type === 'before_start') {
-    const offsetMinutes = reminder.reminder_offset_minutes ?? 0;
-    const startMs = Date.parse(schedule.start_time);
-    if (Number.isNaN(startMs)) return null;
-    return new Date(startMs - offsetMinutes * 60_000).toISOString();
-  }
-
-  if (reminder.reminder_type === 'at_time') {
-    return schedule.start_time;
-  }
-
-  return null;
+  return resolveFromAnchor(reminder, schedule.start_time);
 }
 
 /** 当前有效触发时刻：snooze 未结束时以 snoozed_until 为准。 */
