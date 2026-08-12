@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { accessAuth } from '../api/auth';
 import type { AuthAccessResponse } from '../contracts/auth';
+import { accessAuth } from '../features/auth/data/auth';
 import { SqliteScheduleClientService } from '../features/schedule/application';
 import { ScheduleLocalRepository } from '../features/schedule/data';
 import { ScheduleCalendarScreen } from '../features/schedule/presentation/ScheduleCalendarScreen';

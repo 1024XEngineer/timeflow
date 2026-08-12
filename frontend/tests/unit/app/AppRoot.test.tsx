@@ -1,17 +1,19 @@
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
-import { accessAuth } from '../api/auth';
-import type { AuthAccessResponse } from '../contracts/auth';
-import { AppRoot } from './AppRoot';
+import type { AuthAccessResponse } from '../../../src/contracts/auth';
+import { accessAuth } from '../../../src/features/auth/data/auth';
+import { AppRoot } from '../../../src/app/AppRoot';
 
-jest.mock('../api/auth', () => ({ accessAuth: jest.fn() }));
-jest.mock('../infrastructure/database', () => ({
+jest.mock('../../../src/features/auth/data/auth', () => ({ accessAuth: jest.fn() }));
+jest.mock('../../../src/infrastructure/database', () => ({
   openTimeflowDatabase: jest.fn<() => Promise<unknown>>().mockResolvedValue({}),
 }));
-jest.mock('../features/schedule/data', () => ({ ScheduleLocalRepository: jest.fn() }));
-jest.mock('../features/schedule/application', () => ({ SqliteScheduleClientService: jest.fn() }));
-jest.mock('../features/schedule/presentation/ScheduleCalendarScreen', () => ({
+jest.mock('../../../src/features/schedule/data', () => ({ ScheduleLocalRepository: jest.fn() }));
+jest.mock('../../../src/features/schedule/application', () => ({
+  SqliteScheduleClientService: jest.fn(),
+}));
+jest.mock('../../../src/features/schedule/presentation/ScheduleCalendarScreen', () => ({
   ScheduleCalendarScreen: () => {
     const { Text: NativeText } = jest.requireActual(
       'react-native',
@@ -43,7 +45,9 @@ describe('AppRoot', () => {
   });
 
   it('can retry SQLite initialization after a failure', async () => {
-    const { openTimeflowDatabase } = jest.requireMock('../infrastructure/database') as {
+    const { openTimeflowDatabase } = jest.requireMock(
+      '../../../src/infrastructure/database',
+    ) as {
       openTimeflowDatabase: jest.MockedFunction<() => Promise<unknown>>;
     };
     openTimeflowDatabase.mockReset();

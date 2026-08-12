@@ -1,15 +1,15 @@
 import {
   AuthAccessError,
+  isAuthAccessResponse,
   type AuthAccess,
-  type AuthAccessResponse,
   type AuthErrorCode,
-} from '../contracts/auth';
+} from '../../../contracts/auth';
 import {
   ApiError,
   ApiResponseError,
   apiFetch,
   type ApiRequest,
-} from '../infrastructure/network/client';
+} from '../../../infrastructure/network/client';
 
 const AUTH_ACCESS_TIMEOUT_MS = 15_000;
 
@@ -19,7 +19,7 @@ const AUTH_ERROR_CODES = new Set<AuthErrorCode>([
   'AUTH_INVALID_CREDENTIALS',
 ]);
 
-/** 纯前端传输适配器；账号创建或密码校验均由服务端统一接口决定。 */
+/** 统一认证请求适配器；账号创建或密码校验均由服务端统一入口决定。 */
 export function createAuthAccess(request: ApiRequest = apiFetch): AuthAccess {
   return async (credentials) => {
     const abortController = new AbortController();
@@ -33,7 +33,6 @@ export function createAuthAccess(request: ApiRequest = apiFetch): AuthAccess {
         signal: abortController.signal,
       });
 
-      // 只有完整 Token 响应才能进入页面的成功回调，避免伪造或误判登录成功。
       if (!isAuthAccessResponse(response)) {
         throw new AuthAccessError('invalid_response');
       }
@@ -59,28 +58,14 @@ export function createAuthAccess(request: ApiRequest = apiFetch): AuthAccess {
   };
 }
 
+// 公开单例供默认组装使用；测试和定制组装仍通过工厂注入请求实现。
 export const accessAuth = createAuthAccess();
-
-function isAuthAccessResponse(value: unknown): value is AuthAccessResponse {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  return (
-    isNonBlankString(value.account_id) &&
-    isNonBlankString(value.access_token) &&
-    typeof value.expires_in === 'number' &&
-    Number.isFinite(value.expires_in) &&
-    value.expires_in > 0
-  );
-}
 
 function readAuthErrorCode(body: unknown): AuthErrorCode | undefined {
   if (!isRecord(body)) {
     return undefined;
   }
 
-  // 定义了错误码但未限定 JSON 外壳，因此兼容两种常见响应结构。
   const candidate = isRecord(body.error) ? body.error.code : body.code;
   return typeof candidate === 'string' && AUTH_ERROR_CODES.has(candidate as AuthErrorCode)
     ? (candidate as AuthErrorCode)
@@ -89,10 +74,6 @@ function readAuthErrorCode(body: unknown): AuthErrorCode | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
-}
-
-function isNonBlankString(value: unknown): value is string {
-  return typeof value === 'string' && value.trim().length > 0;
 }
 
 function isAbortError(value: unknown): boolean {

@@ -19,6 +19,22 @@ export interface AuthAccessResponse {
   expires_in: number;
 }
 
+/** 验证统一认证入口返回的完整访问凭据。 */
+export function isAuthAccessResponse(value: unknown): value is AuthAccessResponse {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    hasOwnProperty(value, 'account_id') &&
+    hasOwnProperty(value, 'access_token') &&
+    hasOwnProperty(value, 'expires_in') &&
+    isNonBlankString(value.account_id) &&
+    isNonBlankString(value.access_token) &&
+    value.expires_in === 3600
+  );
+}
+
 /** 页面调用认证适配器时依赖的异步接口。 */
 export type AuthAccess = (request: AuthAccessRequest) => Promise<AuthAccessResponse>;
 
@@ -38,4 +54,16 @@ export class AuthAccessError extends Error {
     super(code ?? reason);
     this.name = 'AuthAccessError';
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasOwnProperty(record: Record<string, unknown>, property: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, property);
+}
+
+function isNonBlankString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
 }
