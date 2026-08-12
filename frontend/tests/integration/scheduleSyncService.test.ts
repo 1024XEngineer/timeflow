@@ -160,7 +160,7 @@ describe('SqliteScheduleSyncService', () => {
     });
   });
 
-  it('ignores the entire duplicate or stale transaction without applying overrides', async () => {
+  it('restores missing schedules and overrides when another snapshot member is stale', async () => {
     const current = scheduleSnapshot({
       id: 'series-a',
       schedule_kind: 'recurring',
@@ -177,23 +177,61 @@ describe('SqliteScheduleSyncService', () => {
       messageId: 'stale',
       accountId: 'account-a',
       snapshot: {
-        schedules: [{ ...current, title: 'Stale title', revision: 1 }],
-        occurrence_overrides: [
-          replacementOverride({ action: 'cancel', replacement_schedule_id: null }),
+        schedules: [
+          { ...current, title: 'Stale title', revision: 1 },
+          scheduleSnapshot({ id: 'replacement-a', start_time: '2026-08-17T06:00:00Z' }),
         ],
+        occurrence_overrides: [replacementOverride()],
       },
     });
 
     expect(result).toEqual({
       messageId: 'stale',
-      status: 'ignored_stale',
-      changedScheduleIds: [],
+      status: 'applied',
+      changedScheduleIds: ['replacement-a', 'series-a'],
     });
     expect(await repository.getSchedule('account-a', 'series-a')).toMatchObject({
       title: 'Cloud schedule',
       cloud_revision: 2,
     });
-    expect(await repository.listOccurrenceOverrides('account-a', 'series-a')).toEqual([]);
+    expect(await repository.getSchedule('account-a', 'replacement-a')).not.toBeNull();
+    expect(await repository.listOccurrenceOverrides('account-a', 'series-a')).toEqual([
+      {
+        id: 'override-a',
+        schedule_id: 'series-a',
+        occurrence_start: '2026-08-17T02:00:00Z',
+        action: 'replace',
+        replacement_schedule_id: 'replacement-a',
+      },
+    ]);
+  });
+
+  it('reports ignored_stale only when no schedule or override needs applying', async () => {
+    const current = scheduleSnapshot({ revision: 2 });
+    await service.applyScheduleSnapshotToSqlite({
+      messageId: 'current',
+      accountId: 'account-a',
+      snapshot: { schedules: [current], occurrence_overrides: [] },
+    });
+
+    const result = await service.applyScheduleSnapshotToSqlite({
+      messageId: 'stale-only',
+      accountId: 'account-a',
+      snapshot: {
+        schedules: [{ ...current, title: 'Stale title', revision: 1 }],
+        occurrence_overrides: [],
+      },
+    });
+
+    expect(result).toEqual({
+      messageId: 'stale-only',
+      status: 'ignored_stale',
+      changedScheduleIds: [],
+    });
+    expect(await repository.getSchedule('account-a', 'schedule-a')).toMatchObject({
+      title: 'Cloud schedule',
+      cloud_revision: 2,
+    });
   });
 
   it('reports account mismatch for cloud ownership and existing local ID collisions', async () => {

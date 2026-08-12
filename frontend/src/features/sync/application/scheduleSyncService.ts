@@ -75,29 +75,28 @@ export class SqliteScheduleSyncService implements ScheduleSyncService {
       return failed(command.messageId, errorCode);
     }
 
-    let ignoredStale = false;
+    const changedScheduleIds = new Set<string>();
     try {
       await this.database.withExclusiveTransactionAsync(async (transaction) => {
         const existingRows = await loadExistingRows(transaction, command.snapshot.schedules);
+        const schedulesToApply: ScheduleSnapshot[] = [];
         for (const schedule of command.snapshot.schedules) {
           const existing = existingRows.get(schedule.id);
           if (existing !== undefined && existing.account_id !== command.accountId) {
             throw new LocalAccountMismatchError();
           }
-          if (existing !== undefined && existing.cloud_revision >= schedule.revision) {
-            ignoredStale = true;
+          if (existing === undefined || existing.cloud_revision < schedule.revision) {
+            schedulesToApply.push(schedule);
           }
         }
         await assertReferencedRowsDoNotCrossAccount(transaction, command);
-        if (ignoredStale) {
-          return;
-        }
 
         const repository = new ScheduleLocalRepository(transaction);
-        for (const schedule of command.snapshot.schedules) {
+        for (const schedule of schedulesToApply) {
           if (!(await repository.applyCloudSchedule(toCloudRow(schedule)))) {
             throw new Error(`Could not apply cloud schedule ${schedule.id}`);
           }
+          changedScheduleIds.add(schedule.id);
         }
         for (const override of command.snapshot.occurrence_overrides) {
           if (
@@ -108,6 +107,7 @@ export class SqliteScheduleSyncService implements ScheduleSyncService {
           ) {
             throw new Error(`Could not apply occurrence override ${override.id}`);
           }
+          changedScheduleIds.add(override.schedule_id);
         }
       });
     } catch (error) {
@@ -121,10 +121,8 @@ export class SqliteScheduleSyncService implements ScheduleSyncService {
 
     return {
       messageId: command.messageId,
-      status: ignoredStale ? 'ignored_stale' : 'applied',
-      changedScheduleIds: ignoredStale
-        ? []
-        : command.snapshot.schedules.map((schedule) => schedule.id),
+      status: changedScheduleIds.size === 0 ? 'ignored_stale' : 'applied',
+      changedScheduleIds: [...changedScheduleIds],
     };
   }
 }
