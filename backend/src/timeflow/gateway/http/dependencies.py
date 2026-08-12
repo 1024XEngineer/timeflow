@@ -54,8 +54,8 @@ def create_authenticated_account_dependency(
 
         try:
             account_id = access_token_service.verify(token)
-        except Exception:
-            raise _new_internal_error() from None
+        except Exception as error:
+            raise _new_internal_error(error) from None
         if not isinstance(account_id, str) or not account_id:
             raise AuthHttpError(AUTH_INVALID_TOKEN)
         return AuthenticatedAccount(account_id=account_id)

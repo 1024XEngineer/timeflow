@@ -16,6 +16,7 @@ from timeflow.data.database import build_engine, build_session_factory
 from timeflow.data.schedule_unit_of_work import SqlAlchemyScheduleUnitOfWork
 from timeflow.gateway.http import (
     AuthAccess,
+    AuthRateLimiter,
     create_auth_router,
     create_authenticated_account_dependency,
     install_auth_http_error_handler,
@@ -53,6 +54,7 @@ def create_app(
     auth_access: AuthAccess | None = None,
     access_token_service: AccessTokenService | None = None,
     engine: Engine | None = None,
+    auth_rate_limiter: AuthRateLimiter | None = None,
 ) -> FastAPI:
     """Build the application and connect the minimal inbound surface."""
     settings = get_settings()
@@ -107,7 +109,7 @@ def create_app(
     router.register("message.ack", handle_message_ack)
 
     install_auth_http_error_handler(application)
-    application.include_router(create_auth_router(auth_access))
+    application.include_router(create_auth_router(auth_access, rate_limiter=auth_rate_limiter))
     application.state.authenticated_account_dependency = create_authenticated_account_dependency(
         access_tokens
     )

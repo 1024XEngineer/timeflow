@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from timeflow.business.auth import AuthAccessResult, AuthError, AuthErrorCode
-from timeflow.gateway.http import create_auth_router
+from timeflow.gateway.http import AuthRateLimiter, RateLimitPolicy, create_auth_router
 
 
 @dataclass
@@ -27,9 +27,13 @@ class _AccessStub:
         return self.result
 
 
-def _client(service: _AccessStub) -> TestClient:
+def _client(
+    service: _AccessStub,
+    *,
+    rate_limiter: AuthRateLimiter | None = None,
+) -> TestClient:
     application = FastAPI()
-    application.include_router(create_auth_router(service))
+    application.include_router(create_auth_router(service, rate_limiter=rate_limiter))
     return TestClient(application, raise_server_exceptions=False)
 
 
@@ -79,6 +83,32 @@ def test_access_maps_each_defined_domain_error(
     assert response.status_code == status_code
     assert response.headers["content-type"] == "application/json"
     assert response.json() == _error(code.value, message)
+    assert "x-auth-event-id" not in response.headers
+
+
+def test_access_rate_limit_rejects_before_calling_the_auth_service() -> None:
+    """超限请求在 Argon2 和账户访问服务之前被拒绝。"""
+    service = _AccessStub(AuthAccessResult("acc_001", "access-token", 3600))
+    limiter = AuthRateLimiter(RateLimitPolicy(client_limit=1, global_limit=10))
+    client = _client(service, rate_limiter=limiter)
+
+    first = client.post(
+        "/api/v1/auth/access",
+        json={"username": "Alice", "password": "strong-password"},
+    )
+    second = client.post(
+        "/api/v1/auth/access",
+        json={"username": "Random-user", "password": "strong-password"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert second.json() == _error(
+        "AUTH_RATE_LIMITED",
+        "Too many authentication requests",
+    )
+    assert second.headers["retry-after"] == "60"
+    assert service.calls == [("Alice", "strong-password")]
 
 
 @pytest.mark.parametrize(
@@ -112,7 +142,7 @@ def test_access_maps_a_missing_or_wrongly_typed_single_field_to_400(
     assert service.calls == []
 
 
-def test_access_logs_only_an_internal_event_for_unknown_failures(
+def test_access_returns_an_event_id_and_sanitized_diagnostics_for_unknown_failures(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     password = "never-log-this-password"
@@ -134,8 +164,19 @@ def test_access_logs_only_an_internal_event_for_unknown_failures(
     assert "sensitive-user" not in caplog.text
     record = caplog.records[-1]
     assert record.event_id.startswith("auth_event_")
+    response_event_id = response.headers.get("x-auth-event-id")
+    assert response_event_id == record.event_id
+    assert response_event_id is not None
     assert record.error_code == "AUTH_INTERNAL_ERROR"
     assert record.status_code == 500
+    assert record.exception_module == "builtins"
+    assert record.exception_type == "RuntimeError"
+    assert record.traceback_frames
+    assert all(
+        set(frame) == {"filename", "lineno", "function"} for frame in record.traceback_frames
+    )
+    assert all(isinstance(frame["lineno"], int) for frame in record.traceback_frames)
+    assert all(internal_detail not in str(frame) for frame in record.traceback_frames)
 
 
 @pytest.mark.parametrize(

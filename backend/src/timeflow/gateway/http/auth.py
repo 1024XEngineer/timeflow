@@ -1,8 +1,11 @@
 """账户访问与稳定认证错误的 HTTP 适配器。"""
 
 import logging
+import os
+from collections import deque
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
+from traceback import walk_tb
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -14,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import Response
 
 from timeflow.business.auth import AuthAccessResult, AuthError, AuthErrorCode
+from timeflow.gateway.http.rate_limit import AuthRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +75,11 @@ class AuthHttpErrorSpec:
 
 AUTH_REQUIRED = AuthHttpErrorSpec(401, "AUTH_REQUIRED", "Authentication required")
 AUTH_INVALID_TOKEN = AuthHttpErrorSpec(401, "AUTH_INVALID_TOKEN", "Invalid access token")
+AUTH_RATE_LIMITED = AuthHttpErrorSpec(
+    429,
+    "AUTH_RATE_LIMITED",
+    "Too many authentication requests",
+)
 AUTH_INTERNAL_ERROR = AuthHttpErrorSpec(
     500,
     "AUTH_INTERNAL_ERROR",
@@ -90,29 +99,59 @@ _DOMAIN_ERROR_SPECS = {
 class AuthHttpError(Exception):
     """可复用 HTTP 依赖抛出的认证错误。"""
 
-    __slots__ = ("spec",)
+    __slots__ = ("event_id", "spec")
 
-    def __init__(self, spec: AuthHttpErrorSpec) -> None:
+    def __init__(self, spec: AuthHttpErrorSpec, *, event_id: str | None = None) -> None:
         super().__init__(spec.code)
         self.spec = spec
+        self.event_id = event_id
 
 
-def _error_response(spec: AuthHttpErrorSpec) -> JSONResponse:
+def _error_response(
+    spec: AuthHttpErrorSpec,
+    *,
+    event_id: str | None = None,
+    retry_after_seconds: int | None = None,
+) -> JSONResponse:
     envelope = AuthErrorEnvelope(error=AuthErrorDetail(code=spec.code, message=spec.message))
-    return JSONResponse(status_code=spec.status_code, content=envelope.model_dump())
+    headers: dict[str, str] = {}
+    if event_id is not None:
+        # 只返回不可预测的关联标识，不把异常细节暴露给客户端。
+        headers["X-Auth-Event-Id"] = event_id
+    if retry_after_seconds is not None:
+        headers["Retry-After"] = str(retry_after_seconds)
+    return JSONResponse(
+        status_code=spec.status_code,
+        content=envelope.model_dump(),
+        headers=headers,
+    )
 
 
-def _new_internal_error() -> AuthHttpError:
+def _new_internal_error(error: Exception) -> AuthHttpError:
+    """创建可关联的内部错误，并记录不含异常文本的诊断元数据。"""
     event_id = f"auth_event_{uuid4().hex}"
+    frames: deque[dict[str, str | int]] = deque(maxlen=8)
+    for frame, line_number in walk_tb(error.__traceback__):
+        frames.append(
+            {
+                "filename": os.path.basename(frame.f_code.co_filename),
+                "lineno": line_number,
+                "function": frame.f_code.co_name,
+            }
+        )
+    traceback_frames = list(frames)
     logger.error(
         "authentication service unavailable",
         extra={
             "event_id": event_id,
             "error_code": AUTH_INTERNAL_ERROR.code,
             "status_code": AUTH_INTERNAL_ERROR.status_code,
+            "exception_module": type(error).__module__,
+            "exception_type": type(error).__qualname__,
+            "traceback_frames": traceback_frames,
         },
     )
-    return AuthHttpError(AUTH_INTERNAL_ERROR)
+    return AuthHttpError(AUTH_INTERNAL_ERROR, event_id=event_id)
 
 
 def _service_error_response(error: Exception) -> JSONResponse:
@@ -120,7 +159,8 @@ def _service_error_response(error: Exception) -> JSONResponse:
         spec = _DOMAIN_ERROR_SPECS.get(error.code)
         if spec is not None:
             return _error_response(spec)
-    return _error_response(_new_internal_error().spec)
+    internal_error = _new_internal_error(error)
+    return _error_response(internal_error.spec, event_id=internal_error.event_id)
 
 
 def _single_invalid_request_field(error: RequestValidationError) -> AuthErrorCode | None:
@@ -168,16 +208,35 @@ class _AuthAccessRoute(APIRoute):
         return route_handler
 
 
-def create_auth_router(auth_access: AuthAccess) -> APIRouter:
+def create_auth_router(
+    auth_access: AuthAccess,
+    *,
+    rate_limiter: AuthRateLimiter | None = None,
+) -> APIRouter:
     """用注入的账户访问用例构建公开路由。"""
     router = APIRouter(route_class=_AuthAccessRoute)
+    limiter = rate_limiter or AuthRateLimiter()
 
     @router.post(
         "/api/v1/auth/access",
         response_model=AuthAccessResponse,
-        responses={400: {"model": AuthErrorEnvelope}, 401: {"model": AuthErrorEnvelope}},
+        responses={
+            400: {"model": AuthErrorEnvelope},
+            401: {"model": AuthErrorEnvelope},
+            429: {"model": AuthErrorEnvelope},
+        },
     )
-    def access(request: AuthAccessRequest) -> AuthAccessResponse | Response:
+    def access(
+        http_request: Request,
+        request: AuthAccessRequest,
+    ) -> AuthAccessResponse | Response:
+        client = http_request.client
+        client_key = client.host if client is not None else "unknown"
+        if not limiter.allow(client_key):
+            return _error_response(
+                AUTH_RATE_LIMITED,
+                retry_after_seconds=limiter.retry_after_seconds,
+            )
         try:
             result = auth_access.access(request.username, request.password)
         except Exception as error:
@@ -195,7 +254,7 @@ async def auth_http_error_handler(_request: Request, error: Exception) -> Respon
     """渲染可复用认证依赖抛出的错误。"""
     if not isinstance(error, AuthHttpError):
         raise error
-    return _error_response(error.spec)
+    return _error_response(error.spec, event_id=error.event_id)
 
 
 def install_auth_http_error_handler(application: FastAPI) -> None:
@@ -204,6 +263,7 @@ def install_auth_http_error_handler(application: FastAPI) -> None:
 
 
 __all__ = [
+    "AUTH_RATE_LIMITED",
     "AuthAccess",
     "AuthAccessRequest",
     "AuthAccessResponse",

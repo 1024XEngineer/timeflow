@@ -124,4 +124,14 @@ def test_verifier_failure_returns_a_sanitized_internal_error(
     assert response.json() == _error("AUTH_INTERNAL_ERROR", "Authentication service unavailable")
     assert "never-log-this-token" not in caplog.text
     assert internal_detail not in caplog.text
-    assert caplog.records[-1].event_id.startswith("auth_event_")
+    record = caplog.records[-1]
+    assert record.event_id.startswith("auth_event_")
+    response_event_id = response.headers.get("x-auth-event-id")
+    assert response_event_id == record.event_id
+    assert response_event_id is not None
+    assert record.exception_module == "builtins"
+    assert record.exception_type == "RuntimeError"
+    assert record.traceback_frames
+    assert all(
+        set(frame) == {"filename", "lineno", "function"} for frame in record.traceback_frames
+    )
