@@ -47,6 +47,7 @@ def _build_with_environment(
     *,
     jwt_secret: str = TEST_JWT_SECRET,
     audio_configured: bool = False,
+    voice_agent_mode: str = "1",
     **injected: Any,
 ) -> FastAPI:
     """固定外部环境后构建应用，避免本机配置改变断言含义。"""
@@ -65,6 +66,7 @@ def _build_with_environment(
         **TEST_JWT_ENVIRONMENT,
         "TIMEFLOW_ENVIRONMENT": environment,
         "TIMEFLOW_JWT_SECRET": jwt_secret,
+        "TIMEFLOW_VOICE_AGENT_MODE": voice_agent_mode,
         **credentials,
     }
     get_settings.cache_clear()
@@ -85,7 +87,6 @@ def test_build_rejects_an_empty_or_weak_default_jwt_secret(jwt_secret: str) -> N
             jwt_secret=jwt_secret,
             audio_sink=_Sink(),
         )
-
 
 def test_injected_token_service_is_shared_by_http_and_websocket() -> None:
     """显式注入的真实令牌服务同时供 HTTP 与 WebSocket 使用。"""
@@ -113,6 +114,11 @@ def test_injected_token_service_is_shared_by_http_and_websocket() -> None:
 
     dependency = application.state.authenticated_account_dependency
     assert dependency(f"Bearer {issued.access_token}").account_id == "acc_shared"
+
+
+def test_building_in_development_still_works_without_a_real_model() -> None:
+    """开发环境没有外部模型时仍可使用显式的测试音频接收器。"""
+    assert _build_with_environment("development", audio_sink=_Sink()) is not None
 
 
 def test_production_without_a_real_audio_sink_fails_closed() -> None:
@@ -156,6 +162,12 @@ def test_configured_realtime_model_lets_production_build() -> None:
     application = _build_with_environment("production", audio_configured=True)
 
     assert application is not None
+
+
+def test_voice_agent_mode_two_fails_closed_until_conversation_agent_is_wired() -> None:
+    """未实现 Agent 端口前，不能静默选择 LLM+ASR+TTS 模式。"""
+    with pytest.raises(RuntimeError, match="TIMEFLOW_VOICE_AGENT_MODE=2"):
+        _build_with_environment("development", voice_agent_mode="2")
 
 
 def test_lifespan_disposes_the_database_engine_owned_by_the_application() -> None:

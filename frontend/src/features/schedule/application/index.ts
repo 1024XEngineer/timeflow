@@ -3,3 +3,4 @@ export type {
   ScheduleClientService,
   ScheduleOccurrenceView,
 } from './scheduleClientService';
+export { SqliteScheduleClientService } from './scheduleClientService';

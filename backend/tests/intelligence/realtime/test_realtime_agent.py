@@ -19,6 +19,7 @@ from timeflow.intelligence.realtime.agent import RealtimeAgent
 class _Stream:
     """Identifiers of the audio stream a turn answers."""
 
+    account_id: str = "acc_test"
     session_id: str = "ws_session_test"
     stream_id: str = "stream_test"
     conversation_id: str = "conversation_test"
@@ -242,9 +243,9 @@ def test_the_user_audio_reaches_the_model_unchanged_then_input_is_closed() -> No
 
         assert session.audio_sent == [b"one", b"two", b"three"]
         assert session.finished is True
-        # Closed at the end of the turn. Keeping it open so a follow-up can remember this
-        # turn is what the round adding questions needs, and it lands with them.
-        assert session.closed is True
+        # Held open past the turn: a follow-up answering a question has to reach a model
+        # that still remembers asking it.
+        assert session.closed is False
 
     asyncio.run(scenario())
 

@@ -118,6 +118,30 @@ def test_deliver_result_sends_voice_command_result() -> None:
         assert frame["message_id"] == "msg_a"
         assert frame["conversation_id"] == "conversation_test"
         assert frame["payload"]["operation"] == "create_schedule"
+        # Flat, per protocol §5.5 -- not the whole outcome dict nested under "schedule".
+        assert frame["payload"]["schedule"] == {"id": "msg_a"}
+        assert "schedules" not in frame["payload"]
+
+    asyncio.run(scenario())
+
+
+def test_deliver_result_for_a_query_sends_schedules_not_schedule() -> None:
+    """A list_schedules outcome carries payload.schedules, per protocol §5.6."""
+
+    async def scenario() -> None:
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register(SESSION_ID, connection)
+        matches = [{"id": "sch_1"}, {"id": "sch_2"}]
+        result = CommandResult(
+            message_id="msg_b", operation="list_schedules", status="applied", schedules=matches
+        )
+
+        await WebSocketResultSink(connections).deliver_result(result, _Identity())
+
+        frame = connection.frames[0]
+        assert frame["payload"]["schedules"] == matches
+        assert "schedule" not in frame["payload"]
 
     asyncio.run(scenario())
 
