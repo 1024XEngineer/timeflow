@@ -23,16 +23,7 @@ from timeflow.business.auth import (
 )
 from timeflow.data.account_uow import SqlAlchemyAuthUnitOfWork
 from timeflow.data.models import Account
-
-
-class _Hasher:
-    """隔离包二算法，只为包一竞态验证提供确定性哈希。"""
-
-    def hash(self, password: str) -> str:
-        return f"test-hash:{password}"
-
-    def verify(self, password: str, password_hash: str) -> bool:
-        return password_hash == self.hash(password)
+from timeflow.infrastructure.security import Argon2PasswordHasher
 
 
 @dataclass(frozen=True)
@@ -115,7 +106,7 @@ def test_postgres_same_username_race_uses_one_winner_and_fresh_transaction(
     suffix = uuid4().hex
     username = f"race-{suffix}"
     factory = sessionmaker(bind=postgres_engine, expire_on_commit=False)
-    hasher = _Hasher()
+    hasher = Argon2PasswordHasher()
     service = AuthAccessService(_RacingFactory(factory), hasher, _Tokens())
 
     def access(password: str) -> tuple[str, str]:
@@ -133,6 +124,8 @@ def test_postgres_same_username_race_uses_one_winner_and_fresh_transaction(
         with Session(postgres_engine) as session:
             rows = list(session.scalars(sa.select(Account).where(Account.username == username)))
         assert len(rows) == 1
+        assert rows[0].password_hash.startswith("$argon2id$")
+        assert all(password not in rows[0].password_hash for password in passwords)
         if passwords[0] == passwords[1]:
             assert [status for status, _ in results] == ["success", "success"]
             assert results[0][1] == results[1][1] == rows[0].id

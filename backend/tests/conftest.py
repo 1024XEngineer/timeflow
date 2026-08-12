@@ -4,9 +4,10 @@ import os
 from collections.abc import Iterator
 
 import pytest
-import sqlalchemy as sa
 from sqlalchemy import Engine
 from sqlalchemy.engine import Connection
+
+from timeflow.data.database import build_engine
 
 
 @pytest.fixture(scope="session")
@@ -15,7 +16,7 @@ def postgres_engine() -> Iterator[Engine]:
     database_url = os.getenv("TIMEFLOW_TEST_DATABASE_URL")
     if database_url is None:
         pytest.skip("TIMEFLOW_TEST_DATABASE_URL is not set")
-    engine = sa.create_engine(database_url)
+    engine = build_engine(database_url)
     try:
         yield engine
     finally:
