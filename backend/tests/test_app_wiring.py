@@ -92,6 +92,24 @@ def test_building_outside_development_works_once_both_are_injected() -> None:
     assert built is not None
 
 
+def test_voice_agent_mode_two_fails_closed_until_the_conversation_agent_is_wired() -> None:
+    """The LLM+ASR+TTS pipeline is not an Agent yet, so selecting it must not build silently."""
+    get_settings.cache_clear()
+    try:
+        with mock.patch.dict(
+            os.environ,
+            {"TIMEFLOW_ENVIRONMENT": "development", "TIMEFLOW_VOICE_AGENT_MODE": "2"},
+            clear=False,
+        ):
+            create_app()
+    except RuntimeError as error:
+        assert "TIMEFLOW_VOICE_AGENT_MODE=2" in str(error)
+        return
+    finally:
+        get_settings.cache_clear()
+    raise AssertionError("expected create_app to refuse voice_agent_mode=2")
+
+
 def test_a_configured_model_lets_a_deployment_build_without_an_injected_sink() -> None:
     """The sink guard is about the stand-in, not about wiring a sink by hand.
 

@@ -45,6 +45,8 @@ class Settings:
     aliyun_audio_model: str = "qwen-audio-3.0-realtime-plus"
     aliyun_audio_region: str = "cn-beijing"
     aliyun_audio_voice: str = "longanqian"
+    # "1" = the end-to-end realtime model; "2" = the LLM+ASR+TTS conversation pipeline.
+    voice_agent_mode: str = "1"
 
     @classmethod
     def from_environment(cls, env_file: Path | str = ".env") -> "Settings":
@@ -64,6 +66,7 @@ class Settings:
 
         openai_timeout_seconds = float(environ.get("TIMEFLOW_OPENAI_TIMEOUT_SECONDS", "30.0"))
         agent_max_tool_rounds = int(environ.get("TIMEFLOW_AGENT_MAX_TOOL_ROUNDS", "4"))
+        voice_agent_mode = environ.get("TIMEFLOW_VOICE_AGENT_MODE", "1")
         aliyun_tts_connect_timeout_seconds = float(
             environ.get("TIMEFLOW_ALIYUN_TTS_CONNECT_TIMEOUT_SECONDS", "10.0")
         )
@@ -83,6 +86,8 @@ class Settings:
             raise ValueError("TIMEFLOW_OPENAI_TIMEOUT_SECONDS must be greater than zero")
         if agent_max_tool_rounds <= 0:
             raise ValueError("TIMEFLOW_AGENT_MAX_TOOL_ROUNDS must be a positive integer")
+        if voice_agent_mode not in ("1", "2"):
+            raise ValueError("TIMEFLOW_VOICE_AGENT_MODE must be '1' or '2'")
         if aliyun_tts_connect_timeout_seconds <= 0 or aliyun_tts_task_timeout_seconds <= 0:
             raise ValueError("TTS timeouts must be greater than zero")
 
@@ -133,6 +138,7 @@ class Settings:
             ),
             aliyun_audio_region=environ.get("TIMEFLOW_ALIYUN_AUDIO_REGION", "cn-beijing"),
             aliyun_audio_voice=environ.get("TIMEFLOW_ALIYUN_AUDIO_VOICE", "longanqian"),
+            voice_agent_mode=voice_agent_mode,
         )
 
     def aliyun_audio_is_configured(self) -> bool:
