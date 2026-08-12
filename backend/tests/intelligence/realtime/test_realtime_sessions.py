@@ -243,9 +243,7 @@ def test_a_query_result_carries_the_matches_as_schedules_not_schedule() -> None:
             )
         )
         sink = RecordingSink()
-        factory = CountingFactory(
-            [("tool_requested", ("call_1", "schedule_query", {}))]
-        )
+        factory = CountingFactory([("tool_requested", ("call_1", "schedule_query", {}))])
 
         await RealtimeAgent(factory, sink, tools_factory=lambda _: tools).handle_audio(  # type: ignore[arg-type]
             _chunks(b"a" * 3200), _Stream()
