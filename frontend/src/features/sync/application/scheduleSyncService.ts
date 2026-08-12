@@ -16,7 +16,10 @@ import {
   localPartsToFloatingDate,
   parseIsoInstant,
 } from '../../schedule/domain/scheduleDateTime';
-import { parseScheduleRrule } from '../../schedule/domain/scheduleRecurrence';
+import {
+  normalizeUtcUntilForFloatingRrule,
+  parseScheduleRrule,
+} from '../../schedule/domain/scheduleRecurrence';
 
 /** WebSocket result passed to the local synchronization boundary. */
 export interface ApplyScheduleSnapshotCommand {
@@ -80,6 +83,7 @@ export class SqliteScheduleSyncService implements ScheduleSyncService {
       await this.database.withExclusiveTransactionAsync(async (transaction) => {
         const existingRows = await loadExistingRows(transaction, command.snapshot.schedules);
         const schedulesToApply: ScheduleSnapshot[] = [];
+        const freshnessBySchedule = new Map<string, ScheduleFreshness>();
         for (const schedule of command.snapshot.schedules) {
           const existing = existingRows.get(schedule.id);
           if (existing !== undefined && existing.account_id !== command.accountId) {
@@ -87,6 +91,11 @@ export class SqliteScheduleSyncService implements ScheduleSyncService {
           }
           if (existing === undefined || existing.cloud_revision < schedule.revision) {
             schedulesToApply.push(schedule);
+            freshnessBySchedule.set(schedule.id, 'newer');
+          } else if (existing.cloud_revision === schedule.revision) {
+            freshnessBySchedule.set(schedule.id, 'same');
+          } else {
+            freshnessBySchedule.set(schedule.id, 'stale');
           }
         }
         await assertReferencedRowsDoNotCrossAccount(transaction, command);
@@ -99,6 +108,13 @@ export class SqliteScheduleSyncService implements ScheduleSyncService {
           changedScheduleIds.add(schedule.id);
         }
         for (const override of command.snapshot.occurrence_overrides) {
+          const freshness = freshnessBySchedule.get(override.schedule_id);
+          if (
+            freshness === undefined ||
+            !(await shouldApplyOverride(transaction, command.accountId, override, freshness))
+          ) {
+            continue;
+          }
           if (
             !(await repository.upsertOccurrenceOverride(
               command.accountId,
@@ -237,7 +253,7 @@ function isValidSchedule(schedule: ScheduleSnapshot): boolean {
   ) {
     try {
       parseScheduleRrule(
-        schedule.recurrence_rule,
+        normalizeUtcUntilForFloatingRrule(schedule.recurrence_rule, schedule.timezone),
         localPartsToFloatingDate(instantToZonedParts(start, schedule.timezone)),
       );
     } catch {
@@ -319,6 +335,61 @@ function isValidOverride(override: ScheduleOccurrenceOverrideSnapshot): boolean 
     (override.action === 'replace'
       ? override.replacement_schedule_id !== null
       : override.replacement_schedule_id === null)
+  );
+}
+
+type ScheduleFreshness = 'newer' | 'same' | 'stale';
+
+async function shouldApplyOverride(
+  database: SQLiteDatabase,
+  accountId: string,
+  incoming: ScheduleOccurrenceOverrideSnapshot,
+  parentFreshness: ScheduleFreshness,
+): Promise<boolean> {
+  if (parentFreshness === 'stale') {
+    return false;
+  }
+  const existing = await loadMatchingOverrides(database, accountId, incoming);
+  if (existing.some((row) => overrideMatchesSnapshot(row, incoming))) {
+    return false;
+  }
+  // Equal-revision snapshots may repair a missing row, but must never replace a
+  // different local value whose freshness cannot be distinguished separately.
+  return parentFreshness === 'newer' || existing.length === 0;
+}
+
+async function loadMatchingOverrides(
+  database: SQLiteDatabase,
+  accountId: string,
+  incoming: ScheduleOccurrenceOverrideSnapshot,
+): Promise<LocalScheduleOccurrenceOverrideRow[]> {
+  return database.getAllAsync<LocalScheduleOccurrenceOverrideRow>(
+    `SELECT overrides.id, overrides.schedule_id, overrides.occurrence_start,
+            overrides.action, overrides.replacement_schedule_id
+     FROM local_schedule_occurrence_overrides AS overrides
+     INNER JOIN local_schedules AS schedules ON schedules.id = overrides.schedule_id
+     WHERE schedules.account_id = ?
+       AND (
+         overrides.id = ?
+         OR (overrides.schedule_id = ? AND overrides.occurrence_start = ?)
+       )`,
+    accountId,
+    incoming.id,
+    incoming.schedule_id,
+    incoming.occurrence_start,
+  );
+}
+
+function overrideMatchesSnapshot(
+  existing: LocalScheduleOccurrenceOverrideRow,
+  incoming: ScheduleOccurrenceOverrideSnapshot,
+): boolean {
+  return (
+    existing.id === incoming.id &&
+    existing.schedule_id === incoming.schedule_id &&
+    existing.occurrence_start === incoming.occurrence_start &&
+    existing.action === incoming.action &&
+    existing.replacement_schedule_id === incoming.replacement_schedule_id
   );
 }
 

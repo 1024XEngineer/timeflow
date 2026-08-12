@@ -10,6 +10,9 @@ export interface LocalDateTimeParts {
 
 const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 
+/** A requested wall-clock value falls inside an IANA timezone's forward DST gap. */
+export class NonexistentLocalTimeError extends RangeError {}
+
 export function isValidIanaTimezone(timezone: string): boolean {
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format(new Date(0));
@@ -82,6 +85,7 @@ export function instantToZonedParts(instant: Date, timezone: string): LocalDateT
 export function zonedPartsToInstant(parts: LocalDateTimeParts, timezone: string): Date {
   const wanted = localPartsToFloatingDate(parts).getTime();
   let candidate = wanted;
+  let resolved: Date | null = null;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const represented = localPartsToFloatingDate(
       instantToZonedParts(new Date(candidate), timezone),
@@ -89,14 +93,14 @@ export function zonedPartsToInstant(parts: LocalDateTimeParts, timezone: string)
     const correction = wanted - represented;
     candidate += correction;
     if (correction === 0) {
-      return new Date(candidate);
+      resolved = new Date(candidate);
+      break;
     }
   }
-  const resolved = new Date(candidate);
-  if (!sameLocalParts(instantToZonedParts(resolved, timezone), parts)) {
-    throw new RangeError(`Local time does not exist in IANA timezone ${timezone}`);
+  if (resolved === null || !sameLocalParts(instantToZonedParts(resolved, timezone), parts)) {
+    throw new NonexistentLocalTimeError(`Local time does not exist in IANA timezone ${timezone}`);
   }
-  return resolved;
+  return selectEarlierAmbiguousInstant(parts, timezone, resolved);
 }
 
 export function localPartsToFloatingDate(parts: LocalDateTimeParts): Date {
@@ -134,5 +138,30 @@ function sameLocalParts(left: LocalDateTimeParts, right: LocalDateTimeParts): bo
     left.minute === right.minute &&
     left.second === right.second &&
     left.millisecond === right.millisecond
+  );
+}
+
+function selectEarlierAmbiguousInstant(
+  parts: LocalDateTimeParts,
+  timezone: string,
+  resolved: Date,
+): Date {
+  const wanted = localPartsToFloatingDate(parts).getTime();
+  const offsets = new Set(
+    [-86_400_000, 0, 86_400_000].map((delta) => timezoneOffsetAt(resolved, timezone, delta)),
+  );
+  const candidates = [...offsets]
+    .map((offset) => new Date(wanted - offset))
+    .filter((candidate) => sameLocalParts(instantToZonedParts(candidate, timezone), parts));
+  return candidates.reduce(
+    (earlier, candidate) => (candidate < earlier ? candidate : earlier),
+    resolved,
+  );
+}
+
+function timezoneOffsetAt(resolved: Date, timezone: string, delta: number): number {
+  const instant = new Date(resolved.getTime() + delta);
+  return (
+    localPartsToFloatingDate(instantToZonedParts(instant, timezone)).getTime() - instant.getTime()
   );
 }

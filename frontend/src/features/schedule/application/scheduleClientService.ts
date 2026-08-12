@@ -15,11 +15,15 @@ import {
   instantToZonedParts,
   isValidIanaTimezone,
   localPartsToFloatingDate,
+  NonexistentLocalTimeError,
   parseDateOnly,
   parseIsoInstant,
   zonedPartsToInstant,
 } from '../domain/scheduleDateTime';
-import { parseScheduleRrule } from '../domain/scheduleRecurrence';
+import {
+  normalizeUtcUntilForFloatingRrule,
+  parseScheduleRrule,
+} from '../domain/scheduleRecurrence';
 
 /** Input from the calendar UI when a user selects one local calendar date. */
 export interface GetSchedulesByDayQuery {
@@ -128,11 +132,10 @@ function resolveScheduleForDay(
   const upper = localPartsToFloatingDate(instantToZonedParts(dayEnd, scheduleTimezone));
   let floatingOccurrences: Date[];
   try {
-    floatingOccurrences = parseScheduleRrule(schedule.recurrence_rule, floatingStart).between(
-      lower,
-      upper,
-      true,
-    );
+    floatingOccurrences = parseScheduleRrule(
+      normalizeUtcUntilForFloatingRrule(schedule.recurrence_rule, scheduleTimezone),
+      floatingStart,
+    ).between(lower, upper, true);
   } catch {
     throw new TypeError(`Schedule ${schedule.id} has an invalid RRULE`);
   }
@@ -140,28 +143,35 @@ function resolveScheduleForDay(
     overrides.map((override) => requireInstant(override.occurrence_start).getTime()),
   );
   return floatingOccurrences.flatMap((floatingOccurrence) => {
-    const occurrenceStart = zonedPartsToInstant(
-      floatingDateToLocalParts(floatingOccurrence),
-      scheduleTimezone,
-    );
-    if (excludedStarts.has(occurrenceStart.getTime())) {
-      return [];
+    try {
+      const occurrenceStart = zonedPartsToInstant(
+        floatingDateToLocalParts(floatingOccurrence),
+        scheduleTimezone,
+      );
+      if (excludedStarts.has(occurrenceStart.getTime())) {
+        return [];
+      }
+      const occurrenceEnd =
+        localDuration === null
+          ? null
+          : zonedPartsToInstant(
+              floatingDateToLocalParts(new Date(floatingOccurrence.getTime() + localDuration)),
+              scheduleTimezone,
+            );
+      const matches =
+        schedule.is_all_day === 1
+          ? occurrenceEnd !== null && occurrenceStart < dayEnd && occurrenceEnd > dayStart
+          : occurrenceStart >= dayStart && occurrenceStart < dayEnd;
+      if (!matches) {
+        return [];
+      }
+      return [toView(schedule, occurrenceStart, occurrenceEnd)];
+    } catch (error) {
+      if (error instanceof NonexistentLocalTimeError) {
+        return [];
+      }
+      throw error;
     }
-    const occurrenceEnd =
-      localDuration === null
-        ? null
-        : zonedPartsToInstant(
-            floatingDateToLocalParts(new Date(floatingOccurrence.getTime() + localDuration)),
-            scheduleTimezone,
-          );
-    const matches =
-      schedule.is_all_day === 1
-        ? occurrenceEnd !== null && occurrenceStart < dayEnd && occurrenceEnd > dayStart
-        : occurrenceStart >= dayStart && occurrenceStart < dayEnd;
-    if (!matches) {
-      return [];
-    }
-    return [toView(schedule, occurrenceStart, occurrenceEnd)];
   });
 }
 

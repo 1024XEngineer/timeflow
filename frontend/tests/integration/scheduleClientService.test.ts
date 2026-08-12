@@ -176,6 +176,160 @@ describe('SqliteScheduleClientService', () => {
     expect(result[0].occurrenceStart).toBe('2026-03-09T13:00:00.000Z');
   });
 
+  it('normalizes a Shanghai UTC UNTIL into the recurring floating timeline', async () => {
+    await repository.applyCloudSchedule(
+      cloudSchedule({
+        id: 'shanghai-until',
+        schedule_kind: 'recurring',
+        start_time: '2026-08-03T01:00:00Z',
+        recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260810T010000Z',
+      }),
+    );
+
+    const lastDay = await service.getSchedulesByDay({
+      accountId: 'account-a',
+      selectedDate: '2026-08-10',
+      timezone: 'Asia/Shanghai',
+    });
+    const afterUntil = await service.getSchedulesByDay({
+      accountId: 'account-a',
+      selectedDate: '2026-08-17',
+      timezone: 'Asia/Shanghai',
+    });
+
+    expect(lastDay).toEqual([
+      expect.objectContaining({
+        scheduleId: 'shanghai-until',
+        occurrenceStart: '2026-08-10T01:00:00.000Z',
+      }),
+    ]);
+    expect(afterUntil).toEqual([]);
+  });
+
+  it('keeps New York 09:00 across DST and includes the UTC UNTIL boundary', async () => {
+    await repository.applyCloudSchedule(
+      cloudSchedule({
+        id: 'new-york-until',
+        schedule_kind: 'recurring',
+        timezone: 'America/New_York',
+        start_time: '2026-03-02T14:00:00Z',
+        recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260316T130000Z',
+      }),
+    );
+
+    const beforeDst = await service.getSchedulesByDay({
+      accountId: 'account-a',
+      selectedDate: '2026-03-02',
+      timezone: 'America/New_York',
+    });
+    const afterDst = await service.getSchedulesByDay({
+      accountId: 'account-a',
+      selectedDate: '2026-03-09',
+      timezone: 'America/New_York',
+    });
+    const lastDay = await service.getSchedulesByDay({
+      accountId: 'account-a',
+      selectedDate: '2026-03-16',
+      timezone: 'America/New_York',
+    });
+    const afterUntil = await service.getSchedulesByDay({
+      accountId: 'account-a',
+      selectedDate: '2026-03-23',
+      timezone: 'America/New_York',
+    });
+
+    expect(beforeDst[0].occurrenceStart).toBe('2026-03-02T14:00:00.000Z');
+    expect(afterDst[0].occurrenceStart).toBe('2026-03-09T13:00:00.000Z');
+    expect(lastDay[0].occurrenceStart).toBe('2026-03-16T13:00:00.000Z');
+    expect(afterUntil).toEqual([]);
+  });
+
+  it('preserves UTC recurrence behavior while normalizing UTC UNTIL', async () => {
+    await repository.applyCloudSchedule(
+      cloudSchedule({
+        id: 'utc-until',
+        schedule_kind: 'recurring',
+        timezone: 'UTC',
+        start_time: '2026-08-03T09:00:00Z',
+        recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260810T090000Z',
+      }),
+    );
+
+    const lastDay = await service.getSchedulesByDay({
+      accountId: 'account-a',
+      selectedDate: '2026-08-10',
+      timezone: 'UTC',
+    });
+    const afterUntil = await service.getSchedulesByDay({
+      accountId: 'account-a',
+      selectedDate: '2026-08-17',
+      timezone: 'UTC',
+    });
+
+    expect(lastDay[0].occurrenceStart).toBe('2026-08-10T09:00:00.000Z');
+    expect(afterUntil).toEqual([]);
+  });
+
+  it('skips a nonexistent DST-gap occurrence without hiding other schedules', async () => {
+    await repository.applyCloudSchedule(
+      cloudSchedule({
+        id: 'gap-series',
+        title: 'Sunday 02:30',
+        schedule_kind: 'recurring',
+        timezone: 'America/New_York',
+        start_time: '2026-03-01T07:30:00Z',
+        recurrence_rule: 'FREQ=WEEKLY;BYDAY=SU',
+      }),
+    );
+    await repository.applyCloudSchedule(
+      cloudSchedule({
+        id: 'ordinary-on-gap-day',
+        title: 'Ordinary schedule',
+        timezone: 'America/New_York',
+        start_time: '2026-03-08T15:00:00Z',
+      }),
+    );
+
+    const gapDay = await service.getSchedulesByDay({
+      accountId: 'account-a',
+      selectedDate: '2026-03-08',
+      timezone: 'America/New_York',
+    });
+    const nextWeek = await service.getSchedulesByDay({
+      accountId: 'account-a',
+      selectedDate: '2026-03-15',
+      timezone: 'America/New_York',
+    });
+
+    expect(gapDay.map((occurrence) => occurrence.scheduleId)).toEqual(['ordinary-on-gap-day']);
+    expect(nextWeek).toEqual([
+      expect.objectContaining({
+        scheduleId: 'gap-series',
+        occurrenceStart: '2026-03-15T06:30:00.000Z',
+      }),
+    ]);
+  });
+
+  it('uses the earlier instant for an ambiguous New York fall-back wall time', async () => {
+    await repository.applyCloudSchedule(
+      cloudSchedule({
+        id: 'fall-back-series',
+        schedule_kind: 'recurring',
+        timezone: 'America/New_York',
+        start_time: '2026-10-25T05:30:00Z',
+        recurrence_rule: 'FREQ=WEEKLY;BYDAY=SU',
+      }),
+    );
+
+    const result = await service.getSchedulesByDay({
+      accountId: 'account-a',
+      selectedDate: '2026-11-01',
+      timezone: 'America/New_York',
+    });
+
+    expect(result[0].occurrenceStart).toBe('2026-11-01T05:30:00.000Z');
+  });
+
   it('returns a multi-day recurring all-day occurrence on every overlapping day', async () => {
     await repository.applyCloudSchedule(
       cloudSchedule({
