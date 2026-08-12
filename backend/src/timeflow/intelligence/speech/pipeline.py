@@ -195,6 +195,7 @@ class SpeechPipeline:
             next_index += 1
             first_segment_ready.set()
 
+        cancelled = False
         try:
             async for event in events:
                 if isinstance(event, AgentTextDelta):
@@ -214,9 +215,13 @@ class SpeechPipeline:
 
             if remainder := segmenter.flush():
                 await submit(remainder, "command_result")
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         finally:
-            await queue.put(_END_OF_SEGMENTS)
-            first_segment_ready.set()
+            if not cancelled:
+                await queue.put(_END_OF_SEGMENTS)
+                first_segment_ready.set()
 
     @staticmethod
     async def _wait_for_first_segment(

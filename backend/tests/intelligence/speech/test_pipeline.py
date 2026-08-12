@@ -277,6 +277,64 @@ async def test_tts_failure_cancels_agent_event_producer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tts_failure_does_not_deadlock_when_segment_queue_is_full() -> None:
+    async def many_events() -> AsyncIterator[object]:
+        for index in range(100):
+            yield AgentTextDelta(f"第{index}句。")
+
+    class FailingTts:
+        def stream(self, segments: AsyncIterable[SpeechSegment]) -> AsyncIterator[TtsEvent]:
+            return self._stream(segments)
+
+        async def _stream(self, segments: AsyncIterable[SpeechSegment]) -> AsyncIterator[TtsEvent]:
+            iterator = aiter(segments)
+            _ = await anext(iterator)
+            await asyncio.sleep(0)
+            raise RuntimeError("tts failed")
+            yield TtsCompleted()  # pragma: no cover
+
+    pipeline = SpeechPipeline(FailingTts(), segment_queue_size=1)
+
+    async def consume() -> None:
+        _ = [event async for event in pipeline.stream(many_events())]
+
+    with pytest.raises(RuntimeError, match="tts failed"):
+        await asyncio.wait_for(consume(), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_cancellation_does_not_deadlock_when_segment_queue_is_full() -> None:
+    tts_started = asyncio.Event()
+
+    async def many_events() -> AsyncIterator[object]:
+        for index in range(100):
+            yield AgentTextDelta(f"第{index}句。")
+
+    class BlockingTts:
+        def stream(self, segments: AsyncIterable[SpeechSegment]) -> AsyncIterator[TtsEvent]:
+            return self._stream(segments)
+
+        async def _stream(self, segments: AsyncIterable[SpeechSegment]) -> AsyncIterator[TtsEvent]:
+            iterator = aiter(segments)
+            _ = await anext(iterator)
+            tts_started.set()
+            await asyncio.Event().wait()
+            yield TtsCompleted()  # pragma: no cover
+
+    pipeline = SpeechPipeline(BlockingTts(), segment_queue_size=1)
+
+    async def consume() -> None:
+        _ = [event async for event in pipeline.stream(many_events())]
+
+    task = asyncio.create_task(consume())
+    await asyncio.wait_for(tts_started.wait(), timeout=1)
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1)
+
+
+@pytest.mark.asyncio
 async def test_tts_stream_must_complete_exactly_once() -> None:
     missing = SpeechPipeline(FakeTts([TtsAudioChunk(b"audio")]))
     with pytest.raises(ValueError, match="without a completion"):
