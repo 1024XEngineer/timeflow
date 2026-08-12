@@ -34,18 +34,6 @@ class StreamContext:
     request_id: str | None = None
 
 
-class TokenVerifier(Protocol):
-    """Verify an access token and resolve the owning account.
-
-    Failure is a return value rather than an exception: an exception type would have to be
-    shared with every implementation, which defeats structural typing across the boundary.
-    """
-
-    async def verify(self, access_token: str) -> str | None:
-        """Return the account id for a valid token, or None when it is not usable."""
-        ...
-
-
 class AudioSink(Protocol):
     """Consume one inbound audio stream to completion."""
 

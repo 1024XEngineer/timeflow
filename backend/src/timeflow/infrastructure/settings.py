@@ -1,11 +1,17 @@
 """Environment-backed application settings."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from os import environ
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+from timeflow.infrastructure.security.access_token import (
+    JWT_ACCESS_TTL_SECONDS,
+    JWT_AUDIENCE,
+    JWT_ISSUER,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +25,10 @@ class Settings:
     ws_max_unauthenticated_connections: int
     ws_audio_queue_max_chunks: int
     ws_max_audio_duration_ms: int
+    jwt_secret: str = field(default="", repr=False)
+    jwt_issuer: str = JWT_ISSUER
+    jwt_audience: str = JWT_AUDIENCE
+    jwt_access_ttl_seconds: int = JWT_ACCESS_TTL_SECONDS
     aliyun_asr_ws_url: str = ""
     aliyun_asr_api_key: str = ""
     aliyun_asr_model: str = "qwen3-asr-flash-realtime"
@@ -88,6 +98,12 @@ class Settings:
             ws_audio_queue_max_chunks=int(environ.get("TIMEFLOW_WS_AUDIO_QUEUE_MAX_CHUNKS", "32")),
             ws_max_audio_duration_ms=int(
                 environ.get("TIMEFLOW_WS_MAX_AUDIO_DURATION_MS", "120000")
+            ),
+            jwt_secret=environ.get("TIMEFLOW_JWT_SECRET", ""),
+            jwt_issuer=environ.get("TIMEFLOW_JWT_ISSUER", JWT_ISSUER),
+            jwt_audience=environ.get("TIMEFLOW_JWT_AUDIENCE", JWT_AUDIENCE),
+            jwt_access_ttl_seconds=int(
+                environ.get("TIMEFLOW_JWT_ACCESS_TTL_SECONDS", str(JWT_ACCESS_TTL_SECONDS))
             ),
             aliyun_asr_ws_url=environ.get("TIMEFLOW_ALIYUN_ASR_WS_URL", ""),
             aliyun_asr_api_key=environ.get("TIMEFLOW_ALIYUN_ASR_API_KEY", ""),

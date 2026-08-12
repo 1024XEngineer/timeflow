@@ -99,12 +99,7 @@ async def run_websocket_session(
 async def _authenticate(
     websocket: WebSocket, handshake: SessionHandshake, timeout_seconds: float
 ) -> SessionContext | None:
-    """Run the handshake, closing the connection unless it succeeds.
-
-    Waiting for the opening frame and verifying it share one deadline. Timing only the
-    wait would let a verifier that never answers hold the connection, and the
-    unauthenticated slot it occupies, for as long as it likes.
-    """
+    """在超时内接收首帧，并在握手失败时关闭连接。"""
     try:
         async with asyncio.timeout(timeout_seconds):
             frame = await _receive_frame(websocket)
@@ -116,9 +111,12 @@ async def _authenticate(
                 )
                 await websocket.close(code=1008)
                 return None
-            result = await handshake.perform(frame.message)
+            result = handshake.perform(
+                frame.message,
+                url_device_id=websocket.query_params.get("device_id"),
+            )
     except TimeoutError:
-        # Nothing was said, or nothing came back about it, so say nothing in return.
+        # 客户端未按时发送首帧时直接关闭，不构造无法关联请求的响应。
         await websocket.close(code=1008)
         return None
     except WebSocketDisconnect:
