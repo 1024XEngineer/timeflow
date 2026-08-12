@@ -32,20 +32,19 @@ class ToolInputError(ValueError):
 
 def normalize_datetime_args(arguments: dict[str, object]) -> dict[str, object]:
     """Add local timezone offset to datetime strings that lack one.
-    
+
     Mutates and returns the input dict for chaining.
     """
     for key, value in arguments.items():
         if isinstance(value, str) and "T" in value and "+" not in value and "Z" not in value:
             try:
-                datetime.fromisoformat(value)
-                arguments[key] = f"{value}+08:00"
+                naive = datetime.fromisoformat(value)
             except ValueError:
-                pass
+                continue
+            arguments[key] = naive.replace(tzinfo=LOCAL).isoformat()
         elif isinstance(value, dict):
             normalize_datetime_args(value)
     return arguments
-
 
 
 def map_create_schedule_command(arguments: Mapping[str, object]) -> CreateScheduleCommand:
@@ -56,8 +55,10 @@ def map_create_schedule_command(arguments: Mapping[str, object]) -> CreateSchedu
         schedule_type=_required_enum(arguments, "schedule_type", ScheduleType),
         schedule_kind=_required_enum(arguments, "schedule_kind", ScheduleKind),
         title=_required_string(arguments, "title"),
-        timezone=_required_string(arguments, "timezone"),
-        is_all_day=_required_bool(arguments, "is_all_day"),
+        # Both default rather than being asked of the model: one deployment, one zone, and
+        # a model made to state them every call is a model that eventually invents them.
+        timezone=_optional_string(arguments, "timezone") or str(LOCAL.key),
+        is_all_day=_optional_bool(arguments, "is_all_day", default=False),
         start_time=_optional_datetime(arguments, "start_time"),
         end_time=_optional_datetime(arguments, "end_time"),
         recurrence_rule=_optional_string(arguments, "recurrence_rule"),
@@ -99,6 +100,7 @@ def map_update_schedule_command(arguments: Mapping[str, object]) -> UpdateSchedu
     if not isinstance(raw_changes, dict) or not raw_changes:
         raise ToolInputError("changes must be a non-empty object")
     from typing import cast
+
     changes = _map_update_patch(cast(Mapping[str, object], raw_changes))
     return UpdateScheduleCommand(
         schedule_id=_required_string(arguments, "schedule_id"),
@@ -165,7 +167,6 @@ def _map_update_patch(arguments: Mapping[str, object]) -> ScheduleUpdatePatch:
     return changes
 
 
-
 def _reject_unknown(arguments: Mapping[str, object], allowed: set[str]) -> None:
     unknown = set(arguments) - allowed
     if unknown:
@@ -205,9 +206,7 @@ def _optional_bool(arguments: Mapping[str, object], field: str, *, default: bool
 def _required_int(arguments: Mapping[str, object], field: str, *, minimum: int) -> int:
     value = arguments.get(field)
     if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
-        raise ToolInputError(
-            f"{field} must be an integer greater than or equal to {minimum}"
-        )
+        raise ToolInputError(f"{field} must be an integer greater than or equal to {minimum}")
     return value
 
 
@@ -216,9 +215,7 @@ def _optional_int(arguments: Mapping[str, object], field: str, *, minimum: int) 
     if value is None:
         return None
     if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
-        raise ToolInputError(
-            f"{field} must be an integer greater than or equal to {minimum}"
-        )
+        raise ToolInputError(f"{field} must be an integer greater than or equal to {minimum}")
     return value
 
 

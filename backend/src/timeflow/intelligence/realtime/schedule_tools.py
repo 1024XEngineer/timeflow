@@ -1,15 +1,18 @@
 """The tools the realtime model may call, backed by ScheduleAgentService."""
 
+import asyncio
 import json
 import logging
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import StrEnum
+from functools import partial
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from timeflow.business.calendar import (
+    DeleteRecurringScheduleCommand,
     RecurringDeleteScope,
     ReminderStrength,
     ReminderType,
@@ -108,7 +111,7 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                     },
                     **_EDITABLE_PROPERTIES,
                 },
-                "required": ["schedule_type", "schedule_kind", "title", "timezone", "is_all_day"],
+                "required": ["schedule_type", "schedule_kind", "title"],
                 "additionalProperties": False,
             },
         },
@@ -227,11 +230,20 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
 class ToolBox:
     """Run tools the model is allowed to call, and refuse the rest."""
 
-    def __init__(self, account_id: str, service: ScheduleAgentService, now: Callable[[], datetime] | None = None) -> None:
+    def __init__(
+        self,
+        account_id: str,
+        service: ScheduleAgentService,
+        now: Callable[[], datetime] | None = None,
+    ) -> None:
         """Store the account, the service, and the clock seam."""
         self._account_id = account_id
         self._service = service
         self._now = now or (lambda: datetime.now(LOCAL))
+
+    # The service is synchronous and reaches Postgres over a socket, so every call goes
+    # to a worker thread: awaiting it inline would stall the loop streaming this turn's
+    # audio. Each call opens its own session, so no session crosses a thread.
 
     def tools(self) -> list[dict[str, Any]]:
         """Return the tool schemas to register on the session."""
@@ -264,12 +276,16 @@ class ToolBox:
 
     async def _create(self, arguments: dict[str, Any]) -> ToolResult:
         command = map_create_schedule_command(arguments)
-        result = self._service.create_schedule(account_id=self._account_id, command=command)
+        result = await asyncio.to_thread(
+            partial(self._service.create_schedule, account_id=self._account_id, command=command)
+        )
         return _mutation_result(result, "create_schedule")
 
     async def _find(self, arguments: dict[str, Any]) -> ToolResult:
         query = map_find_schedules_query(arguments)
-        result = self._service.find_schedules(account_id=self._account_id, query=query)
+        result = await asyncio.to_thread(
+            partial(self._service.find_schedules, account_id=self._account_id, query=query)
+        )
         schedules_with_local_time = [_for_model(s) for s in result.schedules]
         return ToolResult(
             output=json.dumps(
@@ -285,18 +301,29 @@ class ToolBox:
 
     async def _update(self, arguments: dict[str, Any]) -> ToolResult:
         command = map_update_schedule_command(arguments)
-        result = self._service.update_schedule(account_id=self._account_id, command=command)
+        result = await asyncio.to_thread(
+            partial(self._service.update_schedule, account_id=self._account_id, command=command)
+        )
         return _mutation_result(result, "update_schedule")
 
     async def _delete(self, arguments: dict[str, Any]) -> ToolResult:
-        from timeflow.business.calendar import DeleteRecurringScheduleCommand
         command = map_delete_schedule_command(arguments)
         if isinstance(command, DeleteRecurringScheduleCommand):
-            result = self._service.delete_recurring_schedule(
-                account_id=self._account_id, command=command
+            result = await asyncio.to_thread(
+                partial(
+                    self._service.delete_recurring_schedule,
+                    account_id=self._account_id,
+                    command=command,
+                )
             )
         else:
-            result = self._service.delete_once_schedule(account_id=self._account_id, command=command)
+            result = await asyncio.to_thread(
+                partial(
+                    self._service.delete_once_schedule,
+                    account_id=self._account_id,
+                    command=command,
+                )
+            )
         return _mutation_result(result, "delete_schedule")
 
     def _ask(self, arguments: dict[str, Any]) -> ToolResult:
@@ -327,23 +354,30 @@ class ToolBox:
 
 def _refusal(reason: str) -> ToolResult:
     """Tell the model why it got nothing, and tell the client nothing at all."""
-    return ToolResult(output=json.dumps({"error": reason}, ensure_ascii=False))
+    return ToolResult(
+        output=json.dumps({"status": "failed", "error": {"message": reason}}, ensure_ascii=False)
+    )
 
 
 def _business_error(error: ScheduleBusinessError) -> ToolResult:
-    """Report a business-layer error to the model and the client."""
-    payload = {
-        "status": "error",
-        "error": {
-            "code": error.code.value,
-            "field": error.field,
-            "message": error.message,
-            "schedule_id": error.schedule_id,
-        },
-    }
+    """Tell the model a write was refused; nothing was committed, so the client hears none.
+
+    voice.command.result reports a committed transaction (protocol §5.5). A refusal has
+    none to report, so only the model is told, and it says so out loud.
+    """
     return ToolResult(
-        output=json.dumps(payload, ensure_ascii=False),
-        outcome=payload,
+        output=json.dumps(
+            {
+                "status": "failed",
+                "error": {
+                    "code": error.code.value,
+                    "field": error.field,
+                    "message": error.message,
+                    "schedule_id": error.schedule_id,
+                },
+            },
+            ensure_ascii=False,
+        )
     )
 
 
@@ -351,7 +385,9 @@ def _mutation_result(result: ScheduleMutationResult, operation: str) -> ToolResu
     """Convert a mutation result into model output and client outcome."""
     snapshot = result.schedules[0] if result.schedules else None
     return ToolResult(
-        output=json.dumps({"status": "ok", "schedule": _for_model_dict(snapshot)}, ensure_ascii=False),
+        output=json.dumps(
+            {"status": "applied", "schedule": _for_model_dict(snapshot)}, ensure_ascii=False
+        ),
         outcome={
             "operation": operation,
             "status": "applied",
@@ -385,15 +421,11 @@ def _snapshot_for_client(snapshot: Any) -> dict[str, Any]:
     }
 
 
-def _local_text(instant: Any) -> str:
-    """Render a stored instant as local wall-clock text, or empty when unusable."""
-    if not isinstance(instant, str) or not instant:
+def _local_text(instant: datetime | None) -> str:
+    """Render a stored instant as local wall-clock text, empty for a schedule without one."""
+    if instant is None:
         return ""
-    try:
-        parsed = datetime.fromisoformat(instant.replace("Z", "+00:00"))
-    except ValueError:
-        return ""
-    return parsed.astimezone(LOCAL).strftime("%Y-%m-%d %H:%M")
+    return instant.astimezone(LOCAL).strftime("%Y-%m-%d %H:%M")
 
 
 def _candidates(value: Any) -> tuple[dict[str, Any], ...]:
