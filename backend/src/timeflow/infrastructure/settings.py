@@ -38,6 +38,13 @@ class Settings:
     aliyun_tts_voice: str = "longanhuan_v3.6"
     aliyun_tts_connect_timeout_seconds: float = 10.0
     aliyun_tts_task_timeout_seconds: float = 30.0
+    # Named beside aliyun_asr_* rather than realtime_*: both are Aliyun realtime services,
+    # so "realtime" alone does not say which. This one takes audio in and gives speech back.
+    aliyun_audio_api_key: str = ""
+    aliyun_audio_workspace_id: str = ""
+    aliyun_audio_model: str = "qwen-audio-3.0-realtime-plus"
+    aliyun_audio_region: str = "cn-beijing"
+    aliyun_audio_voice: str = "longanqian"
 
     @classmethod
     def from_environment(cls, env_file: Path | str = ".env") -> "Settings":
@@ -118,7 +125,23 @@ class Settings:
             aliyun_tts_voice=environ.get("TIMEFLOW_ALIYUN_TTS_VOICE", "longanhuan_v3.6"),
             aliyun_tts_connect_timeout_seconds=aliyun_tts_connect_timeout_seconds,
             aliyun_tts_task_timeout_seconds=aliyun_tts_task_timeout_seconds,
+            aliyun_audio_api_key=environ.get("TIMEFLOW_ALIYUN_AUDIO_API_KEY", ""),
+            aliyun_audio_workspace_id=environ.get("TIMEFLOW_ALIYUN_AUDIO_WORKSPACE_ID", ""),
+            aliyun_audio_model=environ.get(
+                "TIMEFLOW_ALIYUN_AUDIO_MODEL",
+                "qwen-audio-3.0-realtime-plus",
+            ),
+            aliyun_audio_region=environ.get("TIMEFLOW_ALIYUN_AUDIO_REGION", "cn-beijing"),
+            aliyun_audio_voice=environ.get("TIMEFLOW_ALIYUN_AUDIO_VOICE", "longanqian"),
         )
+
+    def aliyun_audio_is_configured(self) -> bool:
+        """Report whether the end-to-end audio model can be reached.
+
+        Only the two secrets are checked: the rest have working defaults, so a deployment
+        that sets just these gets a working model rather than a puzzling half-configured one.
+        """
+        return bool(self.aliyun_audio_api_key and self.aliyun_audio_workspace_id)
 
 
 @lru_cache

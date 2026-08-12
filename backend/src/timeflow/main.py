@@ -1,8 +1,11 @@
 """FastAPI application composition root."""
 
+import logging
+
 from fastapi import FastAPI, WebSocket
 
 from timeflow.business.health import HealthService
+from timeflow.gateway.websocket.agent_ports import Agent
 from timeflow.gateway.websocket.connection_manager import ConnectionManager
 from timeflow.gateway.websocket.endpoint import (
     UnauthenticatedConnectionLimiter,
@@ -15,9 +18,16 @@ from timeflow.gateway.websocket.handlers.session import SessionHandshake
 from timeflow.gateway.websocket.handlers.voice_stream import VoiceStreamHandlers
 from timeflow.gateway.websocket.ports import AudioSink, TokenVerifier
 from timeflow.gateway.websocket.router import MessageRouter
+from timeflow.infrastructure.external.realtime.qwen_audio import (
+    QwenAudioConfig,
+    QwenAudioSessionFactory,
+)
 from timeflow.infrastructure.security.token_verifier import FakeTokenVerifier
-from timeflow.infrastructure.settings import get_settings
+from timeflow.infrastructure.settings import Settings, get_settings
 from timeflow.intelligence.fake_agent import FakeAgent
+from timeflow.intelligence.realtime.agent import RealtimeAgent
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(
@@ -46,16 +56,7 @@ def create_app(
     limiter = UnauthenticatedConnectionLimiter(settings.ws_max_unauthenticated_connections)
 
     if audio_sink is None:
-        # Fail closed like the verifier above: the stand-in agent reports commands as
-        # applied that were never carried out.
-        if settings.environment != "development":
-            raise RuntimeError(
-                "No AudioSink was injected and the stand-in agent is development-only; "
-                f"TIMEFLOW_ENVIRONMENT is {settings.environment!r}. "
-                "It reports commands as applied that were never carried out. "
-                "Inject a real sink before exposing /ws."
-            )
-        audio_sink = AgentAudioSink(FakeAgent(WebSocketResultSink(connections)))
+        audio_sink = AgentAudioSink(_build_agent(settings, WebSocketResultSink(connections)))
 
     voice_streams = VoiceStreamHandlers(
         audio_sink,
@@ -87,6 +88,42 @@ def create_app(
         )
 
     return application
+
+
+def _build_agent(settings: Settings, result_sink: WebSocketResultSink) -> Agent:
+    """Return the realtime agent when it is configured, otherwise the stand-in.
+
+    Fails closed on the stand-in rather than on the absence of credentials: a configured
+    deployment is a real one and should start, while falling back outside development
+    would leave a server reporting commands as applied that were never carried out.
+    """
+    if settings.aliyun_audio_is_configured():
+        logger.info("using the realtime model", extra={"model": settings.aliyun_audio_model})
+        return RealtimeAgent(
+            QwenAudioSessionFactory(
+                QwenAudioConfig(
+                    api_key=settings.aliyun_audio_api_key,
+                    workspace_id=settings.aliyun_audio_workspace_id,
+                    model=settings.aliyun_audio_model,
+                    region=settings.aliyun_audio_region,
+                    voice=settings.aliyun_audio_voice,
+                )
+            ),
+            result_sink,
+        )
+
+    if settings.environment != "development":
+        raise RuntimeError(
+            "The realtime model is not configured and the stand-in agent is "
+            f"development-only; TIMEFLOW_ENVIRONMENT is {settings.environment!r}. "
+            "Set TIMEFLOW_ALIYUN_AUDIO_API_KEY and TIMEFLOW_ALIYUN_AUDIO_WORKSPACE_ID, "
+            "or inject an AudioSink, before exposing /ws."
+        )
+    logger.info(
+        "realtime model not configured, using the stand-in agent",
+        extra={"needs": "TIMEFLOW_ALIYUN_AUDIO_API_KEY and TIMEFLOW_ALIYUN_AUDIO_WORKSPACE_ID"},
+    )
+    return FakeAgent(result_sink)
 
 
 app = create_app()

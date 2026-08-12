@@ -78,6 +78,49 @@ def test_schedule_reads_are_account_scoped(session: Session) -> None:
     assert [snapshot.id for snapshot in account_schedules] == ["schedule-a"]
 
 
+def test_schedule_candidates_coarsely_filter_once_rows_and_keep_recurring_series(
+    session: Session,
+) -> None:
+    """Candidate SQL bounds one-time starts without dropping older recurring series."""
+    repository = ScheduleRepository(session)
+    lower = datetime(2026, 8, 17, tzinfo=UTC)
+    upper = datetime(2026, 8, 18, tzinfo=UTC)
+    recurring = replace(
+        _schedule("recurring-old", "account-a"),
+        schedule_kind=ScheduleKind.RECURRING,
+        start_time=datetime(2026, 8, 3, 2, tzinfo=UTC),
+        recurrence_rule="FREQ=WEEKLY;BYDAY=MO",
+    )
+    once_inside = replace(_schedule("once-inside", "account-a"), start_time=lower)
+    once_at_exclusive_end = replace(
+        _schedule("once-at-end", "account-a"),
+        start_time=upper,
+    )
+    deleted_inside = replace(
+        _schedule("deleted-inside", "account-a"),
+        start_time=lower,
+        status=ScheduleStatus.DELETED,
+        deleted_at=lower,
+    )
+    other_account = replace(_schedule("other-account", "account-b"), start_time=lower)
+    for schedule in (
+        recurring,
+        once_inside,
+        once_at_exclusive_end,
+        deleted_inside,
+        other_account,
+    ):
+        repository.add_schedule(schedule)
+
+    candidates = repository.list_schedule_candidates(
+        account_id="account-a",
+        starts_at_or_after=lower,
+        starts_before=upper,
+    )
+
+    assert [schedule.id for schedule in candidates] == ["recurring-old", "once-inside"]
+
+
 def test_schedule_update_atomically_increments_revision(session: Session) -> None:
     """The database revision advances regardless of the caller snapshot value."""
     repository = ScheduleRepository(session)

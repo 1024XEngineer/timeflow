@@ -15,11 +15,32 @@ class _RealVerifier:
         return None
 
 
-def _build_with_environment(environment: str, **injected: object) -> object:
-    """Build the app with TIMEFLOW_ENVIRONMENT set, clearing the settings cache around it."""
+def _build_with_environment(
+    environment: str, *, audio_configured: bool = False, **injected: object
+) -> object:
+    """Build the app with the environment set and the model's credentials pinned.
+
+    The credentials are stated rather than inherited because a developer with a working
+    .env would otherwise get the configured path and see these guards not fire, while CI
+    with no credentials would see them fire -- the same test meaning two different things
+    depending on whose machine it runs on.
+    """
+    credentials = (
+        {
+            "TIMEFLOW_ALIYUN_AUDIO_API_KEY": "key-for-test",
+            "TIMEFLOW_ALIYUN_AUDIO_WORKSPACE_ID": "ws-for-test",
+        }
+        if audio_configured
+        else {
+            "TIMEFLOW_ALIYUN_AUDIO_API_KEY": "",
+            "TIMEFLOW_ALIYUN_AUDIO_WORKSPACE_ID": "",
+        }
+    )
     get_settings.cache_clear()
     try:
-        with mock.patch.dict(os.environ, {"TIMEFLOW_ENVIRONMENT": environment}, clear=False):
+        with mock.patch.dict(
+            os.environ, {"TIMEFLOW_ENVIRONMENT": environment, **credentials}, clear=False
+        ):
             return create_app(**injected)  # type: ignore[arg-type]
     finally:
         get_settings.cache_clear()
@@ -69,3 +90,16 @@ def test_building_outside_development_works_once_both_are_injected() -> None:
     )
 
     assert built is not None
+
+
+def test_a_configured_model_lets_a_deployment_build_without_an_injected_sink() -> None:
+    """The sink guard is about the stand-in, not about wiring a sink by hand.
+
+    A deployment that gives the model its credentials has a real agent, so refusing to
+    start would only force every deployment to inject a sink it does not need to own.
+    """
+    application = _build_with_environment(
+        "production", audio_configured=True, token_verifier=_RealVerifier()
+    )
+
+    assert application is not None
