@@ -49,9 +49,27 @@ class AuthAccessService:
         return AuthAccessResult(account.id, issued.access_token, issued.expires_in)
 
     def _get_or_create(self, credentials: AuthCredentials) -> tuple[AccountRecord, bool]:
+        existing = self._read_account(credentials.username)
+        if existing is not None:
+            return existing, True
+
+        # Argon2 是有意设置的慢操作，不能在持有数据库连接时执行。
+        password_hash = self._password_hasher.hash(credentials.password)
+        return self._create_or_read_winner(credentials.username, password_hash)
+
+    def _read_account(self, username: str) -> AccountRecord | None:
+        with self._unit_of_work_factory() as unit_of_work:
+            return unit_of_work.accounts.get_by_username(username)
+
+    def _create_or_read_winner(
+        self,
+        username: str,
+        password_hash: str,
+    ) -> tuple[AccountRecord, bool]:
         try:
             with self._unit_of_work_factory() as unit_of_work:
-                existing = unit_of_work.accounts.get_by_username(credentials.username)
+                # 哈希期间可能已有并发请求写入，二次查询避免无谓的冲突写入。
+                existing = unit_of_work.accounts.get_by_username(username)
                 if existing is not None:
                     return existing, True
 
@@ -59,8 +77,8 @@ class AuthAccessService:
                 created = unit_of_work.accounts.add(
                     NewAccount(
                         id=self._new_account_id(),
-                        username=credentials.username,
-                        password_hash=self._password_hasher.hash(credentials.password),
+                        username=username,
+                        password_hash=password_hash,
                         created_at=now,
                         updated_at=now,
                     )
@@ -68,11 +86,10 @@ class AuthAccessService:
                 unit_of_work.commit()
                 return created, False
         except UsernameConflictError:
-            return self._read_conflict_winner(credentials.username), True
+            return self._read_conflict_winner(username), True
 
     def _read_conflict_winner(self, username: str) -> AccountRecord:
-        with self._unit_of_work_factory() as unit_of_work:
-            winner = unit_of_work.accounts.get_by_username(username)
+        winner = self._read_account(username)
         if winner is None:
             raise RuntimeError("Username conflict winner was not visible in a new transaction")
         return winner

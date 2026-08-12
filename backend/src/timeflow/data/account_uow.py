@@ -14,15 +14,22 @@ class SqlAlchemyAuthUnitOfWork:
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
         self._session: Session | None = None
+        self._accounts: AccountRepository | None = None
         self._committed = False
-        self.accounts: AccountRepositoryPort
+
+    @property
+    def accounts(self) -> AccountRepositoryPort:
+        """返回当前事务的仓储，事务外访问会失败。"""
+        if self._accounts is None:
+            raise RuntimeError("The authentication unit of work is not active")
+        return self._accounts
 
     def __enter__(self) -> "SqlAlchemyAuthUnitOfWork":
         if self._session is not None:
             raise RuntimeError("The authentication unit of work is already active")
         self._session = self._session_factory()
         self._committed = False
-        self.accounts = AccountRepository(self._session)
+        self._accounts = AccountRepository(self._session)
         return self
 
     def __exit__(
@@ -36,8 +43,11 @@ class SqlAlchemyAuthUnitOfWork:
             if exc_type is not None or not self._committed:
                 session.rollback()
         finally:
+            if self._accounts is not None:
+                self._accounts.close()
             session.close()
             self._session = None
+            self._accounts = None
             self._committed = False
 
     def commit(self) -> None:

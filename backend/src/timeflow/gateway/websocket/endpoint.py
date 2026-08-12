@@ -111,7 +111,9 @@ async def _authenticate(
                 )
                 await websocket.close(code=1008)
                 return None
-            result = handshake.perform(
+            # JWT 校验是同步端口，放入线程避免阻塞事件循环并让超时可取消等待。
+            result = await asyncio.to_thread(
+                handshake.perform,
                 frame.message,
                 url_device_id=websocket.query_params.get("device_id"),
             )

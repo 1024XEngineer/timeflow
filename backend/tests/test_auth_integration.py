@@ -4,6 +4,7 @@ import threading
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from typing import Annotated, cast
+from uuid import uuid4
 
 import pytest
 from auth_test_support import (
@@ -13,7 +14,7 @@ from auth_test_support import (
 )
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, create_engine, select
+from sqlalchemy import Engine, create_engine, delete, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -215,6 +216,44 @@ def test_http_rejects_a_wrong_password_for_an_existing_account(
         }
     }
     assert app_harness.tokens.verify(created.access_token) == created.account_id
+
+
+def test_postgres_http_access_persists_account_and_jwt_opens_websocket(
+    postgres_engine: Engine,
+) -> None:
+    """真实 PostgreSQL 中注册、登录，并以同一 JWT 建立可信 WebSocket 身份。"""
+    username = f"auth-flow-{uuid4().hex}"
+    tokens = build_test_token_service()
+    audio_sink = _CapturingAudioSink()
+    application = create_app(
+        engine=postgres_engine,
+        access_token_service=tokens,
+        audio_sink=audio_sink,
+    )
+
+    try:
+        with TestClient(application) as client:
+            registered = _access(client, username=username)
+            logged_in = _access(client, username=username)
+
+            assert logged_in.account_id == registered.account_id
+            assert tokens.verify(logged_in.access_token) == registered.account_id
+
+            with client.websocket_connect(f"/ws?device_id={DEVICE_ID}") as websocket:
+                websocket.send_json(_hello(logged_in.access_token))
+                ready = websocket.receive_json()
+                assert ready["type"] == "session.ready"
+                assert ready["ok"] is True
+
+        with Session(postgres_engine) as session:
+            account = session.scalar(select(Account).where(Account.username == username))
+        assert account is not None
+        assert account.id == registered.account_id
+        assert account.password_hash.startswith("$argon2id$")
+        assert PASSWORD not in account.password_hash
+    finally:
+        with postgres_engine.begin() as connection:
+            connection.execute(delete(Account).where(Account.username == username))
 
 
 def test_one_http_jwt_establishes_trusted_http_and_websocket_accounts(

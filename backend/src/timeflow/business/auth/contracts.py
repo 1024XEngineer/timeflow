@@ -107,7 +107,8 @@ class AccountRepositoryPort(Protocol):
 class AuthUnitOfWork(Protocol):
     """单个隔离的认证事务。"""
 
-    accounts: AccountRepositoryPort
+    @property
+    def accounts(self) -> AccountRepositoryPort: ...
 
     def __enter__(self) -> Self: ...
 

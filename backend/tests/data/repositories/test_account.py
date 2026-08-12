@@ -117,8 +117,15 @@ def test_auth_unit_of_work_rejects_invalid_lifecycle(
     unit_of_work = SqlAlchemyAuthUnitOfWork(session_factory)
     with pytest.raises(RuntimeError, match="not active"):
         unit_of_work.commit()
+    with pytest.raises(RuntimeError, match="not active"):
+        _ = unit_of_work.accounts
     with unit_of_work:
+        escaped_repository = unit_of_work.accounts
         with pytest.raises(RuntimeError, match="already active"):
             unit_of_work.__enter__()
     with pytest.raises(RuntimeError, match="not active"):
         unit_of_work.rollback()
+    with pytest.raises(RuntimeError, match="not active"):
+        _ = unit_of_work.accounts
+    with pytest.raises(RuntimeError, match="not active"):
+        escaped_repository.get_by_username("alice")

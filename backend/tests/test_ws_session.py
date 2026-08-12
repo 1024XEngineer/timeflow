@@ -1,6 +1,7 @@
 """Handshake behavior for the WebSocket transport."""
 
 import asyncio
+import time
 from typing import Any
 from unittest import mock
 
@@ -226,6 +227,31 @@ def test_silent_client_is_closed_after_the_handshake_timeout() -> None:
         message = websocket.receive()
 
     assert message == {"type": "websocket.close", "code": 1008, "reason": ""}
+
+
+def test_slow_token_verification_is_bounded_by_the_handshake_timeout() -> None:
+    """同步令牌校验放在线程中，慢校验不会阻塞握手超时。"""
+    tokens = build_test_token_service()
+
+    def slow_verify(_token: str) -> str | None:
+        time.sleep(0.2)
+        return "acc_test"
+
+    with mock.patch.object(tokens, "verify", side_effect=slow_verify):
+        client = TestClient(
+            _build_app(
+                handshake_timeout_seconds=0.05,
+                access_token_service=tokens,
+            )
+        )
+        started_at = time.monotonic()
+        with client.websocket_connect("/ws?device_id=device_001") as websocket:
+            websocket.send_json(VALID_HELLO)
+            message = websocket.receive()
+            observed_elapsed = time.monotonic() - started_at
+
+    assert message == {"type": "websocket.close", "code": 1008, "reason": ""}
+    assert observed_elapsed < 0.15
 
 
 def test_second_hello_does_not_replace_the_session() -> None:

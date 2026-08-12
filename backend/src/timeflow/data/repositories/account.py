@@ -17,13 +17,14 @@ class AccountRepository:
     """读取并刷新账户记录，但不管理事务。"""
 
     def __init__(self, session: Session) -> None:
-        self._session = session
+        self._session: Session | None = session
 
     def get_by_username(self, username: str) -> AccountRecord | None:
-        model = self._session.scalar(select(Account).where(Account.username == username))
+        model = self._require_session().scalar(select(Account).where(Account.username == username))
         return None if model is None else _to_record(model)
 
     def add(self, account: NewAccount) -> AccountRecord:
+        session = self._require_session()
         model = Account(
             id=account.id,
             username=account.username,
@@ -31,14 +32,23 @@ class AccountRepository:
             created_at=account.created_at,
             updated_at=account.updated_at,
         )
-        self._session.add(model)
+        session.add(model)
         try:
-            self._session.flush()
+            session.flush()
         except IntegrityError as error:
             if _is_username_conflict(error):
                 raise UsernameConflictError from None
             raise
         return _to_record(model)
+
+    def close(self) -> None:
+        """使退出事务后保留的仓储引用不可再使用。"""
+        self._session = None
+
+    def _require_session(self) -> Session:
+        if self._session is None:
+            raise RuntimeError("The account repository is not active")
+        return self._session
 
 
 def _to_record(model: Account) -> AccountRecord:

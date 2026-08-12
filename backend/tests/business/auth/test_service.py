@@ -19,11 +19,13 @@ NOW = datetime(2026, 8, 12, 8, tzinfo=UTC)
 
 
 class _Hasher:
-    def __init__(self) -> None:
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
         self.hashed: list[str] = []
         self.verified: list[tuple[str, str]] = []
 
     def hash(self, password: str) -> str:
+        self._events.append("hash")
         self.hashed.append(password)
         return f"hashed:{password}"
 
@@ -105,15 +107,19 @@ class _Factory:
         initial: AccountRecord | None = None,
         *,
         conflict: AccountRecord | None = None,
+        appears_before_create: AccountRecord | None = None,
     ) -> None:
         self.store = {} if initial is None else {initial.username: initial}
         self.events: list[str] = []
         self.created: list[_UnitOfWork] = []
         self._conflict = conflict
+        self._appears_before_create = appears_before_create
 
     def __call__(self) -> _UnitOfWork:
-        conflict = self._conflict if not self.created else None
-        unit_of_work = _UnitOfWork(self.store, self.events, conflict=conflict)
+        if len(self.created) == 1 and self._appears_before_create is not None:
+            appearing = self._appears_before_create
+            self.store[appearing.username] = appearing
+        unit_of_work = _UnitOfWork(self.store, self.events, conflict=self._conflict)
         self.created.append(unit_of_work)
         return unit_of_work
 
@@ -121,7 +127,7 @@ class _Factory:
 def _service(
     factory: _Factory,
 ) -> tuple[AuthAccessService, _Hasher, _Tokens]:
-    hasher = _Hasher()
+    hasher = _Hasher(factory.events)
     tokens = _Tokens()
     service = AuthAccessService(
         factory,
@@ -148,8 +154,16 @@ def test_access_normalizes_and_creates_account_before_issuing_token() -> None:
     assert hasher.hashed == ["password"]
     assert hasher.verified == []
     assert tokens.issued_for == [account.id]
-    assert factory.created[0].committed is True
-    assert factory.events == ["enter", "commit", "exit:none"]
+    assert factory.created[0].committed is False
+    assert factory.created[1].committed is True
+    assert factory.events == [
+        "enter",
+        "exit:none",
+        "hash",
+        "enter",
+        "commit",
+        "exit:none",
+    ]
 
 
 def test_access_verifies_existing_account_without_hashing_or_writing() -> None:
@@ -178,6 +192,22 @@ def test_access_rejects_wrong_existing_password_without_issuing_token() -> None:
     assert tokens.issued_for == []
 
 
+def test_access_verifies_account_created_while_hashing_without_inserting() -> None:
+    """哈希期间若已有赢家，只验证赢家账户而不重复写入。"""
+    winner = AccountRecord("acc_winner", "alice", "hashed:password")
+    factory = _Factory(appears_before_create=winner)
+    service, hasher, tokens = _service(factory)
+
+    result = service.access("alice", "password")
+
+    assert result.account_id == winner.id
+    assert len(factory.created) == 2
+    assert factory.created[1].committed is False
+    assert hasher.hashed == ["password"]
+    assert hasher.verified == [("password", winner.password_hash)]
+    assert tokens.issued_for == [winner.id]
+
+
 @pytest.mark.parametrize(
     ("winner_hash", "expected_success"),
     [("hashed:password", True), ("hashed:other-pass", False)],
@@ -197,8 +227,16 @@ def test_access_discards_conflicted_transaction_and_verifies_winner(
             service.access("alice", "password")
         assert raised.value.code is AuthErrorCode.INVALID_CREDENTIALS
 
-    assert len(factory.created) == 2
-    assert factory.events[:3] == ["enter", "exit:UsernameConflictError", "enter"]
+    assert len(factory.created) == 3
+    assert factory.events == [
+        "enter",
+        "exit:none",
+        "hash",
+        "enter",
+        "exit:UsernameConflictError",
+        "enter",
+        "exit:none",
+    ]
     assert hasher.hashed == ["password"]
     assert hasher.verified == [("password", winner_hash)]
     assert tokens.issued_for == ([winner.id] if expected_success else [])
@@ -211,14 +249,14 @@ def test_access_fails_closed_if_conflict_winner_is_not_visible() -> None:
     with pytest.raises(RuntimeError, match="not visible"):
         service.access("alice", "password")
 
-    assert len(factory.created) == 2
+    assert len(factory.created) == 3
     assert tokens.issued_for == []
 
 
 def test_access_rejects_generated_account_id_beyond_schema_limit() -> None:
     service = AuthAccessService(
         _Factory(),
-        _Hasher(),
+        _Hasher([]),
         _Tokens(),
         clock=lambda: NOW,
         id_factory=lambda: "x" * 61,
