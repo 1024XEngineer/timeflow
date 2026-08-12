@@ -32,6 +32,12 @@ class Settings:
     openai_model: str = "qwen-flash"
     openai_timeout_seconds: float = 30.0
     agent_max_tool_rounds: int = 4
+    aliyun_tts_ws_url: str = ""
+    aliyun_tts_api_key: str = ""
+    aliyun_tts_model: str = "qwen-audio-3.0-tts-flash"
+    aliyun_tts_voice: str = "longanhuan_v3.6"
+    aliyun_tts_connect_timeout_seconds: float = 10.0
+    aliyun_tts_task_timeout_seconds: float = 30.0
     # Named beside aliyun_asr_* rather than realtime_*: both are Aliyun realtime services,
     # so "realtime" alone does not say which. This one takes audio in and gives speech back.
     aliyun_audio_api_key: str = ""
@@ -58,6 +64,12 @@ class Settings:
 
         openai_timeout_seconds = float(environ.get("TIMEFLOW_OPENAI_TIMEOUT_SECONDS", "30.0"))
         agent_max_tool_rounds = int(environ.get("TIMEFLOW_AGENT_MAX_TOOL_ROUNDS", "4"))
+        aliyun_tts_connect_timeout_seconds = float(
+            environ.get("TIMEFLOW_ALIYUN_TTS_CONNECT_TIMEOUT_SECONDS", "10.0")
+        )
+        aliyun_tts_task_timeout_seconds = float(
+            environ.get("TIMEFLOW_ALIYUN_TTS_TASK_TIMEOUT_SECONDS", "30.0")
+        )
 
         if not -1.0 <= aliyun_asr_vad_threshold <= 1.0:
             raise ValueError("TIMEFLOW_ALIYUN_ASR_VAD_THRESHOLD must be between -1 and 1")
@@ -71,6 +83,8 @@ class Settings:
             raise ValueError("TIMEFLOW_OPENAI_TIMEOUT_SECONDS must be greater than zero")
         if agent_max_tool_rounds <= 0:
             raise ValueError("TIMEFLOW_AGENT_MAX_TOOL_ROUNDS must be a positive integer")
+        if aliyun_tts_connect_timeout_seconds <= 0 or aliyun_tts_task_timeout_seconds <= 0:
+            raise ValueError("TTS timeouts must be greater than zero")
 
         return cls(
             app_name=environ.get("TIMEFLOW_APP_NAME", "TimeFlow API"),
@@ -105,6 +119,12 @@ class Settings:
             openai_model=environ.get("TIMEFLOW_OPENAI_MODEL", "qwen-flash"),
             openai_timeout_seconds=openai_timeout_seconds,
             agent_max_tool_rounds=agent_max_tool_rounds,
+            aliyun_tts_ws_url=environ.get("TIMEFLOW_ALIYUN_TTS_WS_URL", ""),
+            aliyun_tts_api_key=environ.get("TIMEFLOW_ALIYUN_TTS_API_KEY", ""),
+            aliyun_tts_model=environ.get("TIMEFLOW_ALIYUN_TTS_MODEL", "qwen-audio-3.0-tts-flash"),
+            aliyun_tts_voice=environ.get("TIMEFLOW_ALIYUN_TTS_VOICE", "longanhuan_v3.6"),
+            aliyun_tts_connect_timeout_seconds=aliyun_tts_connect_timeout_seconds,
+            aliyun_tts_task_timeout_seconds=aliyun_tts_task_timeout_seconds,
             aliyun_audio_api_key=environ.get("TIMEFLOW_ALIYUN_AUDIO_API_KEY", ""),
             aliyun_audio_workspace_id=environ.get("TIMEFLOW_ALIYUN_AUDIO_WORKSPACE_ID", ""),
             aliyun_audio_model=environ.get(
