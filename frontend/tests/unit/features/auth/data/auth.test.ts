@@ -39,7 +39,9 @@ describe('createAuthAccess', () => {
 
   it('exposes a documented business error code', async () => {
     const request = jest.fn(async () => {
-      throw new ApiError(401, { error: { code: 'AUTH_INVALID_CREDENTIALS' } });
+      throw new ApiError(401, {
+        error: { code: 'AUTH_INVALID_CREDENTIALS', message: 'Invalid credentials' },
+      });
     }) as unknown as ApiRequest;
 
     await expect(createAuthAccess(request)(credentials)).rejects.toEqual(

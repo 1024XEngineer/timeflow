@@ -1,0 +1,8 @@
+{
+  "type": "session.hello",
+  "request_id": "session-hello-1",
+  "payload": {
+    "access_token": "opaque-token",
+    "device_id": "device_001"
+  }
+}

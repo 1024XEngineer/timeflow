@@ -1,7 +1,8 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 
 import { AuthSessionDeletionRetrier } from '../../../../../src/features/auth/application/AuthSessionDeletionRetrier';
 import { AuthController } from '../../../../../src/features/auth/application/AuthController';
+import type { AuthDiagnosticEvent } from '../../../../../src/features/auth/application/AuthDiagnostics';
 import { FakeAuthSessionStore } from '../../../../../src/features/auth/testing/FakeAuthSessionStore';
 
 describe('AuthSessionDeletionRetrier', () => {
@@ -59,6 +60,27 @@ describe('AuthSessionDeletionRetrier', () => {
     first.resolve();
     await Promise.all([firstClear, authenticating]);
     expect(store.session).toMatchObject({ accountId: 'new', accessToken: 'new-token' });
+  });
+
+  it('records a fixed session-store event when clear schedules a retry', async () => {
+    jest.useFakeTimers();
+    const events: AuthDiagnosticEvent[] = [];
+    const store = new FakeAuthSessionStore();
+    store.clearError = new Error('raw storage failure');
+    const retrier = new AuthSessionDeletionRetrier(store, {
+      record: (event) => events.push(event),
+    });
+
+    await retrier.clearOrRetry();
+
+    expect(events).toEqual([
+      { component: 'session-store', event: 'auth.cleanup.failed' },
+    ]);
+    expect(events[0]).not.toHaveProperty('error');
+    store.clearError = undefined;
+    jest.advanceTimersByTime(1_000);
+    await flushMicrotasks();
+    jest.useRealTimers();
   });
 });
 

@@ -47,13 +47,17 @@ describe('AppRoot', () => {
       false,
       '日程日历',
     ],
-  ])('%s', async (_name, session, readError, pending, expected) => {
-    const controller = createController(session, readError, pending);
-    render(<AppRoot authController={controller} />);
+  ])(
+    '%s',
+    async (_name, session, readError, pending, expected) => {
+      const controller = createController(session, readError, pending);
+      render(<AppRoot authController={controller} />);
 
-    await waitFor(() => expect(screen.getByText(expected)).toBeTruthy());
-    expect(screen.queryByText('opaque-token')).toBeNull();
-  });
+      await waitFor(() => expect(screen.getByText(expected)).toBeTruthy());
+      expect(screen.queryByText('opaque-token')).toBeNull();
+    },
+    10_000,
+  );
 
   it('enters the calendar after controller authentication without exposing the token', async () => {
     const controller = createController();

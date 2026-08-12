@@ -15,6 +15,7 @@ const INITIALIZATION_ERROR_MESSAGE = '无法恢复登录状态，请重试';
 export interface AuthControllerOptions {
   readonly authAccess: AuthAccess;
   readonly now: () => number;
+  readonly retrier?: AuthSessionDeletionRetrier;
   readonly store: AuthSessionStore;
 }
 
@@ -26,7 +27,7 @@ export class AuthController {
   private readonly retrier: AuthSessionDeletionRetrier;
 
   constructor(private readonly options: AuthControllerOptions) {
-    this.retrier = new AuthSessionDeletionRetrier(options.store);
+    this.retrier = options.retrier ?? new AuthSessionDeletionRetrier(options.store);
   }
 
   getState(): AuthState {
@@ -98,8 +99,11 @@ export class AuthController {
   }
 
   private async clearAndUnauthenticate(): Promise<void> {
-    await this.retrier.clearOrRetry();
-    this.publish({ status: 'unauthenticated' });
+    try {
+      await this.retrier.clearOrRetry();
+    } finally {
+      this.publish({ status: 'unauthenticated' });
+    }
   }
 
   private publish(state: AuthState): void {

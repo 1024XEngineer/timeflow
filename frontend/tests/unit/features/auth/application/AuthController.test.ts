@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 
 import { AuthController } from '../../../../../src/features/auth/application/AuthController';
 import { AuthSessionCleanupRequiredError } from '../../../../../src/features/auth/application/interfaces';
@@ -92,6 +92,29 @@ describe('AuthController', () => {
     deferred.resolve();
     await Promise.all([signingOut, authenticating]);
     expect(controller.getAccessToken()).toBe('opaque-token');
+  });
+
+  it('publishes unauthenticated even when a store implementation throws synchronously', async () => {
+    jest.useFakeTimers();
+    const store = new FakeAuthSessionStore();
+    const controller = new AuthController({
+      authAccess: async () => response,
+      now: () => 100_000,
+      store,
+    });
+    await controller.authenticate(credentials);
+    const clear = store.clear.bind(store);
+    store.clear = () => {
+      throw new Error('raw synchronous storage failure');
+    };
+
+    await expect(controller.invalidate('revoked')).resolves.toBeUndefined();
+
+    expect(controller.getState()).toEqual({ status: 'unauthenticated' });
+    store.clear = clear;
+    jest.advanceTimersByTime(1_000);
+    await Promise.resolve();
+    jest.useRealTimers();
   });
 
   it('returns the same token-free view state object until state changes', () => {
