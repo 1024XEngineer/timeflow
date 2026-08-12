@@ -193,3 +193,36 @@ def test_business_error_codes_are_stable() -> None:
         "invalid_schedule_kind",
         "validation_failed",
     }
+
+
+def test_the_boundary_itself_implements_none_of_the_five_operations() -> None:
+    """A subclass that defers to the port gets NotImplementedError, never a silent no-op."""
+
+    class Deferring(ScheduleAgentService):
+        """Call up to the abstract body for every operation."""
+
+        def create_schedule(self, *, account_id: str, command: object) -> object:
+            return super().create_schedule(account_id=account_id, command=command)  # type: ignore[arg-type]
+
+        def find_schedules(self, *, account_id: str, query: object) -> object:
+            return super().find_schedules(account_id=account_id, query=query)  # type: ignore[arg-type]
+
+        def update_schedule(self, *, account_id: str, command: object) -> object:
+            return super().update_schedule(account_id=account_id, command=command)  # type: ignore[arg-type]
+
+        def delete_once_schedule(self, *, account_id: str, command: object) -> object:
+            return super().delete_once_schedule(account_id=account_id, command=command)  # type: ignore[arg-type]
+
+        def delete_recurring_schedule(self, *, account_id: str, command: object) -> object:
+            return super().delete_recurring_schedule(account_id=account_id, command=command)  # type: ignore[arg-type]
+
+    deferring = Deferring()
+    for call in (
+        lambda: deferring.create_schedule(account_id="acc", command=None),
+        lambda: deferring.find_schedules(account_id="acc", query=None),
+        lambda: deferring.update_schedule(account_id="acc", command=None),
+        lambda: deferring.delete_once_schedule(account_id="acc", command=None),
+        lambda: deferring.delete_recurring_schedule(account_id="acc", command=None),
+    ):
+        with pytest.raises(NotImplementedError):
+            call()

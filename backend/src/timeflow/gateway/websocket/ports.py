@@ -33,6 +33,16 @@ class StreamContext:
     audio_config: AudioConfig
     request_id: str | None = None
 
+    @property
+    def account_id(self) -> str:
+        """Account that owns this stream."""
+        return self.session.account_id
+
+    @property
+    def session_id(self) -> str:
+        """Session this stream belongs to."""
+        return self.session.session_id
+
 
 class TokenVerifier(Protocol):
     """Verify an access token and resolve the owning account.

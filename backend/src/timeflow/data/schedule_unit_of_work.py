@@ -4,6 +4,7 @@ from types import TracebackType
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from timeflow.business.calendar.ports import ScheduleRepositoryPort
 from timeflow.data.repositories.schedule import ScheduleRepository
 
 
@@ -13,7 +14,7 @@ class SqlAlchemyScheduleUnitOfWork:
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
         self._session: Session | None = None
-        self.schedules: ScheduleRepository
+        self.schedules: ScheduleRepositoryPort
 
     def __enter__(self) -> "SqlAlchemyScheduleUnitOfWork":
         self._session = self._session_factory()

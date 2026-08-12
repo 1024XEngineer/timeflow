@@ -310,3 +310,53 @@ async def test_location_search_remains_truthful_placeholder() -> None:
 def test_account_id_must_come_from_authenticated_context() -> None:
     with pytest.raises(ValueError, match="account_id"):
         build_agent_tool_registry(FakeScheduleService(), "")
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "expected_call"),
+    [
+        ("schedule_query", {"title": "项目同步"}, "query"),
+        (
+            "schedule_update",
+            {"schedule_id": "schedule-1", "expected_revision": 1, "changes": {"title": "改过的"}},
+            "update",
+        ),
+        (
+            "schedule_delete",
+            {"schedule_id": "schedule-1", "expected_revision": 1, "schedule_kind": "once"},
+            "delete_once",
+        ),
+        (
+            "schedule_delete",
+            {
+                "schedule_id": "schedule-1",
+                "expected_revision": 1,
+                "schedule_kind": "recurring",
+                "scope": "entire_series",
+            },
+            "delete_recurring",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_each_tool_reaches_the_service_call_that_matches_it(
+    tool_name: str, arguments: dict[str, object], expected_call: str
+) -> None:
+    service = FakeScheduleService()
+    tool = build_agent_tool_registry(service, "account-1").get(tool_name)
+
+    result = json.loads(await tool.execute(arguments))
+
+    assert [call for call, _, _ in service.calls] == [expected_call]
+    assert result["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_a_tool_whose_arguments_do_not_map_reports_the_reason() -> None:
+    service = FakeScheduleService()
+    tool = build_agent_tool_registry(service, "account-1").get("schedule_update")
+
+    with pytest.raises(ScheduleToolInputError):
+        await tool.execute({"schedule_id": "schedule-1", "expected_revision": 1})
+
+    assert service.calls == []
