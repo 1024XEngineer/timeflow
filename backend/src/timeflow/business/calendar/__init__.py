@@ -22,7 +22,7 @@ from timeflow.business.calendar.contracts import (
     ScheduleUpdatePatch,
     UpdateScheduleCommand,
 )
-from timeflow.business.calendar.service import ScheduleAgentService
+from timeflow.business.calendar.service import ScheduleAgentService, ScheduleApplicationService
 
 __all__ = [
     "CreateScheduleCommand",
@@ -35,6 +35,7 @@ __all__ = [
     "ReminderStrength",
     "ReminderType",
     "ScheduleAgentService",
+    "ScheduleApplicationService",
     "ScheduleBusinessError",
     "ScheduleErrorCode",
     "ScheduleKind",
