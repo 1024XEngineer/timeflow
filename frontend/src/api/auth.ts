@@ -80,7 +80,7 @@ function readAuthErrorCode(body: unknown): AuthErrorCode | undefined {
     return undefined;
   }
 
-  // 提案定义了错误码但未限定 JSON 外壳，因此兼容两种常见响应结构。
+  // 定义了错误码但未限定 JSON 外壳，因此兼容两种常见响应结构。
   const candidate = isRecord(body.error) ? body.error.code : body.code;
   return typeof candidate === 'string' && AUTH_ERROR_CODES.has(candidate as AuthErrorCode)
     ? (candidate as AuthErrorCode)
