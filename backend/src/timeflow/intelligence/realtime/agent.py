@@ -301,12 +301,14 @@ class _Turn:
 
         result = await self._tools.run(name, arguments)
         if result.outcome is not None:
+            outcome = result.outcome
             await self._result_sink.deliver_result(
                 CommandResult(
                     message_id=self._message_id_factory(),
-                    operation=str(result.outcome["operation"]),
-                    status=str(result.outcome["status"]),
-                    schedule=result.outcome,
+                    operation=str(outcome["operation"]),
+                    status=str(outcome["status"]),
+                    schedule=outcome.get("schedule"),
+                    schedules=outcome.get("schedules"),
                 ),
                 self._stream,
             )

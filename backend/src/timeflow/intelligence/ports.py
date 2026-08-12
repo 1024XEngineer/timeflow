@@ -81,7 +81,8 @@ class CommandResult:
     message_id: str
     operation: str
     status: str
-    schedule: dict[str, Any]
+    schedule: dict[str, Any] | None = None
+    schedules: list[dict[str, Any]] | None = None
 
 
 class ResultSink(Protocol):
