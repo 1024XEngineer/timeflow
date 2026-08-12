@@ -86,10 +86,7 @@ class SessionHandshake:
                 "URL and session.hello device_id must match",
             )
 
-        try:
-            account_id = self._access_token_service.verify(hello.payload.access_token)
-        except Exception:
-            account_id = None
+        account_id = self._access_token_service.verify(hello.payload.access_token)
         if account_id is None:
             return self._rejected(request_id, ERROR_UNAUTHENTICATED, "Access token is not valid")
 

@@ -9,9 +9,11 @@ from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from timeflow.gateway.auth_diagnostics import log_sanitized_exception
 from timeflow.gateway.websocket.connection_manager import ConnectionManager
 from timeflow.gateway.websocket.envelope import (
     ERROR_AUDIO_INVALID,
+    ERROR_INTERNAL,
     ERROR_MALFORMED_MESSAGE,
     ERROR_UNAUTHENTICATED,
     build_error_envelope,
@@ -21,6 +23,8 @@ from timeflow.gateway.websocket.ports import SessionContext
 from timeflow.gateway.websocket.router import MessageRouter
 
 logger = logging.getLogger(__name__)
+
+_AUTH_INTERNAL_MESSAGE = "Authentication service unavailable"
 
 BinaryFrameHandler = Callable[[bytes, SessionContext], Awaitable[dict[str, Any] | None]]
 DisconnectHandler = Callable[[SessionContext], Awaitable[None]]
@@ -112,11 +116,31 @@ async def _authenticate(
                 await websocket.close(code=1008)
                 return None
             # JWT 校验是同步端口，放入线程避免阻塞事件循环并让超时可取消等待。
-            result = await asyncio.to_thread(
-                handshake.perform,
-                frame.message,
-                url_device_id=websocket.query_params.get("device_id"),
-            )
+            try:
+                result = await asyncio.to_thread(
+                    handshake.perform,
+                    frame.message,
+                    url_device_id=websocket.query_params.get("device_id"),
+                )
+            except Exception as error:
+                # 验证器故障不能伪装成普通的无效令牌；日志只保留脱敏诊断字段。
+                log_sanitized_exception(
+                    logger,
+                    error,
+                    event_prefix="ws_auth_event",
+                    error_code=ERROR_INTERNAL,
+                    message="websocket authentication service unavailable",
+                )
+                await websocket.send_json(
+                    build_error_envelope(
+                        "session.error",
+                        _request_id_of(frame.message),
+                        ERROR_INTERNAL,
+                        _AUTH_INTERNAL_MESSAGE,
+                    )
+                )
+                await websocket.close(code=1008)
+                return None
     except TimeoutError:
         # 客户端未按时发送首帧时直接关闭，不构造无法关联请求的响应。
         await websocket.close(code=1008)

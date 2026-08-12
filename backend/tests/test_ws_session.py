@@ -105,23 +105,40 @@ def test_rejected_token_returns_unauthenticated() -> None:
     assert closed == {"type": "websocket.close", "code": 1008, "reason": ""}
 
 
-def test_token_service_failure_is_sanitized_as_unauthenticated() -> None:
-    """真实令牌服务意外失败时统一拒绝，且不回显内部异常。"""
+def test_token_service_failure_returns_a_sanitized_internal_error() -> None:
+    """令牌服务意外失败时走内部错误路径，且不回显令牌或异常文本。"""
     tokens = build_test_token_service()
     internal_detail = "never-return-this-token-provider-detail"
     with mock.patch.object(tokens, "verify", side_effect=RuntimeError(internal_detail)):
         client = TestClient(_build_app(access_token_service=tokens))
-        with client.websocket_connect("/ws?device_id=device_001") as websocket:
-            websocket.send_json(VALID_HELLO)
-            reply = websocket.receive_json()
-            closed = websocket.receive()
+        with mock.patch("timeflow.gateway.websocket.endpoint.logger.error") as log_error:
+            with client.websocket_connect("/ws?device_id=device_001") as websocket:
+                websocket.send_json(VALID_HELLO)
+                reply = websocket.receive_json()
+                closed = websocket.receive()
 
     assert reply["error"] == {
-        "code": "UNAUTHENTICATED",
-        "message": "Access token is not valid",
+        "code": "INTERNAL_ERROR",
+        "message": "Authentication service unavailable",
         "retryable": False,
     }
+    assert reply["request_id"] == "req_001"
     assert internal_detail not in str(reply)
+    log_error.assert_called_once()
+    (message,) = log_error.call_args.args
+    diagnostics = log_error.call_args.kwargs["extra"]
+    assert message == "websocket authentication service unavailable"
+    assert diagnostics["event_id"].startswith("ws_auth_event_")
+    assert diagnostics["error_code"] == "INTERNAL_ERROR"
+    assert diagnostics["exception_module"] == "builtins"
+    assert diagnostics["exception_type"] == "RuntimeError"
+    assert diagnostics["traceback_frames"]
+    assert "token-abc" not in str(log_error.call_args)
+    assert internal_detail not in str(log_error.call_args)
+    assert all(
+        set(frame) == {"filename", "lineno", "function"}
+        for frame in diagnostics["traceback_frames"]
+    )
     assert closed == {"type": "websocket.close", "code": 1008, "reason": ""}
 
 

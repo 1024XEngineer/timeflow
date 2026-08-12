@@ -1,13 +1,9 @@
 """账户访问与稳定认证错误的 HTTP 适配器。"""
 
 import logging
-import os
-from collections import deque
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
-from traceback import walk_tb
 from typing import Any, Protocol
-from uuid import uuid4
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -17,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import Response
 
 from timeflow.business.auth import AuthAccessResult, AuthError, AuthErrorCode
+from timeflow.gateway.auth_diagnostics import log_sanitized_exception
 from timeflow.gateway.http.rate_limit import AuthRateLimiter
 
 logger = logging.getLogger(__name__)
@@ -129,27 +126,13 @@ def _error_response(
 
 def _new_internal_error(error: Exception) -> AuthHttpError:
     """创建可关联的内部错误，并记录不含异常文本的诊断元数据。"""
-    event_id = f"auth_event_{uuid4().hex}"
-    frames: deque[dict[str, str | int]] = deque(maxlen=8)
-    for frame, line_number in walk_tb(error.__traceback__):
-        frames.append(
-            {
-                "filename": os.path.basename(frame.f_code.co_filename),
-                "lineno": line_number,
-                "function": frame.f_code.co_name,
-            }
-        )
-    traceback_frames = list(frames)
-    logger.error(
-        "authentication service unavailable",
-        extra={
-            "event_id": event_id,
-            "error_code": AUTH_INTERNAL_ERROR.code,
-            "status_code": AUTH_INTERNAL_ERROR.status_code,
-            "exception_module": type(error).__module__,
-            "exception_type": type(error).__qualname__,
-            "traceback_frames": traceback_frames,
-        },
+    event_id = log_sanitized_exception(
+        logger,
+        error,
+        event_prefix="auth_event",
+        error_code=AUTH_INTERNAL_ERROR.code,
+        status_code=AUTH_INTERNAL_ERROR.status_code,
+        message="authentication service unavailable",
     )
     return AuthHttpError(AUTH_INTERNAL_ERROR, event_id=event_id)
 

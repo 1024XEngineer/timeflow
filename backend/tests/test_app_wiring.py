@@ -88,6 +88,7 @@ def test_build_rejects_an_empty_or_weak_default_jwt_secret(jwt_secret: str) -> N
             audio_sink=_Sink(),
         )
 
+
 def test_injected_token_service_is_shared_by_http_and_websocket() -> None:
     """显式注入的真实令牌服务同时供 HTTP 与 WebSocket 使用。"""
     tokens = build_test_token_service()
