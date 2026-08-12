@@ -69,4 +69,4 @@ export {
   MockReminderStateStore,
   MOCK_REMINDER_SCHEDULES,
 } from './data/local';
-export { MockReminderPresenter } from './presentation';
+export { MockReminderPresenter, useReminderPermissionsOnLaunch } from './presentation';

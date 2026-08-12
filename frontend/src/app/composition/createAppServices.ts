@@ -12,13 +12,13 @@ import {
 import { MockAudioPlayback } from '../../infrastructure/audio';
 import { MockLocationMonitor } from '../../infrastructure/location';
 import {
-  MockDeviceCapability,
   MockPopup,
   MockReminderRecovery,
   MockReminderDelivery,
   MockSystemNotification,
   MockVibration,
   NativeAlarmScheduler,
+  NativeDeviceCapability,
 } from '../../infrastructure/notifications';
 import { MockTimeListener } from '../../shared/time';
 import { MockReminderPresenter } from '../../features/reminder/presentation';
@@ -29,7 +29,7 @@ export type AppServices = {
   reminderPorts: ReminderApplicationDependencies;
 };
 
-/** 提醒组合根：闹钟端口使用 NativeAlarmScheduler，其余仍为 mock。 */
+/** 提醒组合根：NativeAlarmScheduler + NativeDeviceCapability，其余仍为 mock。 */
 export function createAppServices(): AppServices {
   const reminderPorts: ReminderApplicationDependencies = {
     schedules: new MockLocalScheduleReader(),
@@ -38,7 +38,7 @@ export function createAppServices(): AppServices {
     alarms: new NativeAlarmScheduler(),
     delivery: new MockReminderDelivery(),
     audio: new MockAudioPlayback(),
-    device: new MockDeviceCapability(),
+    device: new NativeDeviceCapability(),
     presenter: new MockReminderPresenter(),
     systemNotification: new MockSystemNotification(),
     popup: new MockPopup(),
