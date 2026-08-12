@@ -71,6 +71,30 @@ describe('AuthenticatedWebSocketClient', () => {
     expect(socket.sent[2]).toBe(binary);
   });
 
+  it('delivers JSON and binary business frames after ready until unsubscribed', async () => {
+    const socket = new FakeWebSocket();
+    const client = createClient(socket);
+    const listener = jest.fn();
+    const unsubscribe = client.subscribe(listener);
+    const connection = client.connect();
+    await flushPromises();
+    socket.open();
+    socket.receive(JSON.stringify(ready('req_001')));
+    await connection;
+    const json = '{"type":"assistant.delta"}';
+    const binary = new ArrayBuffer(4);
+
+    socket.receive(json);
+    socket.receive(binary);
+
+    expect(listener).toHaveBeenNthCalledWith(1, json);
+    expect(listener).toHaveBeenNthCalledWith(2, binary);
+    expect(listener).toHaveBeenCalledTimes(2);
+    unsubscribe();
+    socket.receive('{"type":"assistant.done"}');
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
   it('rejects before token lookup when invalidation is already active', async () => {
     const getAccessToken = jest.fn(async () => 'opaque-token');
     const socketFactory = jest.fn(() => new FakeWebSocket());

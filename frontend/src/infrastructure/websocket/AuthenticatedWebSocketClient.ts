@@ -8,6 +8,10 @@ import type { WebSocketFactory, WebSocketPort } from './WebSocketPort';
 
 export type AuthenticatedWebSocketState =
   'disconnected' | 'connecting' | 'authenticating' | 'ready';
+export type AuthenticatedWebSocketMessage = string | ArrayBuffer;
+export type AuthenticatedWebSocketMessageListener = (
+  message: AuthenticatedWebSocketMessage,
+) => void;
 
 const HANDSHAKE_TIMEOUT_MS = 5_000;
 const LOCAL_UNAUTHENTICATED_MESSAGE = 'Authentication is required';
@@ -59,6 +63,7 @@ export class AuthenticatedWebSocketClient {
   private timeout: ReturnType<typeof setTimeout> | undefined;
   private requestCounter = 0;
   private connectionAttempt = 0;
+  private readonly messageListeners = new Set<AuthenticatedWebSocketMessageListener>();
 
   constructor(private readonly options: AuthenticatedWebSocketClientOptions) {}
 
@@ -93,6 +98,12 @@ export class AuthenticatedWebSocketClient {
       throw new WebSocketNotReadyError();
     }
     this.socket.send(data);
+  }
+
+  /** 订阅 ready 后的 JSON 或二进制业务帧；握手帧不会进入业务监听器。 */
+  subscribe(listener: AuthenticatedWebSocketMessageListener): () => void {
+    this.messageListeners.add(listener);
+    return () => this.messageListeners.delete(listener);
   }
 
   /** close 可重复调用，且不会影响已被替换的连接。 */
@@ -149,10 +160,24 @@ export class AuthenticatedWebSocketClient {
   }
 
   private handleMessage(socket: WebSocketPort, requestId: string, rawData: unknown): void {
-    if (socket !== this.socket || this.state !== 'authenticating' || typeof rawData !== 'string') {
-      if (socket === this.socket && this.state === 'authenticating') {
+    if (socket !== this.socket) {
+      return;
+    }
+    if (this.state === 'ready') {
+      if (!isBusinessMessage(rawData)) {
         this.disposeCurrent(new WebSocketConnectionError(), true, socket);
+        return;
       }
+      for (const listener of this.messageListeners) {
+        listener(rawData);
+      }
+      return;
+    }
+    if (this.state !== 'authenticating') {
+      return;
+    }
+    if (typeof rawData !== 'string') {
+      this.disposeCurrent(new WebSocketConnectionError(), true, socket);
       return;
     }
 
@@ -242,4 +267,8 @@ export function buildWebSocketUrl(url: string, deviceId: string): string {
 
 function isNonBlankString(value: string): boolean {
   return value.trim().length > 0;
+}
+
+function isBusinessMessage(value: unknown): value is AuthenticatedWebSocketMessage {
+  return typeof value === 'string' || value instanceof ArrayBuffer;
 }

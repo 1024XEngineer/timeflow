@@ -10,13 +10,23 @@ import { openTimeflowDatabase } from '../infrastructure/database';
 import { LoginScreen } from '../screens/LoginScreen';
 import { colors, spacing } from '../shared/ui/theme';
 import { AppProviders } from './AppProviders';
-import { createAuthRuntime } from './authRuntime';
+import { createAppServices, type AppServices } from './composition/createAppServices';
 
-export function AppRoot({ authController }: { authController?: AuthController }) {
-  const runtime = useMemo(() => (authController ? undefined : createAuthRuntime()), [authController]);
-  const controller = authController ?? runtime!.controller;
+export function AppRoot({
+  authController,
+  services: providedServices,
+}: {
+  authController?: AuthController;
+  services?: AppServices;
+}) {
+  const services = useMemo(() => providedServices ?? createAppServices(), [providedServices]);
+  const controller = authController ?? services.auth.controller;
   return (
-    <AppProviders authController={controller} invalidationCoordinator={runtime?.invalidationCoordinator}>
+    <AppProviders
+      authController={controller}
+      invalidationCoordinator={authController ? undefined : services.auth.invalidationCoordinator}
+      services={services}
+    >
       <AuthRoute />
     </AppProviders>
   );

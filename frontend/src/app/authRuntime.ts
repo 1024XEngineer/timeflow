@@ -93,5 +93,7 @@ export function createAuthController(): AuthController {
 }
 
 function createNativeWebSocket(url: string): WebSocketPort {
-  return new WebSocket(url) as unknown as WebSocketPort;
+  const socket = new WebSocket(url);
+  socket.binaryType = 'arraybuffer';
+  return socket as unknown as WebSocketPort;
 }

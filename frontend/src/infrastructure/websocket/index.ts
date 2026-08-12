@@ -5,6 +5,8 @@ export {
   WebSocketNotReadyError,
   WebSocketUnauthenticatedError,
   type AuthenticatedWebSocketClientOptions,
+  type AuthenticatedWebSocketMessage,
+  type AuthenticatedWebSocketMessageListener,
   type AuthenticatedWebSocketState,
 } from './AuthenticatedWebSocketClient';
 export type {
