@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { accessAuth } from '../api/auth';
 import type { AuthAccessResponse } from '../contracts/auth';
@@ -15,6 +15,7 @@ export function AppRoot() {
   const [session, setSession] = useState<AuthAccessResponse>();
   const [scheduleService, setScheduleService] = useState<SqliteScheduleClientService>();
   const [databaseError, setDatabaseError] = useState<string | null>(null);
+  const [databaseRetryToken, setDatabaseRetryToken] = useState(0);
 
   useEffect(() => {
     if (!session) return;
@@ -33,7 +34,13 @@ export function AppRoot() {
     return () => {
       active = false;
     };
-  }, [session]);
+  }, [databaseRetryToken, session]);
+
+  const retryDatabase = useCallback(() => {
+    setScheduleService(undefined);
+    setDatabaseError(null);
+    setDatabaseRetryToken((value) => value + 1);
+  }, []);
 
   return (
     <AppProviders>
@@ -48,6 +55,11 @@ export function AppRoot() {
           <View style={styles.authenticatedScreen}>
             <Text style={styles.title}>{databaseError ?? '正在准备日程'}</Text>
             <Text style={styles.account}>账号：{session.account_id}</Text>
+            {databaseError ? (
+              <Pressable accessibilityRole="button" onPress={retryDatabase} style={styles.retry}>
+                <Text style={styles.retryText}>重试</Text>
+              </Pressable>
+            ) : null}
           </View>
         )
       ) : (
@@ -67,4 +79,12 @@ const styles = StyleSheet.create({
     padding: spacing.xl,
   },
   title: { color: colors.text, fontSize: 22, fontWeight: '700' },
+  retry: {
+    backgroundColor: colors.text,
+    borderRadius: 8,
+    marginTop: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  retryText: { color: colors.onPrimary, fontWeight: '700' },
 });

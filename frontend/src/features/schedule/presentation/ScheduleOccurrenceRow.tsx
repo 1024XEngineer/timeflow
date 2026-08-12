@@ -13,7 +13,7 @@ export function ScheduleOccurrenceRow({
 }) {
   return (
     <Pressable
-      accessibilityRole="button"
+      accessibilityRole={onPress ? 'button' : undefined}
       accessibilityLabel={`${formatRange(item)} ${item.title}`}
       onPress={onPress}
       style={({ pressed }) => [styles.row, pressed && styles.pressed]}

@@ -1,5 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import type { ScheduleOccurrenceView } from '../application';
 import { colors, spacing } from '../../../shared/ui/theme';
 import { addDays, dateKey, startOfMonth, WEEKDAY_LABELS } from './scheduleDisplay';
 
@@ -14,7 +15,7 @@ export function MonthCalendar({
   month: Date;
   selectedDate: Date;
   today: Date;
-  occurrencesByDate: ReadonlyMap<string, readonly unknown[]>;
+  occurrencesByDate: ReadonlyMap<string, readonly ScheduleOccurrenceView[]>;
   onSelectDate: (date: Date) => void;
   onChangeMonth: (offset: number) => void;
 }) {

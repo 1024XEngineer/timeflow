@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type {
-  GetSchedulesByDayQuery,
+  GetSchedulesByRangeQuery,
   ScheduleClientService,
   ScheduleOccurrenceView,
 } from '../application';
@@ -43,24 +43,42 @@ export function useScheduleCalendar(
   useEffect(() => {
     let cancelled = false;
     const dates = monthGridDates(visibleMonth);
+    const startDate = dateKey(dates[0]);
+    const endDate = dateKey(addDays(dates[dates.length - 1], 1));
     Promise.resolve().then(() => {
       if (!cancelled) {
         setLoading(true);
         setError(null);
       }
     });
-    Promise.all(
-      dates.map(async (date) => {
-        const query: GetSchedulesByDayQuery = {
-          accountId,
-          selectedDate: dateKey(date),
-          timezone,
-        };
-        return [dateKey(date), await service.getSchedulesByDay(query)] as const;
-      }),
-    )
-      .then((entries) => {
-        if (!cancelled) setOccurrencesByDate(new Map(entries));
+    const query: GetSchedulesByRangeQuery = { accountId, startDate, endDate, timezone };
+    service
+      .getSchedulesByRange(query)
+      .then((occurrences) => {
+        const entries = new Map<string, ScheduleOccurrenceView[]>();
+        for (const occurrence of occurrences) {
+          const occurrenceStartKey = occurrence.occurrenceStart
+            ? dateKeyInTimezone(occurrence.occurrenceStart, timezone)
+            : null;
+          if (occurrenceStartKey === null) continue;
+          const keys =
+            occurrence.isAllDay && occurrence.occurrenceEnd
+              ? dates
+                  .filter((date) => {
+                    const key = dateKey(date);
+                    const startKey = occurrenceStartKey;
+                    const endKey = dateKeyInTimezone(occurrence.occurrenceEnd!, timezone);
+                    return endKey !== null && key >= startKey && key < endKey;
+                  })
+                  .map(dateKey)
+              : [occurrenceStartKey];
+          for (const key of keys) {
+            const values = entries.get(key) ?? [];
+            values.push(occurrence);
+            entries.set(key, values);
+          }
+        }
+        if (!cancelled) setOccurrencesByDate(entries);
       })
       .catch(() => {
         if (!cancelled) setError('日程加载失败，请重试');
@@ -84,7 +102,11 @@ export function useScheduleCalendar(
   }, []);
 
   const changeMonth = useCallback((offset: number) => {
-    setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1));
+    setVisibleMonth((current) => {
+      const nextMonth = new Date(current.getFullYear(), current.getMonth() + offset, 1);
+      setSelectedDate(nextMonth);
+      return nextMonth;
+    });
   }, []);
 
   const retry = useCallback(() => setReloadToken((value) => value + 1), []);
@@ -101,5 +123,3 @@ export function useScheduleCalendar(
     retry,
   };
 }
-
-export { dateKeyInTimezone };

@@ -34,6 +34,16 @@ export interface GetSchedulesByDayQuery {
   timezone: string;
 }
 
+/** Half-open local calendar range used by month and agenda views. */
+export interface GetSchedulesByRangeQuery {
+  accountId: string;
+  /** Inclusive lower calendar date, formatted as YYYY-MM-DD. */
+  startDate: string;
+  /** Exclusive upper calendar date, formatted as YYYY-MM-DD. */
+  endDate: string;
+  timezone: string;
+}
+
 /** One displayable occurrence returned to the calendar UI. */
 export interface ScheduleOccurrenceView {
   scheduleId: string;
@@ -60,6 +70,7 @@ export interface ScheduleClientService {
    * excludes original occurrences with cancel or replace overrides.
    */
   getSchedulesByDay(query: GetSchedulesByDayQuery): Promise<readonly ScheduleOccurrenceView[]>;
+  getSchedulesByRange(query: GetSchedulesByRangeQuery): Promise<readonly ScheduleOccurrenceView[]>;
 }
 
 type CalendarRepository = Pick<
@@ -84,19 +95,53 @@ export class SqliteScheduleClientService implements ScheduleClientService {
     }
     const dayStart = zonedPartsToInstant(selectedDate, query.timezone);
     const dayEnd = zonedPartsToInstant(addLocalDays(selectedDate, 1), query.timezone);
-    const schedules = (await this.repository.listSchedules(query.accountId)).filter(
+    return this.resolveOccurrencesInRange(query.accountId, dayStart, dayEnd);
+  }
+
+  public async getSchedulesByRange(
+    query: GetSchedulesByRangeQuery,
+  ): Promise<readonly ScheduleOccurrenceView[]> {
+    const startDate = parseDateOnly(query.startDate);
+    const endDate = parseDateOnly(query.endDate);
+    if (
+      query.accountId.trim().length === 0 ||
+      startDate === null ||
+      endDate === null ||
+      !isValidIanaTimezone(query.timezone)
+    ) {
+      throw new TypeError('Invalid local calendar range query');
+    }
+    const rangeStart = zonedPartsToInstant(startDate, query.timezone);
+    const rangeEnd = zonedPartsToInstant(endDate, query.timezone);
+    if (rangeStart >= rangeEnd) {
+      throw new TypeError('Invalid local calendar range query');
+    }
+    return this.resolveOccurrencesInRange(query.accountId, rangeStart, rangeEnd);
+  }
+
+  private async resolveOccurrencesInRange(
+    accountId: string,
+    rangeStart: Date,
+    rangeEnd: Date,
+  ): Promise<readonly ScheduleOccurrenceView[]> {
+    const schedules = (await this.repository.listSchedules(accountId)).filter(
       (schedule) => schedule.status === 'active',
     );
-    const overrides = await this.repository.listOccurrenceOverrides(query.accountId);
+    const overrides = await this.repository.listOccurrenceOverrides(accountId);
     const overridesBySchedule = groupOverrides(overrides);
     const occurrences = schedules.flatMap((schedule) =>
-      resolveScheduleForDay(schedule, overridesBySchedule.get(schedule.id) ?? [], dayStart, dayEnd),
+      resolveScheduleInRange(
+        schedule,
+        overridesBySchedule.get(schedule.id) ?? [],
+        rangeStart,
+        rangeEnd,
+      ),
     );
     return occurrences.sort(compareOccurrences);
   }
 }
 
-function resolveScheduleForDay(
+function resolveScheduleInRange(
   schedule: LocalScheduleRow,
   overrides: readonly LocalScheduleOccurrenceOverrideRow[],
   dayStart: Date,
@@ -124,11 +169,11 @@ function resolveScheduleForDay(
   const localStart = instantToZonedParts(start, scheduleTimezone);
   const floatingStart = localPartsToFloatingDate(localStart);
   const localDuration = getLocalDuration(start, end, scheduleTimezone);
-  const dayLower = localPartsToFloatingDate(instantToZonedParts(dayStart, scheduleTimezone));
+  const rangeLower = localPartsToFloatingDate(instantToZonedParts(dayStart, scheduleTimezone));
   const lower =
     schedule.is_all_day === 1 && localDuration !== null
-      ? new Date(dayLower.getTime() - localDuration)
-      : dayLower;
+      ? new Date(rangeLower.getTime() - localDuration)
+      : rangeLower;
   const upper = localPartsToFloatingDate(instantToZonedParts(dayEnd, scheduleTimezone));
   let floatingOccurrences: Date[];
   try {

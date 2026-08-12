@@ -41,4 +41,22 @@ describe('AppRoot', () => {
     await waitFor(() => expect(screen.getByText('日程日历')).toBeTruthy());
     expect(screen.queryByText('access-token')).toBeNull();
   });
+
+  it('can retry SQLite initialization after a failure', async () => {
+    const { openTimeflowDatabase } = jest.requireMock('../infrastructure/database') as {
+      openTimeflowDatabase: jest.MockedFunction<() => Promise<unknown>>;
+    };
+    openTimeflowDatabase.mockReset();
+    openTimeflowDatabase
+      .mockRejectedValueOnce(new Error('database unavailable'))
+      .mockResolvedValue({});
+    mockedAccessAuth.mockResolvedValue(tokenResponse);
+    render(<AppRoot />);
+    fireEvent.changeText(screen.getByPlaceholderText('输入用户名'), 'timeflow_user');
+    fireEvent.changeText(screen.getByPlaceholderText('输入密码'), 'password123');
+    fireEvent.press(screen.getByText('继续'));
+    await waitFor(() => expect(screen.getByText('本地日程存储初始化失败')).toBeTruthy());
+    fireEvent.press(screen.getByText('重试'));
+    await waitFor(() => expect(openTimeflowDatabase).toHaveBeenCalledTimes(2));
+  });
 });

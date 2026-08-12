@@ -1,9 +1,11 @@
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
 
-import type { ScheduleClientService } from '../application';
+import type { ScheduleClientService, ScheduleOccurrenceView } from '../application';
 import { colors, spacing } from '../../../shared/ui/theme';
 import { MonthCalendar } from './MonthCalendar';
 import { ScheduleOccurrenceRow } from './ScheduleOccurrenceRow';
+import { ScheduleOccurrenceDetailSheet } from './ScheduleOccurrenceDetailSheet';
 import { useScheduleCalendar } from './useScheduleCalendar';
 
 export function ScheduleCalendarScreen({
@@ -16,6 +18,7 @@ export function ScheduleCalendarScreen({
   timezone: string;
 }) {
   const calendar = useScheduleCalendar(service, accountId, timezone);
+  const [selectedOccurrence, setSelectedOccurrence] = useState<ScheduleOccurrenceView | null>(null);
   const selectedLabel = `${calendar.selectedDate.getMonth() + 1}月${calendar.selectedDate.getDate()}日`;
   return (
     <View style={styles.screen}>
@@ -57,11 +60,16 @@ export function ScheduleCalendarScreen({
               <ScheduleOccurrenceRow
                 item={item}
                 key={`${item.scheduleId}-${item.occurrenceStart}`}
+                onPress={() => setSelectedOccurrence(item)}
               />
             ))
           )}
         </ScrollView>
       ) : null}
+      <ScheduleOccurrenceDetailSheet
+        occurrence={selectedOccurrence}
+        onClose={() => setSelectedOccurrence(null)}
+      />
     </View>
   );
 }

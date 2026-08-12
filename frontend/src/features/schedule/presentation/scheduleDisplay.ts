@@ -49,7 +49,3 @@ export function startOfMonth(date: Date): Date {
 export function addDays(date: Date, amount: number): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate() + amount);
 }
-
-export function localDateKey(date: Date): string {
-  return dateKey(date);
-}

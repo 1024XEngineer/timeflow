@@ -375,4 +375,69 @@ describe('SqliteScheduleClientService', () => {
       }),
     ).rejects.toThrow('Invalid local calendar query');
   });
+
+  it('returns one complete half-open range with once, all-day, recurring, cancel, and replace data', async () => {
+    await repository.applyCloudSchedule(
+      cloudSchedule({ id: 'range-once', title: 'Range once', start_time: '2026-08-12T03:00:00Z' }),
+    );
+    await repository.applyCloudSchedule(
+      cloudSchedule({
+        id: 'range-all-day',
+        title: 'Range all day',
+        is_all_day: 1,
+        start_time: '2026-08-11T16:00:00Z',
+        end_time: '2026-08-14T16:00:00Z',
+      }),
+    );
+    await repository.applyCloudSchedule(
+      cloudSchedule({
+        id: 'range-series',
+        title: 'Range series',
+        schedule_kind: 'recurring',
+        start_time: '2026-08-03T02:00:00Z',
+        recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO',
+      }),
+    );
+    await repository.applyCloudSchedule(
+      cloudSchedule({
+        id: 'range-replacement',
+        title: 'Range replacement',
+        start_time: '2026-08-17T05:00:00Z',
+      }),
+    );
+    await repository.upsertOccurrenceOverride('account-a', {
+      id: 'range-cancel',
+      schedule_id: 'range-series',
+      occurrence_start: '2026-08-10T02:00:00Z',
+      action: 'cancel',
+      replacement_schedule_id: null,
+    });
+    await repository.upsertOccurrenceOverride('account-a', {
+      id: 'range-replace',
+      schedule_id: 'range-series',
+      occurrence_start: '2026-08-17T02:00:00Z',
+      action: 'replace',
+      replacement_schedule_id: 'range-replacement',
+    });
+
+    const result = await service.getSchedulesByRange({
+      accountId: 'account-a',
+      startDate: '2026-08-01',
+      endDate: '2026-09-01',
+      timezone: 'Asia/Shanghai',
+    });
+
+    expect(result).toHaveLength(6);
+    expect(result.filter((occurrence) => occurrence.scheduleId === 'range-series')).toHaveLength(3);
+    expect(
+      result.filter((occurrence) => occurrence.scheduleId === 'range-replacement'),
+    ).toHaveLength(1);
+    expect(result.filter((occurrence) => occurrence.scheduleId === 'range-all-day')).toHaveLength(
+      1,
+    );
+    expect(result.filter((occurrence) => occurrence.scheduleId === 'range-once')).toHaveLength(1);
+    expect(
+      result.some((occurrence) => occurrence.occurrenceStart === '2026-08-10T02:00:00.000Z'),
+    ).toBe(false);
+  });
 });

@@ -1,5 +1,6 @@
 export type {
   GetSchedulesByDayQuery,
+  GetSchedulesByRangeQuery,
   ScheduleClientService,
   ScheduleOccurrenceView,
 } from './scheduleClientService';

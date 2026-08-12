@@ -37,7 +37,7 @@ export type LocalReminderStateIsNotCloudDispositionContract = Assert<
 >;
 
 export type ScheduleClientOperationsContract = Assert<
-  Equal<keyof ScheduleClientService, 'getSchedulesByDay'>
+  Equal<keyof ScheduleClientService, 'getSchedulesByDay' | 'getSchedulesByRange'>
 >;
 
 export type ScheduleSyncOperationsContract = Assert<
