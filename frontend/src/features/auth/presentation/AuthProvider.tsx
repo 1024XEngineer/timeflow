@@ -7,7 +7,11 @@ import {
   useSyncExternalStore,
 } from 'react';
 
-import { type AuthController, type AuthInvalidationReason } from '../application';
+import {
+  type AuthController,
+  type AuthInvalidationCoordinator,
+  type AuthInvalidationReason,
+} from '../application';
 import type { AuthAccessRequest } from '../../../contracts/auth';
 import type { AuthViewState } from '../domain';
 
@@ -22,7 +26,14 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 /** 向 React 暴露脱敏快照和安全动作；控制器本身不离开认证边界。 */
-export function AuthProvider({ children, controller }: PropsWithChildren<{ controller: AuthController }>) {
+export function AuthProvider({
+  children,
+  controller,
+  invalidationCoordinator,
+}: PropsWithChildren<{
+  controller: AuthController;
+  invalidationCoordinator?: AuthInvalidationCoordinator;
+}>) {
   const viewState = useSyncExternalStore(
     (listener) => controller.subscribe(listener),
     () => controller.getViewState(),
@@ -36,12 +47,12 @@ export function AuthProvider({ children, controller }: PropsWithChildren<{ contr
   const value = useMemo<AuthContextValue>(
     () => ({
       authenticate: (credentials) => controller.authenticate(credentials),
-      invalidate: (reason) => controller.invalidate(reason),
+      invalidate: (reason) => invalidationCoordinator?.invalidate(reason) ?? controller.invalidate(reason),
       retryInitialization: () => controller.retryInitialization(),
-      signOut: () => controller.signOut(),
+      signOut: () => invalidationCoordinator?.invalidate('revoked') ?? controller.signOut(),
       viewState,
     }),
-    [controller, viewState],
+    [controller, invalidationCoordinator, viewState],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

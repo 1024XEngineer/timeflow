@@ -39,8 +39,56 @@ export function isAuthAccessResponse(value: unknown): value is AuthAccessRespons
 export type AuthAccess = (request: AuthAccessRequest) => Promise<AuthAccessResponse>;
 
 /** 后端统一认证入口可能返回的业务错误码。 */
-export type AuthErrorCode =
-  'AUTH_INVALID_USERNAME' | 'AUTH_INVALID_PASSWORD' | 'AUTH_INVALID_CREDENTIALS';
+export const AUTH_INVALID_USERNAME = 'AUTH_INVALID_USERNAME';
+export const AUTH_INVALID_PASSWORD = 'AUTH_INVALID_PASSWORD';
+export const AUTH_INVALID_CREDENTIALS = 'AUTH_INVALID_CREDENTIALS';
+export const AUTH_REQUIRED = 'AUTH_REQUIRED';
+export const AUTH_INVALID_TOKEN = 'AUTH_INVALID_TOKEN';
+export const AUTH_INTERNAL_ERROR = 'AUTH_INTERNAL_ERROR';
+
+/** 冻结认证错误码，客户端只接受契约内的值。 */
+export const AUTH_ERROR_CODES = Object.freeze([
+  AUTH_INVALID_USERNAME,
+  AUTH_INVALID_PASSWORD,
+  AUTH_INVALID_CREDENTIALS,
+  AUTH_REQUIRED,
+  AUTH_INVALID_TOKEN,
+  AUTH_INTERNAL_ERROR,
+] as const);
+
+export type AuthErrorCode = (typeof AUTH_ERROR_CODES)[number];
+
+/** 冻结 HTTP 错误外壳，避免调用方依赖传输层错误对象。 */
+export interface AuthErrorEnvelope {
+  readonly error: {
+    readonly code: AuthErrorCode;
+    readonly message: string;
+  };
+}
+
+/** 严格读取冻结的嵌套错误外壳；拒绝旧顶层形状和原型链字段。 */
+export function parseAuthErrorEnvelope(value: unknown): AuthErrorEnvelope | undefined {
+  if (!isRecord(value) || !hasOwnProperty(value, 'error') || !isRecord(value.error)) {
+    return undefined;
+  }
+
+  const error = value.error;
+  if (
+    !hasOwnProperty(error, 'code') ||
+    !hasOwnProperty(error, 'message') ||
+    !isAuthErrorCode(error.code) ||
+    !isNonBlankString(error.message)
+  ) {
+    return undefined;
+  }
+
+  return { error: { code: error.code, message: error.message } };
+}
+
+/** 只有明确的访问凭据失效码可以驱动本地会话清理。 */
+export function isAuthAccessErrorCode(value: unknown): value is typeof AUTH_REQUIRED | typeof AUTH_INVALID_TOKEN {
+  return value === AUTH_REQUIRED || value === AUTH_INVALID_TOKEN;
+}
 
 /** 页面能够稳定处理的认证失败分类。 */
 export type AuthAccessFailureReason = 'business' | 'invalid_response' | 'network' | 'timeout';
@@ -66,4 +114,8 @@ function hasOwnProperty(record: Record<string, unknown>, property: string): bool
 
 function isNonBlankString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isAuthErrorCode(value: unknown): value is AuthErrorCode {
+  return typeof value === 'string' && AUTH_ERROR_CODES.includes(value as AuthErrorCode);
 }

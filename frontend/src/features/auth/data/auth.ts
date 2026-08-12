@@ -1,26 +1,21 @@
 import {
   AuthAccessError,
   isAuthAccessResponse,
+  parseAuthErrorEnvelope,
   type AuthAccess,
   type AuthErrorCode,
 } from '../../../contracts/auth';
 import {
   ApiError,
   ApiResponseError,
-  apiFetch,
+  publicApiFetch,
   type ApiRequest,
 } from '../../../infrastructure/network/client';
 
 const AUTH_ACCESS_TIMEOUT_MS = 15_000;
 
-const AUTH_ERROR_CODES = new Set<AuthErrorCode>([
-  'AUTH_INVALID_USERNAME',
-  'AUTH_INVALID_PASSWORD',
-  'AUTH_INVALID_CREDENTIALS',
-]);
-
 /** 统一认证请求适配器；账号创建或密码校验均由服务端统一入口决定。 */
-export function createAuthAccess(request: ApiRequest = apiFetch): AuthAccess {
+export function createAuthAccess(request: ApiRequest = publicApiFetch): AuthAccess {
   return async (credentials) => {
     const abortController = new AbortController();
     const timeoutId = setTimeout(() => abortController.abort(), AUTH_ACCESS_TIMEOUT_MS);
@@ -28,6 +23,7 @@ export function createAuthAccess(request: ApiRequest = apiFetch): AuthAccess {
     try {
       const response = await request<unknown>('/auth/access', {
         body: JSON.stringify(credentials),
+        auth: 'public',
         headers: { 'Content-Type': 'application/json' },
         method: 'POST',
         signal: abortController.signal,
@@ -62,18 +58,7 @@ export function createAuthAccess(request: ApiRequest = apiFetch): AuthAccess {
 export const accessAuth = createAuthAccess();
 
 function readAuthErrorCode(body: unknown): AuthErrorCode | undefined {
-  if (!isRecord(body)) {
-    return undefined;
-  }
-
-  const candidate = isRecord(body.error) ? body.error.code : body.code;
-  return typeof candidate === 'string' && AUTH_ERROR_CODES.has(candidate as AuthErrorCode)
-    ? (candidate as AuthErrorCode)
-    : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
+  return parseAuthErrorEnvelope(body)?.error.code;
 }
 
 function isAbortError(value: unknown): boolean {

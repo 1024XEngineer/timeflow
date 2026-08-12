@@ -30,6 +30,7 @@ describe('createAuthAccess', () => {
     await expect(createAuthAccess(request)(credentials)).resolves.toEqual(response);
     expect(request).toHaveBeenCalledWith('/auth/access', {
       body: JSON.stringify(credentials),
+      auth: 'public',
       headers: { 'Content-Type': 'application/json' },
       method: 'POST',
       signal: expect.anything(),

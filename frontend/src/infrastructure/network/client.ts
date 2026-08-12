@@ -1,3 +1,5 @@
+import { isAuthAccessErrorCode, parseAuthErrorEnvelope } from '../../contracts/auth';
+
 export const API_BASE_URL = (
   process.env.EXPO_PUBLIC_API_URL ?? 'http://127.0.0.1:8000/api/v1'
 ).replace(/\/$/, '');
@@ -19,21 +21,98 @@ export class ApiResponseError extends Error {
   }
 }
 
-export type ApiRequest = <T>(path: string, init?: RequestInit) => Promise<T>;
+/** 受保护请求在本地无法安全认证时使用的固定错误。 */
+export class ApiUnauthenticatedError extends Error {
+  constructor() {
+    super('Authentication is required');
+    this.name = 'ApiUnauthenticatedError';
+  }
+}
 
-export const apiFetch: ApiRequest = async <T>(path: string, init?: RequestInit): Promise<T> => {
-  const response = await fetch(`${API_BASE_URL}${path}`, init);
+export type ApiAuthMode = 'public' | 'protected';
 
-  if (!response.ok) {
-    throw new ApiError(response.status, await readJson(response));
+export interface ApiRequestInit extends RequestInit {
+  readonly auth?: ApiAuthMode;
+}
+
+export type ApiRequest = <T>(path: string, init?: ApiRequestInit) => Promise<T>;
+
+/** HTTP 客户端只依赖失效端口，不读取展示层或认证存储。 */
+export interface AuthInvalidationPort {
+  getAccessToken(): Promise<string | undefined>;
+  invalidate(reason: 'expired' | 'revoked'): Promise<void>;
+  isInvalidating(): boolean;
+}
+
+export interface CreateApiClientOptions {
+  readonly fetch?: typeof globalThis.fetch;
+  readonly invalidationCoordinator?: AuthInvalidationPort;
+}
+
+/** 创建显式公开/受保护请求的底层 client；默认保护业务资源。 */
+export function createApiClient(options: CreateApiClientOptions = {}): ApiRequest {
+  const fetchImplementation = options.fetch ?? globalThis.fetch;
+
+  return async <T>(path: string, init: ApiRequestInit = {}): Promise<T> => {
+    const auth = init.auth ?? 'protected';
+    const headers = new Headers(init.headers);
+
+    if (auth === 'public') {
+      headers.delete('Authorization');
+    } else {
+      const token = await getProtectedToken(options.invalidationCoordinator);
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+
+    const { auth: _auth, ...requestInit } = init;
+    const response = await fetchImplementation(`${API_BASE_URL}${path}`, { ...requestInit, headers });
+
+    if (!response.ok) {
+      const body = await readJson(response);
+      if (auth === 'protected' && response.status === 401) {
+        const code = parseAuthErrorEnvelope(body)?.error.code;
+        if (isAuthAccessErrorCode(code)) {
+          await options.invalidationCoordinator?.invalidate('revoked');
+        }
+      }
+      throw new ApiError(response.status, body);
+    }
+
+    try {
+      return (await response.json()) as T;
+    } catch {
+      throw new ApiResponseError(response.status);
+    }
+  };
+}
+
+/** 公开入口强制移除 Authorization，调用方无法意外带入旧凭据。 */
+export function createPublicApiClient(options: CreateApiClientOptions = {}): ApiRequest {
+  const request = createApiClient(options);
+  return <T>(path: string, init?: ApiRequestInit) => request<T>(path, { ...init, auth: 'public' });
+}
+
+/** 受保护入口统一走 Token 读取和严格 401 失效分类。 */
+export function createProtectedApiClient(options: CreateApiClientOptions): ApiRequest {
+  const request = createApiClient(options);
+  return <T>(path: string, init?: ApiRequestInit) => request<T>(path, { ...init, auth: 'protected' });
+}
+
+/** 兼容默认公开请求；业务调用应在 app 组合处取得受保护 client。 */
+export const publicApiFetch = createPublicApiClient();
+export const apiFetch = publicApiFetch;
+
+async function getProtectedToken(coordinator: AuthInvalidationPort | undefined): Promise<string> {
+  if (!coordinator || coordinator.isInvalidating()) {
+    throw new ApiUnauthenticatedError();
   }
 
-  try {
-    return (await response.json()) as T;
-  } catch {
-    throw new ApiResponseError(response.status);
+  const token = await coordinator.getAccessToken();
+  if (!token || coordinator.isInvalidating()) {
+    throw new ApiUnauthenticatedError();
   }
-};
+  return token;
+}
 
 async function readJson(response: Response): Promise<unknown> {
   try {
