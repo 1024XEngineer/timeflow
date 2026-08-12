@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import type { AuthAccessResponse } from '../contracts/auth';
-import { accessAuth } from '../features/auth/data/auth';
+import type { AuthController } from '../features/auth/application';
+import { useAuth } from '../features/auth/presentation/AuthProvider';
 import { SqliteScheduleClientService } from '../features/schedule/application';
 import { ScheduleLocalRepository } from '../features/schedule/data';
 import { ScheduleCalendarScreen } from '../features/schedule/presentation/ScheduleCalendarScreen';
@@ -10,15 +10,29 @@ import { openTimeflowDatabase } from '../infrastructure/database';
 import { LoginScreen } from '../screens/LoginScreen';
 import { colors, spacing } from '../shared/ui/theme';
 import { AppProviders } from './AppProviders';
+import { createAuthController } from './authRuntime';
 
-export function AppRoot() {
-  const [session, setSession] = useState<AuthAccessResponse>();
+export function AppRoot({ authController }: { authController?: AuthController }) {
+  const controller = useMemo(() => authController ?? createAuthController(), [authController]);
+  return (
+    <AppProviders authController={controller}>
+      <AuthRoute />
+    </AppProviders>
+  );
+}
+
+function AuthRoute() {
+  const { retryInitialization, viewState } = useAuth();
+  const accountId = viewState.status === 'authenticated' ? viewState.accountId : undefined;
   const [scheduleService, setScheduleService] = useState<SqliteScheduleClientService>();
   const [databaseError, setDatabaseError] = useState<string | null>(null);
   const [databaseRetryToken, setDatabaseRetryToken] = useState(0);
 
   useEffect(() => {
-    if (!session) return;
+    setScheduleService(undefined);
+    setDatabaseError(null);
+    if (!accountId) return;
+
     let active = true;
     openTimeflowDatabase()
       .then((database) => {
@@ -34,38 +48,52 @@ export function AppRoot() {
     return () => {
       active = false;
     };
-  }, [databaseRetryToken, session]);
+  }, [accountId, databaseRetryToken]);
 
   const retryDatabase = useCallback(() => {
-    setScheduleService(undefined);
-    setDatabaseError(null);
     setDatabaseRetryToken((value) => value + 1);
   }, []);
 
-  return (
-    <AppProviders>
-      {session ? (
-        scheduleService ? (
-          <ScheduleCalendarScreen
-            accountId={session.account_id}
-            service={scheduleService}
-            timezone={Intl.DateTimeFormat().resolvedOptions().timeZone}
-          />
-        ) : (
-          <View style={styles.authenticatedScreen}>
-            <Text style={styles.title}>{databaseError ?? '正在准备日程'}</Text>
-            <Text style={styles.account}>账号：{session.account_id}</Text>
-            {databaseError ? (
-              <Pressable accessibilityRole="button" onPress={retryDatabase} style={styles.retry}>
-                <Text style={styles.retryText}>重试</Text>
-              </Pressable>
-            ) : null}
-          </View>
-        )
-      ) : (
-        <LoginScreen authAccess={accessAuth} onAuthenticated={setSession} />
-      )}
-    </AppProviders>
+  if (viewState.status === 'loading') {
+    return (
+      <View style={styles.authenticatedScreen}>
+        <Text style={styles.title}>正在恢复登录状态</Text>
+        {viewState.initializationError ? (
+          <Text style={styles.account}>{viewState.initializationError}</Text>
+        ) : null}
+        {viewState.initializationError ? (
+          <Text
+            accessibilityRole="button"
+            onPress={() => void retryInitialization()}
+            style={styles.account}
+          >
+            重试
+          </Text>
+        ) : null}
+      </View>
+    );
+  }
+
+  if (viewState.status === 'unauthenticated') {
+    return <LoginScreen />;
+  }
+
+  return scheduleService ? (
+    <ScheduleCalendarScreen
+      accountId={viewState.accountId}
+      service={scheduleService}
+      timezone={Intl.DateTimeFormat().resolvedOptions().timeZone}
+    />
+  ) : (
+    <View style={styles.authenticatedScreen}>
+      <Text style={styles.title}>{databaseError ?? '正在准备日程'}</Text>
+      <Text style={styles.account}>账号：{viewState.accountId}</Text>
+      {databaseError ? (
+        <Pressable accessibilityRole="button" onPress={retryDatabase} style={styles.retry}>
+          <Text style={styles.retryText}>重试</Text>
+        </Pressable>
+      ) : null}
+    </View>
   );
 }
 
