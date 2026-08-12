@@ -371,3 +371,82 @@ def test_postgres_application_service_atomically_cancels_current_occurrence(
     assert result.schedules[0].revision == 2
     assert result.occurrence_overrides[0].action is OccurrenceOverrideAction.CANCEL
     assert result.occurrence_overrides[0].occurrence_start == datetime(2026, 8, 17, 2, tzinfo=UTC)
+
+
+def test_postgres_entire_series_atomically_soft_deletes_replacement(
+    postgres_connection: Connection,
+) -> None:
+    """The parent and its replacement commit as one PostgreSQL mutation."""
+    account_id = "account-service-replacement-delete"
+    now = datetime(2026, 8, 11, 1, tzinfo=UTC)
+    service = _application_service(
+        postgres_connection,
+        account_id=account_id,
+        ids=iter(("recurring-with-replacement", "replacement-once")),
+        now=now,
+    )
+    recurring = service.create_schedule(
+        account_id=account_id,
+        command=CreateScheduleCommand(
+            schedule_type=ScheduleType.TIME,
+            schedule_kind=ScheduleKind.RECURRING,
+            title="Weekly sync",
+            timezone="Asia/Shanghai",
+            start_time=datetime(2026, 8, 3, 2, tzinfo=UTC),
+            recurrence_rule="FREQ=WEEKLY;BYDAY=MO",
+        ),
+    ).schedules[0]
+    replacement = service.create_schedule(
+        account_id=account_id,
+        command=CreateScheduleCommand(
+            schedule_type=ScheduleType.TIME,
+            schedule_kind=ScheduleKind.ONCE,
+            title="Moved sync",
+            timezone="Asia/Shanghai",
+            start_time=datetime(2026, 8, 17, 6, tzinfo=UTC),
+        ),
+    ).schedules[0]
+    with Session(
+        bind=postgres_connection,
+        join_transaction_mode="create_savepoint",
+    ) as session:
+        repository = ScheduleRepository(session)
+        persisted_override = repository.add_occurrence_override(
+            account_id=account_id,
+            snapshot=ScheduleOccurrenceOverrideSnapshot(
+                id="replace-override",
+                schedule_id=recurring.id,
+                occurrence_start=datetime(2026, 8, 17, 2, tzinfo=UTC),
+                action=OccurrenceOverrideAction.REPLACE,
+                replacement_schedule_id=replacement.id,
+                created_at=now,
+                updated_at=now,
+            ),
+        )
+        assert persisted_override is not None
+        session.commit()
+
+    result = service.delete_recurring_schedule(
+        account_id=account_id,
+        command=DeleteRecurringScheduleCommand(
+            recurring.id,
+            recurring.revision,
+            RecurringDeleteScope.ENTIRE_SERIES,
+        ),
+    )
+
+    assert [schedule.id for schedule in result.schedules] == [
+        recurring.id,
+        replacement.id,
+    ]
+    assert all(schedule.status is ScheduleStatus.DELETED for schedule in result.schedules)
+    assert all(schedule.revision == 2 for schedule in result.schedules)
+    for schedule in result.schedules:
+        found = service.find_schedules(
+            account_id=account_id,
+            query=FindSchedulesQuery(
+                schedule_id=schedule.id,
+                include_deleted=True,
+            ),
+        )
+        assert found.schedules == (schedule,)

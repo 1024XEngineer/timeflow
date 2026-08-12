@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from dateutil.rrule import rrule, rrulebase, rrulestr
 
 from timeflow.business.calendar.contracts import (
+    OccurrenceOverrideAction,
     ScheduleOccurrenceOverrideSnapshot,
     ScheduleSnapshot,
 )
@@ -66,7 +67,12 @@ def first_active_occurrence_on_or_after_local_date(
     now: datetime,
     overrides: tuple[ScheduleOccurrenceOverrideSnapshot, ...],
 ) -> datetime | None:
-    """Return the first non-overridden occurrence on/after today's local date."""
+    """Return the first non-cancelled original occurrence from today's local date.
+
+    A replaced occurrence still belongs to the recurring series at its original
+    start. Deletion scope must therefore be able to select it even though normal
+    calendar expansion displays its replacement schedule instead.
+    """
     if schedule.start_time is None or schedule.recurrence_rule is None:
         return None
     timezone = get_schedule_timezone(schedule.timezone)
@@ -74,9 +80,13 @@ def first_active_occurrence_on_or_after_local_date(
     local_date = now.astimezone(timezone).date()
     boundary = datetime.combine(local_date, time.min, tzinfo=timezone)
     rule = parse_recurrence_rule(schedule.recurrence_rule, start_time=local_start)
-    overridden = {override.occurrence_start for override in overrides}
+    cancelled = {
+        override.occurrence_start
+        for override in overrides
+        if override.action is OccurrenceOverrideAction.CANCEL
+    }
     occurrence = rule.after(boundary, inc=True)
-    while occurrence is not None and occurrence in overridden:
+    while occurrence is not None and occurrence in cancelled:
         occurrence = rule.after(occurrence, inc=False)
     return None if occurrence is None else occurrence.astimezone(UTC)
 

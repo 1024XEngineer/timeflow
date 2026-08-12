@@ -6,7 +6,9 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from timeflow.business.calendar import (
+    OccurrenceOverrideAction,
     ScheduleKind,
+    ScheduleOccurrenceOverrideSnapshot,
     ScheduleSnapshot,
     ScheduleStatus,
     ScheduleType,
@@ -144,6 +146,45 @@ def test_shanghai_occurrence_keeps_its_non_dst_wall_time() -> None:
 
     assert occurrence == datetime(2026, 8, 17, 2, tzinfo=UTC)
     assert occurrence.astimezone(timezone).hour == 10
+
+
+def test_delete_selection_keeps_replaced_original_but_skips_cancelled_occurrence() -> None:
+    schedule = _recurring_schedule(
+        timezone="Asia/Shanghai",
+        start_time=datetime(2026, 8, 3, 2, tzinfo=UTC),
+    )
+    now = datetime(2026, 8, 11, 1, tzinfo=UTC)
+    replaced = ScheduleOccurrenceOverrideSnapshot(
+        id="replace-august-17",
+        schedule_id=schedule.id,
+        occurrence_start=datetime(2026, 8, 17, 2, tzinfo=UTC),
+        action=OccurrenceOverrideAction.REPLACE,
+        replacement_schedule_id="replacement-august-17",
+        created_at=now,
+        updated_at=now,
+    )
+    cancelled = ScheduleOccurrenceOverrideSnapshot(
+        id="cancel-august-17",
+        schedule_id=schedule.id,
+        occurrence_start=datetime(2026, 8, 17, 2, tzinfo=UTC),
+        action=OccurrenceOverrideAction.CANCEL,
+        created_at=now,
+        updated_at=now,
+    )
+
+    replaced_occurrence = first_active_occurrence_on_or_after_local_date(
+        schedule,
+        now=now,
+        overrides=(replaced,),
+    )
+    after_cancel = first_active_occurrence_on_or_after_local_date(
+        schedule,
+        now=now,
+        overrides=(cancelled,),
+    )
+
+    assert replaced_occurrence == datetime(2026, 8, 17, 2, tzinfo=UTC)
+    assert after_cancel == datetime(2026, 8, 24, 2, tzinfo=UTC)
 
 
 def test_occurrence_window_is_lower_inclusive_and_upper_exclusive() -> None:

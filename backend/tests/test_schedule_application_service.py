@@ -298,6 +298,34 @@ def _add_override(
     )
 
 
+def _add_replacement(
+    service: ScheduleApplicationService,
+    store: _Store,
+    *,
+    parent_id: str,
+    override_id: str,
+    occurrence_start: datetime,
+    replacement_start: datetime,
+    account_id: str = "account-a",
+) -> ScheduleSnapshot:
+    replacement = service.create_schedule(
+        account_id=account_id,
+        command=_time_command(
+            title=f"Replacement {override_id}",
+            start_time=replacement_start,
+        ),
+    ).schedules[0]
+    _add_override(
+        store,
+        override_id=override_id,
+        schedule_id=parent_id,
+        occurrence_start=occurrence_start,
+        action=OccurrenceOverrideAction.REPLACE,
+        replacement_schedule_id=replacement.id,
+    )
+    return replacement
+
+
 def test_create_schedule_returns_the_committed_cloud_snapshot() -> None:
     service, store = _service()
 
@@ -955,7 +983,7 @@ def test_delete_once_is_soft_account_scoped_and_kind_checked() -> None:
     assert store.schedules[ordinary.id] == deleted
 
 
-def test_delete_this_occurrence_uses_current_schedule_timezone_and_skips_overrides() -> None:
+def test_delete_this_occurrence_uses_current_schedule_timezone_and_skips_cancellations() -> None:
     # It is still August 10 in UTC, but already August 11 in Asia/Shanghai.
     # The August 10 occurrence must therefore be treated as yesterday.
     service, store = _service(now=datetime(2026, 8, 10, 17, tzinfo=UTC))
@@ -991,6 +1019,53 @@ def test_delete_this_occurrence_uses_current_schedule_timezone_and_skips_overrid
     assert second.schedules[0].revision == 3
     assert second.occurrence_overrides[0].occurrence_start == datetime(2026, 8, 24, 2, tzinfo=UTC)
     assert len(store.overrides) == 2
+
+
+def test_delete_this_occurrence_soft_deletes_its_existing_replacement() -> None:
+    service, store = _service(now=datetime(2026, 8, 23, 16, tzinfo=UTC))
+    recurring = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(
+            start_time=datetime(2026, 8, 3, 2, tzinfo=UTC),
+            schedule_kind=ScheduleKind.RECURRING,
+            recurrence_rule="FREQ=WEEKLY;BYDAY=MO",
+        ),
+    ).schedules[0]
+    occurrence = datetime(2026, 8, 24, 2, tzinfo=UTC)
+    replacement = _add_replacement(
+        service,
+        store,
+        parent_id=recurring.id,
+        override_id="replace-august-24",
+        occurrence_start=occurrence,
+        replacement_start=datetime(2026, 8, 24, 6, tzinfo=UTC),
+    )
+
+    result = service.delete_recurring_schedule(
+        account_id="account-a",
+        command=DeleteRecurringScheduleCommand(
+            recurring.id,
+            recurring.revision,
+            RecurringDeleteScope.THIS_OCCURRENCE,
+        ),
+    )
+
+    persisted_parent, persisted_replacement = result.schedules
+    assert persisted_parent.revision == 2
+    assert persisted_parent.status is ScheduleStatus.ACTIVE
+    assert persisted_replacement.id == replacement.id
+    assert persisted_replacement.status is ScheduleStatus.DELETED
+    assert persisted_replacement.revision == 2
+    assert result.occurrence_overrides == ()
+    assert store.overrides["replace-august-24"].action is OccurrenceOverrideAction.REPLACE
+    found = service.find_schedules(
+        account_id="account-a",
+        query=FindSchedulesQuery(
+            starts_at_or_after=datetime(2026, 8, 24, tzinfo=UTC),
+            starts_before=datetime(2026, 8, 25, tzinfo=UTC),
+        ),
+    )
+    assert found.schedules == ()
 
 
 def test_delete_this_occurrence_keeps_new_york_wall_time_after_dst() -> None:
@@ -1071,6 +1146,72 @@ def test_delete_this_and_future_truncates_after_last_retained_occurrence() -> No
     assert updated.recurrence_rule == "FREQ=WEEKLY;BYDAY=MO;UNTIL=20260810T020000Z"
 
 
+def test_delete_this_and_future_uses_original_occurrence_for_replacement_ownership() -> None:
+    service, store = _service(now=NOW)
+    recurring = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(
+            start_time=datetime(2026, 8, 3, 2, tzinfo=UTC),
+            schedule_kind=ScheduleKind.RECURRING,
+            recurrence_rule="FREQ=WEEKLY;BYDAY=MO;COUNT=20",
+        ),
+    ).schedules[0]
+    past_moved_future = _add_replacement(
+        service,
+        store,
+        parent_id=recurring.id,
+        override_id="replace-august-10",
+        occurrence_start=datetime(2026, 8, 10, 2, tzinfo=UTC),
+        replacement_start=datetime(2026, 8, 24, 6, tzinfo=UTC),
+    )
+    future_moved_past = _add_replacement(
+        service,
+        store,
+        parent_id=recurring.id,
+        override_id="replace-august-24",
+        occurrence_start=datetime(2026, 8, 24, 2, tzinfo=UTC),
+        replacement_start=datetime(2026, 8, 15, 6, tzinfo=UTC),
+    )
+    future_replacement = _add_replacement(
+        service,
+        store,
+        parent_id=recurring.id,
+        override_id="replace-august-31",
+        occurrence_start=datetime(2026, 8, 31, 2, tzinfo=UTC),
+        replacement_start=datetime(2026, 8, 31, 6, tzinfo=UTC),
+    )
+
+    result = service.delete_recurring_schedule(
+        account_id="account-a",
+        command=DeleteRecurringScheduleCommand(
+            recurring.id,
+            recurring.revision,
+            RecurringDeleteScope.THIS_AND_FUTURE,
+        ),
+    )
+
+    assert result.schedules[0].recurrence_rule == ("FREQ=WEEKLY;BYDAY=MO;UNTIL=20260810T020000Z")
+    assert {schedule.id for schedule in result.schedules[1:]} == {
+        future_moved_past.id,
+        future_replacement.id,
+    }
+    assert store.schedules[past_moved_future.id].status is ScheduleStatus.ACTIVE
+    assert store.schedules[past_moved_future.id].revision == 1
+    assert store.schedules[future_moved_past.id].status is ScheduleStatus.DELETED
+    assert store.schedules[future_moved_past.id].revision == 2
+    assert store.schedules[future_replacement.id].status is ScheduleStatus.DELETED
+    assert store.schedules[future_replacement.id].revision == 2
+
+    found = service.find_schedules(
+        account_id="account-a",
+        query=FindSchedulesQuery(
+            starts_at_or_after=datetime(2026, 8, 24, tzinfo=UTC),
+            starts_before=datetime(2026, 8, 25, tzinfo=UTC),
+        ),
+    )
+    assert found.schedules == (store.schedules[past_moved_future.id],)
+
+
 def test_delete_this_and_future_on_first_occurrence_deletes_entire_series() -> None:
     service, _ = _service(now=NOW)
     recurring = service.create_schedule(
@@ -1137,3 +1278,173 @@ def test_delete_recurring_entire_series_and_missing_future_occurrence() -> None:
     assert store.schedules[past.id].revision == 1
     assert deleted.status is ScheduleStatus.DELETED
     assert deleted.revision == 2
+
+
+def test_delete_entire_series_soft_deletes_all_replacements_but_keeps_overrides() -> None:
+    service, store = _service(now=NOW)
+    recurring = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(
+            start_time=datetime(2026, 8, 3, 2, tzinfo=UTC),
+            schedule_kind=ScheduleKind.RECURRING,
+            recurrence_rule="FREQ=WEEKLY;BYDAY=MO",
+        ),
+    ).schedules[0]
+    replacements = (
+        _add_replacement(
+            service,
+            store,
+            parent_id=recurring.id,
+            override_id="replace-august-10",
+            occurrence_start=datetime(2026, 8, 10, 2, tzinfo=UTC),
+            replacement_start=datetime(2026, 8, 10, 6, tzinfo=UTC),
+        ),
+        _add_replacement(
+            service,
+            store,
+            parent_id=recurring.id,
+            override_id="replace-august-24",
+            occurrence_start=datetime(2026, 8, 24, 2, tzinfo=UTC),
+            replacement_start=datetime(2026, 8, 24, 6, tzinfo=UTC),
+        ),
+    )
+    _add_override(
+        store,
+        override_id="cancel-august-17",
+        schedule_id=recurring.id,
+        occurrence_start=datetime(2026, 8, 17, 2, tzinfo=UTC),
+        action=OccurrenceOverrideAction.CANCEL,
+    )
+
+    result = service.delete_recurring_schedule(
+        account_id="account-a",
+        command=DeleteRecurringScheduleCommand(
+            recurring.id,
+            recurring.revision,
+            RecurringDeleteScope.ENTIRE_SERIES,
+        ),
+    )
+
+    assert result.schedules[0].id == recurring.id
+    assert result.schedules[0].status is ScheduleStatus.DELETED
+    assert {schedule.id for schedule in result.schedules[1:]} == {
+        replacement.id for replacement in replacements
+    }
+    assert all(
+        store.schedules[replacement.id].status is ScheduleStatus.DELETED
+        for replacement in replacements
+    )
+    assert all(store.schedules[replacement.id].revision == 2 for replacement in replacements)
+    assert set(store.overrides) == {
+        "replace-august-10",
+        "cancel-august-17",
+        "replace-august-24",
+    }
+    assert result.occurrence_overrides == ()
+
+
+def test_delete_entire_series_does_not_cross_account_for_replacement() -> None:
+    service, store = _service(now=NOW)
+    recurring = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(
+            start_time=datetime(2026, 8, 3, 2, tzinfo=UTC),
+            schedule_kind=ScheduleKind.RECURRING,
+            recurrence_rule="FREQ=WEEKLY;BYDAY=MO",
+        ),
+    ).schedules[0]
+    other_account_replacement = _add_replacement(
+        service,
+        store,
+        parent_id=recurring.id,
+        override_id="inconsistent-cross-account-replacement",
+        occurrence_start=datetime(2026, 8, 17, 2, tzinfo=UTC),
+        replacement_start=datetime(2026, 8, 17, 6, tzinfo=UTC),
+        account_id="account-b",
+    )
+
+    result = service.delete_recurring_schedule(
+        account_id="account-a",
+        command=DeleteRecurringScheduleCommand(
+            recurring.id,
+            recurring.revision,
+            RecurringDeleteScope.ENTIRE_SERIES,
+        ),
+    )
+
+    assert result.schedules == (store.schedules[recurring.id],)
+    assert store.schedules[other_account_replacement.id].status is ScheduleStatus.ACTIVE
+    assert store.schedules[other_account_replacement.id].revision == 1
+
+
+def test_replacement_revision_conflict_rolls_back_parent_and_other_replacements() -> None:
+    service, store = _service(now=NOW)
+    recurring = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(
+            start_time=datetime(2026, 8, 3, 2, tzinfo=UTC),
+            schedule_kind=ScheduleKind.RECURRING,
+            recurrence_rule="FREQ=WEEKLY;BYDAY=MO",
+        ),
+    ).schedules[0]
+    first_replacement = _add_replacement(
+        service,
+        store,
+        parent_id=recurring.id,
+        override_id="replace-august-17",
+        occurrence_start=datetime(2026, 8, 17, 2, tzinfo=UTC),
+        replacement_start=datetime(2026, 8, 17, 6, tzinfo=UTC),
+    )
+    conflicting_replacement = _add_replacement(
+        service,
+        store,
+        parent_id=recurring.id,
+        override_id="replace-august-24",
+        occurrence_start=datetime(2026, 8, 24, 2, tzinfo=UTC),
+        replacement_start=datetime(2026, 8, 24, 6, tzinfo=UTC),
+    )
+
+    class _ConflictRepository(_Repository):
+        def update_schedule(
+            self,
+            *,
+            snapshot: ScheduleSnapshot,
+            expected_revision: int,
+        ) -> ScheduleSnapshot | None:
+            if snapshot.id == conflicting_replacement.id:
+                raise ScheduleRevisionConflictError(
+                    schedule_id=snapshot.id,
+                    expected_revision=expected_revision,
+                    actual_revision=expected_revision + 1,
+                )
+            return super().update_schedule(
+                snapshot=snapshot,
+                expected_revision=expected_revision,
+            )
+
+    class _ConflictUnitOfWork(_UnitOfWork):
+        def __init__(self, committed: _Store) -> None:
+            super().__init__(committed)
+            self.schedules = _ConflictRepository(self._working)
+
+    deleting_service = ScheduleApplicationService(
+        lambda: _ConflictUnitOfWork(store),
+        clock=lambda: NOW,
+        id_factory=lambda: "unused-id",
+    )
+
+    _assert_error(
+        ScheduleErrorCode.REVISION_CONFLICT,
+        lambda: deleting_service.delete_recurring_schedule(
+            account_id="account-a",
+            command=DeleteRecurringScheduleCommand(
+                recurring.id,
+                recurring.revision,
+                RecurringDeleteScope.ENTIRE_SERIES,
+            ),
+        ),
+    )
+
+    assert store.schedules[recurring.id] == recurring
+    assert store.schedules[first_replacement.id] == first_replacement
+    assert store.schedules[conflicting_replacement.id] == conflicting_replacement

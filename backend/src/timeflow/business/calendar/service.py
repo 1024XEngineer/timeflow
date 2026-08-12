@@ -328,13 +328,23 @@ class ScheduleApplicationService(ScheduleAgentService):
                 )
 
             if command.scope is RecurringDeleteScope.ENTIRE_SERIES:
-                persisted = _soft_delete(
+                overrides = unit_of_work.schedules.list_occurrence_overrides(
+                    account_id=account_id,
+                    schedule_id=current.id,
+                )
+                persisted_parent = _soft_delete(
                     unit_of_work.schedules,
                     current,
                     expected_revision=command.expected_revision,
                     now=now,
                 )
-                result = ScheduleMutationResult(schedules=(persisted,))
+                deleted_replacements = _soft_delete_replacements(
+                    unit_of_work.schedules,
+                    account_id=account_id,
+                    overrides=overrides,
+                    now=now,
+                )
+                result = ScheduleMutationResult(schedules=(persisted_parent, *deleted_replacements))
             else:
                 result = self._delete_recurring_range(
                     unit_of_work.schedules,
@@ -387,6 +397,20 @@ class ScheduleApplicationService(ScheduleAgentService):
                 replace(current, updated_at=now),
                 expected_revision=command.expected_revision,
             )
+            matching_replacements = tuple(
+                override
+                for override in overrides
+                if override.occurrence_start == occurrence
+                and override.action is OccurrenceOverrideAction.REPLACE
+            )
+            if matching_replacements:
+                deleted_replacements = _soft_delete_replacements(
+                    repository,
+                    account_id=account_id,
+                    overrides=matching_replacements,
+                    now=now,
+                )
+                return ScheduleMutationResult(schedules=(updated_schedule, *deleted_replacements))
             override = ScheduleOccurrenceOverrideSnapshot(
                 id=_new_id(self._id_factory, field="occurrence_override_id"),
                 schedule_id=current.id,
@@ -430,7 +454,14 @@ class ScheduleApplicationService(ScheduleAgentService):
                 candidate,
                 expected_revision=command.expected_revision,
             )
-        return ScheduleMutationResult(schedules=(persisted,))
+        deleted_replacements = _soft_delete_replacements(
+            repository,
+            account_id=account_id,
+            overrides=overrides,
+            now=now,
+            occurrence_start_at_or_after=occurrence,
+        )
+        return ScheduleMutationResult(schedules=(persisted, *deleted_replacements))
 
 
 def _matches_static_query(schedule: ScheduleSnapshot, query: FindSchedulesQuery) -> bool:
@@ -516,6 +547,52 @@ def _soft_delete(
         deleted_at=now,
     )
     return _persist_update(repository, candidate, expected_revision=expected_revision)
+
+
+def _soft_delete_replacements(
+    repository: ScheduleRepositoryPort,
+    *,
+    account_id: str,
+    overrides: tuple[ScheduleOccurrenceOverrideSnapshot, ...],
+    now: datetime,
+    occurrence_start_at_or_after: datetime | None = None,
+) -> tuple[ScheduleSnapshot, ...]:
+    """Soft-delete active replacement schedules selected by original occurrence.
+
+    Each replacement uses its own current revision through the ordinary
+    Repository update path. The caller owns the surrounding unit of work, so a
+    conflict on any replacement rolls back the parent and every earlier write.
+    """
+    deleted: list[ScheduleSnapshot] = []
+    handled_schedule_ids: set[str] = set()
+    for override in overrides:
+        replacement_id = override.replacement_schedule_id
+        if (
+            override.action is not OccurrenceOverrideAction.REPLACE
+            or replacement_id is None
+            or replacement_id in handled_schedule_ids
+            or (
+                occurrence_start_at_or_after is not None
+                and override.occurrence_start < occurrence_start_at_or_after
+            )
+        ):
+            continue
+        handled_schedule_ids.add(replacement_id)
+        replacement = repository.get_schedule(
+            account_id=account_id,
+            schedule_id=replacement_id,
+        )
+        if replacement is None:
+            continue
+        deleted.append(
+            _soft_delete(
+                repository,
+                replacement,
+                expected_revision=replacement.revision,
+                now=now,
+            )
+        )
+    return tuple(deleted)
 
 
 def _require_active_schedule(
