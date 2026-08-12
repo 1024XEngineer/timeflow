@@ -40,6 +40,12 @@ def test_an_offset_the_model_supplied_is_left_alone() -> None:
     assert arguments["start_time"] == "2026-09-08T07:00:00Z"
 
 
+def test_a_negative_offset_the_model_supplied_is_left_alone() -> None:
+    """A "+"/"Z" check alone would miss this and reattach LOCAL, shifting the instant."""
+    arguments = normalize_datetime_args({"start_time": "2026-09-08T07:00:00-05:00"})
+    assert arguments["start_time"] == "2026-09-08T07:00:00-05:00"
+
+
 def test_nested_change_datetimes_are_normalized_too() -> None:
     arguments = normalize_datetime_args({"changes": {"start_time": "2026-09-08T07:00:00"}})
     assert arguments["changes"] == {"start_time": "2026-09-08T07:00:00+08:00"}

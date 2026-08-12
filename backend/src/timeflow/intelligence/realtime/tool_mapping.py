@@ -36,12 +36,16 @@ def normalize_datetime_args(arguments: dict[str, object]) -> dict[str, object]:
     Mutates and returns the input dict for chaining.
     """
     for key, value in arguments.items():
-        if isinstance(value, str) and "T" in value and "+" not in value and "Z" not in value:
+        if isinstance(value, str) and "T" in value:
             try:
-                naive = datetime.fromisoformat(value)
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
             except ValueError:
                 continue
-            arguments[key] = naive.replace(tzinfo=LOCAL).isoformat()
+            # A "+" or "Z" check alone misses negative offsets like "-05:00", which
+            # fromisoformat parses as already aware -- reattaching LOCAL to those would
+            # silently shift the instant by the difference between the two zones.
+            if parsed.tzinfo is None or parsed.utcoffset() is None:
+                arguments[key] = parsed.replace(tzinfo=LOCAL).isoformat()
         elif isinstance(value, dict):
             normalize_datetime_args(value)
     return arguments
