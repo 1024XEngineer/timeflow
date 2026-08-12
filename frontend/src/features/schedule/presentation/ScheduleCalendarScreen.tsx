@@ -1,8 +1,14 @@
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useState } from 'react';
 
-import type { ScheduleClientService, ScheduleOccurrenceView } from '../application';
+import type {
+  LocationScheduleView,
+  ScheduleClientService,
+  ScheduleOccurrenceView,
+} from '../application';
 import { colors, spacing } from '../../../shared/ui/theme';
+import { LocationScheduleDetailSheet } from './LocationScheduleDetailSheet';
+import { LocationScheduleRow } from './LocationScheduleRow';
 import { MonthCalendar } from './MonthCalendar';
 import { ScheduleOccurrenceRow } from './ScheduleOccurrenceRow';
 import { ScheduleOccurrenceDetailSheet } from './ScheduleOccurrenceDetailSheet';
@@ -19,6 +25,7 @@ export function ScheduleCalendarScreen({
 }) {
   const calendar = useScheduleCalendar(service, accountId, timezone);
   const [selectedOccurrence, setSelectedOccurrence] = useState<ScheduleOccurrenceView | null>(null);
+  const [selectedLocation, setSelectedLocation] = useState<LocationScheduleView | null>(null);
   const selectedLabel = `${calendar.selectedDate.getMonth() + 1}月${calendar.selectedDate.getDate()}日`;
   return (
     <View style={styles.screen}>
@@ -64,11 +71,29 @@ export function ScheduleCalendarScreen({
               />
             ))
           )}
+          {calendar.locationSchedules.length > 0 ? (
+            <>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>地点提醒</Text>
+              </View>
+              {calendar.locationSchedules.map((item) => (
+                <LocationScheduleRow
+                  item={item}
+                  key={item.scheduleId}
+                  onPress={() => setSelectedLocation(item)}
+                />
+              ))}
+            </>
+          ) : null}
         </ScrollView>
       ) : null}
       <ScheduleOccurrenceDetailSheet
         occurrence={selectedOccurrence}
         onClose={() => setSelectedOccurrence(null)}
+      />
+      <LocationScheduleDetailSheet
+        schedule={selectedLocation}
+        onClose={() => setSelectedLocation(null)}
       />
     </View>
   );
@@ -104,6 +129,13 @@ const styles = StyleSheet.create({
   },
   retryText: { color: colors.onPrimary, fontWeight: '700' },
   screen: { backgroundColor: colors.background, flex: 1 },
+  sectionHeader: {
+    backgroundColor: colors.background,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.sm,
+    paddingTop: spacing.lg,
+  },
+  sectionTitle: { color: colors.text, fontSize: 18, fontWeight: '700' },
   stateText: { color: colors.mutedText },
   title: { color: colors.text, fontSize: 28, fontWeight: '700', marginTop: 3 },
 });

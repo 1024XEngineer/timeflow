@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type {
   GetSchedulesByRangeQuery,
+  LocationScheduleView,
   ScheduleClientService,
   ScheduleOccurrenceView,
 } from '../application';
@@ -12,6 +13,7 @@ export interface ScheduleCalendarState {
   visibleMonth: Date;
   occurrencesByDate: ReadonlyMap<string, readonly ScheduleOccurrenceView[]>;
   selectedOccurrences: readonly ScheduleOccurrenceView[];
+  locationSchedules: readonly LocationScheduleView[];
   loading: boolean;
   error: string | null;
   selectDate: (date: Date) => void;
@@ -36,8 +38,11 @@ export function useScheduleCalendar(
   const [occurrencesByDate, setOccurrencesByDate] = useState<
     ReadonlyMap<string, readonly ScheduleOccurrenceView[]>
   >(new Map());
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [locationSchedules, setLocationSchedules] = useState<readonly LocationScheduleView[]>([]);
+  const [occurrencesLoading, setOccurrencesLoading] = useState(true);
+  const [locationsLoading, setLocationsLoading] = useState(true);
+  const [occurrencesError, setOccurrencesError] = useState<string | null>(null);
+  const [locationsError, setLocationsError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
@@ -47,8 +52,8 @@ export function useScheduleCalendar(
     const endDate = dateKey(addDays(dates[dates.length - 1], 1));
     Promise.resolve().then(() => {
       if (!cancelled) {
-        setLoading(true);
-        setError(null);
+        setOccurrencesLoading(true);
+        setOccurrencesError(null);
       }
     });
     const query: GetSchedulesByRangeQuery = { accountId, startDate, endDate, timezone };
@@ -81,15 +86,39 @@ export function useScheduleCalendar(
         if (!cancelled) setOccurrencesByDate(entries);
       })
       .catch(() => {
-        if (!cancelled) setError('日程加载失败，请重试');
+        if (!cancelled) setOccurrencesError('日程加载失败，请重试');
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) setOccurrencesLoading(false);
       });
     return () => {
       cancelled = true;
     };
   }, [accountId, reloadToken, service, timezone, visibleMonth]);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) {
+        setLocationsLoading(true);
+        setLocationsError(null);
+      }
+    });
+    service
+      .getLocationSchedules({ accountId })
+      .then((schedules) => {
+        if (!cancelled) setLocationSchedules(schedules);
+      })
+      .catch(() => {
+        if (!cancelled) setLocationsError('地点提醒加载失败，请重试');
+      })
+      .finally(() => {
+        if (!cancelled) setLocationsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId, reloadToken, service]);
 
   const selectedOccurrences = useMemo(
     () => occurrencesByDate.get(dateKey(selectedDate)) ?? [],
@@ -98,16 +127,23 @@ export function useScheduleCalendar(
 
   const selectDate = useCallback((date: Date) => {
     setSelectedDate(date);
-    setVisibleMonth(startOfMonth(date));
-  }, []);
-
-  const changeMonth = useCallback((offset: number) => {
     setVisibleMonth((current) => {
-      const nextMonth = new Date(current.getFullYear(), current.getMonth() + offset, 1);
-      setSelectedDate(nextMonth);
-      return nextMonth;
+      const nextMonth = startOfMonth(date);
+      return current.getFullYear() === nextMonth.getFullYear() &&
+        current.getMonth() === nextMonth.getMonth()
+        ? current
+        : nextMonth;
     });
   }, []);
+
+  const changeMonth = useCallback(
+    (offset: number) => {
+      const nextMonth = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + offset, 1);
+      setVisibleMonth(nextMonth);
+      setSelectedDate(nextMonth);
+    },
+    [visibleMonth],
+  );
 
   const retry = useCallback(() => setReloadToken((value) => value + 1), []);
 
@@ -116,8 +152,9 @@ export function useScheduleCalendar(
     visibleMonth,
     occurrencesByDate,
     selectedOccurrences,
-    loading,
-    error,
+    locationSchedules,
+    loading: occurrencesLoading || locationsLoading,
+    error: occurrencesError ?? locationsError,
     selectDate,
     changeMonth,
     retry,

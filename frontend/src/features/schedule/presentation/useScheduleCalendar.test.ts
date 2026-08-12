@@ -9,7 +9,24 @@ describe('useScheduleCalendar', () => {
     const getSchedulesByRange = jest
       .fn<ScheduleClientService['getSchedulesByRange']>()
       .mockResolvedValue([]);
-    const service = { getSchedulesByRange, getSchedulesByDay: jest.fn() } as ScheduleClientService;
+    const getLocationSchedules = jest
+      .fn<ScheduleClientService['getLocationSchedules']>()
+      .mockResolvedValue([
+        {
+          scheduleId: 'location-a',
+          scheduleCategory: 'location',
+          title: '到公司提醒我打卡',
+          timezone: 'Asia/Shanghai',
+          locationName: '公司',
+          reminderType: 'arrive_location',
+          reminderStrength: 'high',
+        },
+      ]);
+    const service = {
+      getSchedulesByRange,
+      getSchedulesByDay: jest.fn(),
+      getLocationSchedules,
+    } as ScheduleClientService;
     const { result } = renderHook(() =>
       useScheduleCalendar(service, 'account-a', 'Asia/Shanghai', new Date(2026, 7, 12)),
     );
@@ -22,10 +39,23 @@ describe('useScheduleCalendar', () => {
       timezone: 'Asia/Shanghai',
     });
     expect(service.getSchedulesByDay).not.toHaveBeenCalled();
+    await waitFor(() => expect(getLocationSchedules).toHaveBeenCalledTimes(1));
+    expect(getLocationSchedules).toHaveBeenCalledWith({ accountId: 'account-a' });
+    expect(result.current.locationSchedules).toHaveLength(1);
+
+    act(() => result.current.selectDate(new Date(2026, 7, 13)));
+    expect(result.current.locationSchedules).toHaveLength(1);
+    expect(getLocationSchedules).toHaveBeenCalledTimes(1);
+    expect(getSchedulesByRange).toHaveBeenCalledTimes(1);
+    const rangeCallsBeforeMonthChange = getSchedulesByRange.mock.calls.length;
 
     act(() => result.current.changeMonth(1));
     expect(result.current.visibleMonth).toEqual(new Date(2026, 8, 1));
     expect(result.current.selectedDate).toEqual(new Date(2026, 8, 1));
-    await waitFor(() => expect(getSchedulesByRange).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(getSchedulesByRange).toHaveBeenCalledTimes(rangeCallsBeforeMonthChange + 1),
+    );
+    expect(result.current.locationSchedules).toHaveLength(1);
+    expect(getLocationSchedules).toHaveBeenCalledTimes(1);
   });
 });

@@ -4,6 +4,7 @@ import type {
   ScheduleSnapshot,
 } from '../src/contracts/schedule';
 import type {
+  LocationScheduleView,
   ScheduleClientService,
   ScheduleOccurrenceView,
 } from '../src/features/schedule/application';
@@ -37,7 +38,10 @@ export type LocalReminderStateIsNotCloudDispositionContract = Assert<
 >;
 
 export type ScheduleClientOperationsContract = Assert<
-  Equal<keyof ScheduleClientService, 'getSchedulesByDay' | 'getSchedulesByRange'>
+  Equal<
+    keyof ScheduleClientService,
+    'getSchedulesByDay' | 'getSchedulesByRange' | 'getLocationSchedules'
+  >
 >;
 
 export type ScheduleSyncOperationsContract = Assert<
@@ -58,6 +62,19 @@ export type ScheduleOccurrenceViewContract = Assert<
     | 'reminderStrength'
     | 'occurrenceStart'
     | 'occurrenceEnd'
+  >
+>;
+
+export type LocationScheduleViewContract = Assert<
+  Equal<
+    keyof LocationScheduleView,
+    | 'scheduleId'
+    | 'scheduleCategory'
+    | 'title'
+    | 'timezone'
+    | 'locationName'
+    | 'reminderType'
+    | 'reminderStrength'
   >
 >;
 

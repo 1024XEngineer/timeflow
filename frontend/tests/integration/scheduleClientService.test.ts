@@ -97,6 +97,57 @@ describe('SqliteScheduleClientService', () => {
     });
   });
 
+  it('returns only active location schedules for the requested account', async () => {
+    await repository.applyCloudSchedule(
+      cloudSchedule({
+        id: 'location-a',
+        schedule_type: 'location',
+        title: '到公司提醒我打卡',
+        start_time: null,
+        location_name: '公司',
+        latitude: 31.2304,
+        longitude: 121.4737,
+        reminder_type: 'arrive_location',
+        reminder_strength: 'high',
+      }),
+    );
+    await repository.applyCloudSchedule(
+      cloudSchedule({
+        id: 'deleted-location',
+        schedule_type: 'location',
+        title: 'Deleted location',
+        start_time: null,
+        latitude: 31.2304,
+        longitude: 121.4737,
+        status: 'deleted',
+      }),
+    );
+    await repository.applyCloudSchedule(
+      cloudSchedule({
+        id: 'other-account-location',
+        account_id: 'account-b',
+        schedule_type: 'location',
+        title: 'Other account location',
+        start_time: null,
+        latitude: 31.2304,
+        longitude: 121.4737,
+      }),
+    );
+    await repository.applyCloudSchedule(cloudSchedule({ id: 'time-a', title: 'Time schedule' }));
+
+    await expect(service.getLocationSchedules({ accountId: 'account-a' })).resolves.toEqual([
+      {
+        scheduleId: 'location-a',
+        scheduleCategory: 'location',
+        title: '到公司提醒我打卡',
+        timezone: 'Asia/Shanghai',
+        locationName: '公司',
+        reminderType: 'arrive_location',
+        reminderStrength: 'high',
+      },
+    ]);
+  });
+
   it('expands only the selected recurring day and applies cancel and replace overrides', async () => {
     await repository.applyCloudSchedule(
       cloudSchedule({

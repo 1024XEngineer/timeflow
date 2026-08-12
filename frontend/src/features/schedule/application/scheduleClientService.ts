@@ -44,6 +44,11 @@ export interface GetSchedulesByRangeQuery {
   timezone: string;
 }
 
+/** Account-scoped query for location schedules shown outside the calendar timeline. */
+export interface GetLocationSchedulesQuery {
+  accountId: string;
+}
+
 /** One displayable occurrence returned to the calendar UI. */
 export interface ScheduleOccurrenceView {
   scheduleId: string;
@@ -59,6 +64,17 @@ export interface ScheduleOccurrenceView {
   occurrenceEnd: string | null;
 }
 
+/** One location-triggered schedule shown independently from dated occurrences. */
+export interface LocationScheduleView {
+  scheduleId: string;
+  scheduleCategory: 'location';
+  title: string;
+  timezone: string;
+  locationName: string | null;
+  reminderType: ReminderType | null;
+  reminderStrength: ReminderStrength | null;
+}
+
 /**
  * Local calendar read operation above the SQLite adapter.
  */
@@ -71,6 +87,7 @@ export interface ScheduleClientService {
    */
   getSchedulesByDay(query: GetSchedulesByDayQuery): Promise<readonly ScheduleOccurrenceView[]>;
   getSchedulesByRange(query: GetSchedulesByRangeQuery): Promise<readonly ScheduleOccurrenceView[]>;
+  getLocationSchedules(query: GetLocationSchedulesQuery): Promise<readonly LocationScheduleView[]>;
 }
 
 type CalendarRepository = Pick<
@@ -117,6 +134,21 @@ export class SqliteScheduleClientService implements ScheduleClientService {
       throw new TypeError('Invalid local calendar range query');
     }
     return this.resolveOccurrencesInRange(query.accountId, rangeStart, rangeEnd);
+  }
+
+  public async getLocationSchedules(
+    query: GetLocationSchedulesQuery,
+  ): Promise<readonly LocationScheduleView[]> {
+    if (query.accountId.trim().length === 0) {
+      throw new TypeError('Invalid location schedule query');
+    }
+    const schedules = await this.repository.listSchedules(query.accountId);
+    return schedules
+      .filter(
+        (schedule): schedule is LocalScheduleRow & { schedule_type: 'location' } =>
+          schedule.schedule_type === 'location' && schedule.status === 'active',
+      )
+      .map(toLocationView);
   }
 
   private async resolveOccurrencesInRange(
@@ -247,6 +279,20 @@ function toView(
     reminderStrength: schedule.reminder_strength,
     occurrenceStart: occurrenceStart.toISOString(),
     occurrenceEnd: occurrenceEnd?.toISOString() ?? null,
+  };
+}
+
+function toLocationView(
+  schedule: LocalScheduleRow & { schedule_type: 'location' },
+): LocationScheduleView {
+  return {
+    scheduleId: schedule.id,
+    scheduleCategory: schedule.schedule_type,
+    title: schedule.title,
+    timezone: schedule.timezone,
+    locationName: schedule.location_name,
+    reminderType: schedule.reminder_type,
+    reminderStrength: schedule.reminder_strength,
   };
 }
 
