@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
   GetSchedulesByRangeQuery,
   LocationScheduleView,
-  ScheduleClientService,
+  ScheduleCalendarReadService,
   ScheduleOccurrenceView,
 } from '../application';
 import { addDays, dateKey, dateKeyInTimezone, startOfMonth } from './scheduleDisplay';
@@ -28,7 +28,7 @@ function monthGridDates(month: Date): Date[] {
 }
 
 export function useScheduleCalendar(
-  service: ScheduleClientService,
+  service: ScheduleCalendarReadService,
   accountId: string,
   timezone: string,
   initialDate = new Date(),

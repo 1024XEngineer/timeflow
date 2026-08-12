@@ -1,16 +1,16 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
 import { describe, expect, it, jest } from '@jest/globals';
 
-import type { ScheduleClientService } from '../application';
+import type { ScheduleCalendarReadService } from '../application';
 import { useScheduleCalendar } from './useScheduleCalendar';
 
 describe('useScheduleCalendar', () => {
   it('loads a 42-day grid through one range query and selects the first day when changing month', async () => {
     const getSchedulesByRange = jest
-      .fn<ScheduleClientService['getSchedulesByRange']>()
+      .fn<ScheduleCalendarReadService['getSchedulesByRange']>()
       .mockResolvedValue([]);
     const getLocationSchedules = jest
-      .fn<ScheduleClientService['getLocationSchedules']>()
+      .fn<ScheduleCalendarReadService['getLocationSchedules']>()
       .mockResolvedValue([
         {
           scheduleId: 'location-a',
@@ -26,7 +26,7 @@ describe('useScheduleCalendar', () => {
       getSchedulesByRange,
       getSchedulesByDay: jest.fn(),
       getLocationSchedules,
-    } as ScheduleClientService;
+    } as ScheduleCalendarReadService;
     const { result } = renderHook(() =>
       useScheduleCalendar(service, 'account-a', 'Asia/Shanghai', new Date(2026, 7, 12)),
     );

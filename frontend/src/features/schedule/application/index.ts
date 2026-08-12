@@ -3,6 +3,7 @@ export type {
   GetSchedulesByDayQuery,
   GetSchedulesByRangeQuery,
   LocationScheduleView,
+  ScheduleCalendarReadService,
   ScheduleClientService,
   ScheduleOccurrenceView,
 } from './scheduleClientService';

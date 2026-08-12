@@ -3,7 +3,7 @@ import { useState } from 'react';
 
 import type {
   LocationScheduleView,
-  ScheduleClientService,
+  ScheduleCalendarReadService,
   ScheduleOccurrenceView,
 } from '../application';
 import { colors, spacing } from '../../../shared/ui/theme';
@@ -19,7 +19,7 @@ export function ScheduleCalendarScreen({
   accountId,
   timezone,
 }: {
-  service: ScheduleClientService;
+  service: ScheduleCalendarReadService;
   accountId: string;
   timezone: string;
 }) {

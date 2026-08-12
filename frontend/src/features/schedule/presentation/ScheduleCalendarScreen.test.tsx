@@ -1,17 +1,19 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { describe, expect, it, jest } from '@jest/globals';
 
-import type { ScheduleClientService } from '../application';
+import type { ScheduleCalendarReadService } from '../application';
 import { ScheduleCalendarScreen } from './ScheduleCalendarScreen';
 
-function createService(): ScheduleClientService {
+function createService(): ScheduleCalendarReadService {
   return {
-    getSchedulesByDay: jest.fn<ScheduleClientService['getSchedulesByDay']>().mockResolvedValue([]),
+    getSchedulesByDay: jest
+      .fn<ScheduleCalendarReadService['getSchedulesByDay']>()
+      .mockResolvedValue([]),
     getSchedulesByRange: jest
-      .fn<ScheduleClientService['getSchedulesByRange']>()
+      .fn<ScheduleCalendarReadService['getSchedulesByRange']>()
       .mockResolvedValue([]),
     getLocationSchedules: jest
-      .fn<ScheduleClientService['getLocationSchedules']>()
+      .fn<ScheduleCalendarReadService['getLocationSchedules']>()
       .mockResolvedValue([
         {
           scheduleId: 'location-a',

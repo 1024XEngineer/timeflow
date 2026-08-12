@@ -86,6 +86,10 @@ export interface ScheduleClientService {
    * excludes original occurrences with cancel or replace overrides.
    */
   getSchedulesByDay(query: GetSchedulesByDayQuery): Promise<readonly ScheduleOccurrenceView[]>;
+}
+
+/** Calendar-only read capabilities built on top of the stable #167 contract. */
+export interface ScheduleCalendarReadService extends ScheduleClientService {
   getSchedulesByRange(query: GetSchedulesByRangeQuery): Promise<readonly ScheduleOccurrenceView[]>;
   getLocationSchedules(query: GetLocationSchedulesQuery): Promise<readonly LocationScheduleView[]>;
 }
@@ -96,7 +100,7 @@ type CalendarRepository = Pick<
 >;
 
 /** SQLite-backed implementation of the stable local calendar read operation. */
-export class SqliteScheduleClientService implements ScheduleClientService {
+export class SqliteScheduleClientService implements ScheduleCalendarReadService {
   public constructor(private readonly repository: CalendarRepository) {}
 
   public async getSchedulesByDay(
