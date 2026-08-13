@@ -2,6 +2,7 @@ import { type PropsWithChildren, useEffect } from 'react';
 
 import type { AuthController, AuthInvalidationCoordinator } from '../features/auth/application';
 import { AuthProvider, useAuth } from '../features/auth/presentation/AuthProvider';
+import { useLocationPermissionsOnLaunch } from '../features/reminder';
 import { AppServicesProvider } from './composition/AppServicesProvider';
 import type { AppServices } from './composition/createAppServices';
 
@@ -16,6 +17,7 @@ export function AppProviders({
   invalidationCoordinator?: AuthInvalidationCoordinator;
   services: AppServices;
 }>) {
+  useLocationPermissionsOnLaunch();
   return (
     <AuthProvider controller={authController} invalidationCoordinator={invalidationCoordinator}>
       <AppServicesProvider services={services}>

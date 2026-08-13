@@ -20,7 +20,8 @@
     "react-native": "0.86.0",
     "react-native-svg": "15.15.4",
     "react-native-web": "^0.21.2",
-    "rrule": "^2.8.1"
+    "rrule": "^2.8.1",
+    "timeflow-baidu-location": "file:modules/timeflow-baidu-location"
   },
   "devDependencies": {
     "@testing-library/react-native": "13.3.3",

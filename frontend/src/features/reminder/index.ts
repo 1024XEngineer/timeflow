@@ -71,4 +71,4 @@ export {
   MOCK_REMINDER_SCHEDULES,
   MemoryReminderStateStore,
 } from './data/local';
-export { MockReminderPresenter } from './presentation';
+export { MockReminderPresenter, useLocationPermissionsOnLaunch } from './presentation';
