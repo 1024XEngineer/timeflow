@@ -12,25 +12,16 @@ import {
   View,
 } from 'react-native';
 
-import type { AuthAccess, AuthAccessResponse } from '../contracts/auth';
 import { useAuthAccessForm } from '../features/auth/presentation/useAuthAccessForm';
 import { colors, spacing } from '../shared/ui/theme';
 
-interface LoginScreenProps {
-  authAccess: AuthAccess;
-  onAuthenticated?: (response: AuthAccessResponse) => void;
-}
-
 type FocusedField = 'username' | 'password' | null;
 
-export function LoginScreen({ authAccess, onAuthenticated }: LoginScreenProps) {
+export function LoginScreen() {
   const passwordInputRef = useRef<TextInput>(null);
   const { width: windowWidth } = useWindowDimensions();
   const [focusedField, setFocusedField] = useState<FocusedField>(null);
-  const { errors, isSubmitting, submit, submitError, updateField, values } = useAuthAccessForm({
-    authAccess,
-    onAuthenticated,
-  });
+  const { errors, isSubmitting, submit, submitError, updateField, values } = useAuthAccessForm();
 
   return (
     <KeyboardAvoidingView

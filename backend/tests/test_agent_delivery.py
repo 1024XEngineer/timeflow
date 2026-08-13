@@ -1,6 +1,7 @@
 """How the two result messages reach the wire, when things go wrong or happen at once."""
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -10,6 +11,7 @@ import pytest
 from timeflow.gateway.websocket.connection_manager import ConnectionManager
 from timeflow.gateway.websocket.handlers.agent_result import WebSocketResultSink
 from timeflow.gateway.websocket.messages.dialogue import QUESTION_KINDS
+from timeflow.infrastructure.audio.null_sink import NullAudioSink
 from timeflow.intelligence.ports import (
     AudioReply,
     CommandResult,
@@ -62,6 +64,20 @@ def _result(tag: str) -> CommandResult:
     )
 
 
+def test_null_audio_sink_drains_the_complete_stream_and_records_its_size(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def scenario() -> None:
+        with caplog.at_level(logging.INFO):
+            await NullAudioSink().consume(_chunks(b"abc", b"de"), _Identity())
+
+    asyncio.run(scenario())
+
+    record = next(record for record in caplog.records if record.message == "audio stream drained")
+    assert record.stream_id == "stream_test"
+    assert record.byte_count == 5
+
+
 def test_deliver_transcript_sends_voice_asr_completed() -> None:
     """The transcript goes out on its own, carrying the stream's identifiers."""
 
@@ -102,6 +118,30 @@ def test_deliver_result_sends_voice_command_result() -> None:
         assert frame["message_id"] == "msg_a"
         assert frame["conversation_id"] == "conversation_test"
         assert frame["payload"]["operation"] == "create_schedule"
+        # Flat, per protocol §5.5 -- not the whole outcome dict nested under "schedule".
+        assert frame["payload"]["schedule"] == {"id": "msg_a"}
+        assert "schedules" not in frame["payload"]
+
+    asyncio.run(scenario())
+
+
+def test_deliver_result_for_a_query_sends_schedules_not_schedule() -> None:
+    """A list_schedules outcome carries payload.schedules, per protocol §5.6."""
+
+    async def scenario() -> None:
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register(SESSION_ID, connection)
+        matches = [{"id": "sch_1"}, {"id": "sch_2"}]
+        result = CommandResult(
+            message_id="msg_b", operation="list_schedules", status="applied", schedules=matches
+        )
+
+        await WebSocketResultSink(connections).deliver_result(result, _Identity())
+
+        frame = connection.frames[0]
+        assert frame["payload"]["schedules"] == matches
+        assert "schedule" not in frame["payload"]
 
     asyncio.run(scenario())
 

@@ -33,17 +33,15 @@ class StreamContext:
     audio_config: AudioConfig
     request_id: str | None = None
 
+    @property
+    def account_id(self) -> str:
+        """Account that owns this stream."""
+        return self.session.account_id
 
-class TokenVerifier(Protocol):
-    """Verify an access token and resolve the owning account.
-
-    Failure is a return value rather than an exception: an exception type would have to be
-    shared with every implementation, which defeats structural typing across the boundary.
-    """
-
-    async def verify(self, access_token: str) -> str | None:
-        """Return the account id for a valid token, or None when it is not usable."""
-        ...
+    @property
+    def session_id(self) -> str:
+        """Session this stream belongs to."""
+        return self.session.session_id
 
 
 class AudioSink(Protocol):

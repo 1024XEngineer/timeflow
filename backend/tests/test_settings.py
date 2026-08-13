@@ -23,6 +23,21 @@ LLM_ENVIRONMENT_VARIABLES = (
     "TIMEFLOW_OPENAI_MODEL",
     "TIMEFLOW_OPENAI_TIMEOUT_SECONDS",
     "TIMEFLOW_AGENT_MAX_TOOL_ROUNDS",
+    "TIMEFLOW_VOICE_AGENT_MODE",
+)
+TTS_ENVIRONMENT_VARIABLES = (
+    "TIMEFLOW_ALIYUN_TTS_WS_URL",
+    "TIMEFLOW_ALIYUN_TTS_API_KEY",
+    "TIMEFLOW_ALIYUN_TTS_MODEL",
+    "TIMEFLOW_ALIYUN_TTS_VOICE",
+    "TIMEFLOW_ALIYUN_TTS_CONNECT_TIMEOUT_SECONDS",
+    "TIMEFLOW_ALIYUN_TTS_TASK_TIMEOUT_SECONDS",
+)
+JWT_ENVIRONMENT_VARIABLES = (
+    "TIMEFLOW_JWT_SECRET",
+    "TIMEFLOW_JWT_ISSUER",
+    "TIMEFLOW_JWT_AUDIENCE",
+    "TIMEFLOW_JWT_ACCESS_TTL_SECONDS",
 )
 
 
@@ -38,10 +53,19 @@ def clear_llm_environment(monkeypatch: MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
+def clear_tts_environment(monkeypatch: MonkeyPatch) -> None:
+    """Remove TTS variables so local environments do not affect assertions."""
+    for name in TTS_ENVIRONMENT_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+
+
 def clear_model_environment(monkeypatch: MonkeyPatch) -> None:
     """Remove model-specific variables before settings assertions."""
     clear_asr_environment(monkeypatch)
     clear_llm_environment(monkeypatch)
+    clear_tts_environment(monkeypatch)
+    for name in JWT_ENVIRONMENT_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
 
 
 def test_settings_use_timeflow_environment(monkeypatch: MonkeyPatch) -> None:
@@ -115,6 +139,58 @@ def test_settings_use_qwen_llm_defaults(
     assert settings.openai_model == "qwen-flash"
     assert settings.openai_timeout_seconds == 30.0
     assert settings.agent_max_tool_rounds == 4
+    assert settings.voice_agent_mode == "1"
+
+
+def test_settings_use_qwen_tts_defaults(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    clear_model_environment(monkeypatch)
+
+    settings = Settings.from_environment(tmp_path / "missing.env")
+
+    assert settings.aliyun_tts_ws_url == ""
+    assert settings.aliyun_tts_api_key == ""
+    assert settings.aliyun_tts_model == "qwen-audio-3.0-tts-flash"
+    assert settings.aliyun_tts_voice == "longanhuan_v3.6"
+    assert settings.aliyun_tts_connect_timeout_seconds == 10.0
+    assert settings.aliyun_tts_task_timeout_seconds == 30.0
+
+
+def test_settings_allow_empty_jwt_secret_with_v1_defaults(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """工具无需构建真实认证组件也能读取配置。"""
+    clear_model_environment(monkeypatch)
+
+    settings = Settings.from_environment(tmp_path / "missing.env")
+
+    assert settings.jwt_secret == ""
+    assert settings.jwt_issuer == "timeflow-api"
+    assert settings.jwt_audience == "timeflow-app"
+    assert settings.jwt_access_ttl_seconds == 3600
+
+
+def test_settings_carry_explicit_jwt_environment_values(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """配置层承载原始 JWT 参数，真实服务负责校验 v1 约束。"""
+    clear_model_environment(monkeypatch)
+    monkeypatch.setenv("TIMEFLOW_JWT_SECRET", "configured-secret")
+    monkeypatch.setenv("TIMEFLOW_JWT_ISSUER", "another-issuer")
+    monkeypatch.setenv("TIMEFLOW_JWT_AUDIENCE", "another-audience")
+    monkeypatch.setenv("TIMEFLOW_JWT_ACCESS_TTL_SECONDS", "7200")
+
+    settings = Settings.from_environment(tmp_path / "missing.env")
+
+    assert settings.jwt_secret == "configured-secret"
+    assert settings.jwt_issuer == "another-issuer"
+    assert settings.jwt_audience == "another-audience"
+    assert settings.jwt_access_ttl_seconds == 7200
+    assert "configured-secret" not in repr(settings)
 
 
 def test_settings_convert_asr_environment_values(monkeypatch: MonkeyPatch) -> None:
@@ -147,6 +223,7 @@ def test_settings_convert_llm_environment_values(monkeypatch: MonkeyPatch) -> No
     monkeypatch.setenv("TIMEFLOW_OPENAI_MODEL", "custom-model")
     monkeypatch.setenv("TIMEFLOW_OPENAI_TIMEOUT_SECONDS", "12.5")
     monkeypatch.setenv("TIMEFLOW_AGENT_MAX_TOOL_ROUNDS", "6")
+    monkeypatch.setenv("TIMEFLOW_VOICE_AGENT_MODE", "2")
 
     settings = Settings.from_environment()
 
@@ -155,6 +232,26 @@ def test_settings_convert_llm_environment_values(monkeypatch: MonkeyPatch) -> No
     assert settings.openai_model == "custom-model"
     assert settings.openai_timeout_seconds == 12.5
     assert settings.agent_max_tool_rounds == 6
+    assert settings.voice_agent_mode == "2"
+
+
+def test_settings_convert_tts_environment_values(monkeypatch: MonkeyPatch) -> None:
+    clear_model_environment(monkeypatch)
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_TTS_WS_URL", "wss://example.invalid/inference")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_TTS_API_KEY", "test-key")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_TTS_MODEL", "custom-tts")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_TTS_VOICE", "custom-voice")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_TTS_CONNECT_TIMEOUT_SECONDS", "8.5")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_TTS_TASK_TIMEOUT_SECONDS", "20")
+
+    settings = Settings.from_environment()
+
+    assert settings.aliyun_tts_ws_url == "wss://example.invalid/inference"
+    assert settings.aliyun_tts_api_key == "test-key"
+    assert settings.aliyun_tts_model == "custom-tts"
+    assert settings.aliyun_tts_voice == "custom-voice"
+    assert settings.aliyun_tts_connect_timeout_seconds == 8.5
+    assert settings.aliyun_tts_task_timeout_seconds == 20.0
 
 
 @pytest.mark.parametrize(
@@ -199,6 +296,21 @@ def test_settings_convert_llm_environment_values(monkeypatch: MonkeyPatch) -> No
             "TIMEFLOW_AGENT_MAX_TOOL_ROUNDS",
             "-1",
             "TIMEFLOW_AGENT_MAX_TOOL_ROUNDS must be a positive integer",
+        ),
+        (
+            "TIMEFLOW_VOICE_AGENT_MODE",
+            "3",
+            "TIMEFLOW_VOICE_AGENT_MODE must be '1' or '2'",
+        ),
+        (
+            "TIMEFLOW_ALIYUN_TTS_CONNECT_TIMEOUT_SECONDS",
+            "0",
+            "TTS timeouts must be greater than zero",
+        ),
+        (
+            "TIMEFLOW_ALIYUN_TTS_TASK_TIMEOUT_SECONDS",
+            "-1",
+            "TTS timeouts must be greater than zero",
         ),
     ],
 )

@@ -404,6 +404,168 @@ def test_create_schedule_rejects_invalid_aggregates(
     assert store.schedules == {}
 
 
+@pytest.mark.parametrize(
+    ("command", "code", "field"),
+    [
+        (replace(_time_command(), title=""), ScheduleErrorCode.VALIDATION_FAILED, "title"),
+        (
+            replace(_time_command(), title="x" * 256),
+            ScheduleErrorCode.VALIDATION_FAILED,
+            "title",
+        ),
+        (
+            replace(_time_command(), timezone="x" * 65),
+            ScheduleErrorCode.INVALID_TIMEZONE,
+            "timezone",
+        ),
+        (
+            replace(_time_command(), location_name="x" * 256),
+            ScheduleErrorCode.VALIDATION_FAILED,
+            "location_name",
+        ),
+        (
+            replace(_time_command(), latitude=31.0),
+            ScheduleErrorCode.VALIDATION_FAILED,
+            "latitude",
+        ),
+        (
+            replace(_time_command(), latitude=-91, longitude=0),
+            ScheduleErrorCode.VALIDATION_FAILED,
+            "latitude",
+        ),
+        (
+            replace(_time_command(), latitude=0, longitude=181),
+            ScheduleErrorCode.VALIDATION_FAILED,
+            "longitude",
+        ),
+        (
+            replace(
+                _time_command(),
+                start_time=datetime(2026, 8, 12, 7, tzinfo=UTC),
+                end_time=datetime(2026, 8, 12, 7, tzinfo=UTC),
+            ),
+            ScheduleErrorCode.VALIDATION_FAILED,
+            "end_time",
+        ),
+        (
+            replace(
+                _time_command(),
+                recurrence_rule="FREQ=DAILY",
+            ),
+            ScheduleErrorCode.VALIDATION_FAILED,
+            "recurrence_rule",
+        ),
+        (
+            CreateScheduleCommand(
+                schedule_type=ScheduleType.LOCATION,
+                schedule_kind=ScheduleKind.RECURRING,
+                title="Recurring location",
+                timezone="UTC",
+                latitude=0,
+                longitude=0,
+                recurrence_rule="FREQ=DAILY",
+            ),
+            ScheduleErrorCode.VALIDATION_FAILED,
+            "schedule_type",
+        ),
+        (
+            _time_command(
+                schedule_kind=ScheduleKind.RECURRING,
+                recurrence_rule="FREQ=DAILY;" + "X" * 513,
+            ),
+            ScheduleErrorCode.VALIDATION_FAILED,
+            "recurrence_rule",
+        ),
+        (
+            replace(
+                _time_command(),
+                reminder_strength=ReminderStrength.LOW,
+            ),
+            ScheduleErrorCode.VALIDATION_FAILED,
+            "reminder_type",
+        ),
+        (
+            replace(
+                _time_command(),
+                reminder_type=ReminderType.AT_TIME,
+                reminder_strength=ReminderStrength.LOW,
+            ),
+            ScheduleErrorCode.VALIDATION_FAILED,
+            "reminder_type",
+        ),
+        (
+            replace(
+                _time_command(),
+                reminder_type=ReminderType.BEFORE_START,
+                reminder_offset_minutes=-1,
+                reminder_strength=ReminderStrength.LOW,
+            ),
+            ScheduleErrorCode.VALIDATION_FAILED,
+            "reminder_offset_minutes",
+        ),
+        (
+            replace(
+                _time_command(),
+                reminder_type=ReminderType.ARRIVE_LOCATION,
+                reminder_strength=ReminderStrength.LOW,
+            ),
+            ScheduleErrorCode.VALIDATION_FAILED,
+            "reminder_type",
+        ),
+        (
+            replace(_time_command(), start_time=datetime(2026, 8, 12, 7)),
+            ScheduleErrorCode.VALIDATION_FAILED,
+            "start_time",
+        ),
+    ],
+)
+def test_create_schedule_rejects_each_persisted_shape_invariant(
+    command: CreateScheduleCommand,
+    code: ScheduleErrorCode,
+    field: str,
+) -> None:
+    service, store = _service()
+
+    error = _assert_error(
+        code,
+        lambda: service.create_schedule(account_id="account-a", command=command),
+    )
+
+    assert error.field == field
+    assert store.schedules == {}
+
+
+@pytest.mark.parametrize(
+    ("account_id", "now", "generated_id", "field"),
+    [
+        (" ", NOW, "valid-id", "account_id"),
+        ("account-a", datetime(2026, 8, 11, 1), "valid-id", "clock"),
+        ("account-a", NOW, "", "id"),
+        ("account-a", NOW, "x" * 65, "id"),
+    ],
+)
+def test_create_schedule_rejects_invalid_service_context(
+    account_id: str,
+    now: datetime,
+    generated_id: str,
+    field: str,
+) -> None:
+    store = _Store({}, {})
+    service = ScheduleApplicationService(
+        lambda: _UnitOfWork(store),
+        clock=lambda: now,
+        id_factory=lambda: generated_id,
+    )
+
+    error = _assert_error(
+        ScheduleErrorCode.VALIDATION_FAILED,
+        lambda: service.create_schedule(account_id=account_id, command=_time_command()),
+    )
+
+    assert error.field == field
+    assert store.schedules == {}
+
+
 def test_create_schedule_accepts_location_recurring_and_reminder_shapes() -> None:
     service, _ = _service()
     location = CreateScheduleCommand(
@@ -598,6 +760,56 @@ def test_find_schedules_filters_without_leaking_other_accounts_or_deleted_rows()
 
     assert matches.schedules == (second,)
     assert with_deleted.schedules[0].status is ScheduleStatus.DELETED
+
+
+@pytest.mark.parametrize(
+    ("query", "field"),
+    [
+        (FindSchedulesQuery(schedule_id=" "), "schedule_id"),
+        (FindSchedulesQuery(title=" "), "title"),
+        (FindSchedulesQuery(location_name=" "), "location_name"),
+        (FindSchedulesQuery(starts_at_or_after=datetime(2026, 8, 12)), "starts_at_or_after"),
+        (
+            FindSchedulesQuery(
+                starts_at_or_after=datetime(2026, 8, 13, tzinfo=UTC),
+                starts_before=datetime(2026, 8, 12, tzinfo=UTC),
+            ),
+            "starts_before",
+        ),
+    ],
+)
+def test_find_schedules_rejects_invalid_query_boundaries(
+    query: FindSchedulesQuery,
+    field: str,
+) -> None:
+    service, _ = _service()
+
+    error = _assert_error(
+        ScheduleErrorCode.VALIDATION_FAILED,
+        lambda: service.find_schedules(account_id="account-a", query=query),
+    )
+
+    assert error.field == field
+
+
+def test_find_schedules_supports_an_upper_only_window_and_missing_start_values() -> None:
+    service, store = _service()
+    inside = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(start_time=datetime(2026, 8, 12, 7, tzinfo=UTC)),
+    ).schedules[0]
+    store.schedules["missing-start"] = replace(
+        inside,
+        id="missing-start",
+        start_time=None,
+    )
+
+    result = service.find_schedules(
+        account_id="account-a",
+        query=FindSchedulesQuery(starts_before=datetime(2026, 8, 13, tzinfo=UTC)),
+    )
+
+    assert result.schedules == (inside,)
 
 
 def test_find_schedules_filters_one_time_occurrences_by_half_open_window() -> None:

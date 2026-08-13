@@ -11,6 +11,7 @@
     "@expo/metro-runtime": "~57.0.8",
     "expo": "~57.0.7",
     "expo-audio": "~57.0.3",
+    "expo-secure-store": "~57.0.1",
     "expo-sqlite": "~57.0.1",
     "expo-status-bar": "~57.0.1",
     "react": "19.2.3",
@@ -49,15 +50,22 @@
     "format:check": "prettier --check .",
     "test": "npm run test:vitest && npm run test:jest",
     "test:jest": "jest --runInBand",
-    "test:vitest": "vitest run tests",
+    "test:vitest": "vitest run tests --exclude \"tests/unit/**\" --exclude \"tests/integration/**/*.integration.test.ts\"",
     "typecheck": "tsc --noEmit",
-    "check": "npm run lint && npm run format:check && npm run typecheck && npm run test"
+    "check": "npm run lint && npm run format:check && npm run typecheck && npm run test",
+    "verify:ci": "npm run check && expo export --platform android --output-dir dist"
   },
   "private": true,
   "jest": {
     "preset": "jest-expo",
     "roots": [
-      "<rootDir>/src"
+      "<rootDir>/src",
+      "<rootDir>/tests/unit",
+      "<rootDir>/tests/integration"
+    ],
+    "testMatch": [
+      "**/tests/unit/**/*.test.[jt]s?(x)",
+      "**/tests/integration/**/*.integration.test.[jt]s?(x)"
     ]
   }
 }

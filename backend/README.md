@@ -13,6 +13,10 @@ uv sync --locked --all-groups
 uv run uvicorn timeflow.main:app --reload
 ```
 
+Before starting the application, set `TIMEFLOW_JWT_SECRET` in `.env` to a private random
+value of at least 32 UTF-8 bytes. The real HTTP and WebSocket authentication components
+intentionally refuse to start with an empty or weak secret.
+
 The API is available at `http://127.0.0.1:8000`. Health check:
 
 ```bash
