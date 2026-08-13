@@ -287,7 +287,20 @@ export class LocalReminderApplication implements ReminderApplicationPort {
 
     const locationTargets = active
       .filter((schedule) => schedule.schedule_type === 'location')
-      .map((schedule) => ({ schedule_id: schedule.id }));
+      .map((schedule) => {
+        const mode = resolveWatchMode(schedule);
+        const center = resolveGeofenceCenter(schedule, mode);
+        if (center == null) return null;
+        return {
+          schedule_id: schedule.id,
+          center,
+          radius_meters: schedule.geofence_radius_meters,
+          mode,
+          background: true,
+        };
+      })
+      .filter((target): target is NonNullable<typeof target> => target != null);
+
     const locationHandles = await this.dependencies.location.rebuild(locationTargets, (event) => {
       void this.handleLocationMonitorEvent(event);
     });

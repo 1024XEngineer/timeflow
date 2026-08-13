@@ -2,9 +2,13 @@ import type { GeoPoint, LocationSample } from '../../domain';
 
 export type LocationWatchMode = 'arrive' | 'return';
 
-/** 围栏重建所需的最小日程标识，避免把完整领域日程泄漏给 infrastructure。 */
+/** 围栏重建目标：携带 watch 所需几何参数，避免 infrastructure 依赖完整领域日程。 */
 export type LocationRebuildTarget = {
   schedule_id: string;
+  center: GeoPoint;
+  radius_meters: number;
+  mode: LocationWatchMode;
+  background: boolean;
 };
 
 export type LocationWatchRequest = {
