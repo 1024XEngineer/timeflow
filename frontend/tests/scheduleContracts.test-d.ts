@@ -4,6 +4,11 @@ import type {
   ScheduleSnapshot,
 } from '../src/contracts/schedule';
 import type {
+  GetLocationSchedulesQuery,
+  GetSchedulesByDayQuery,
+  GetSchedulesByRangeQuery,
+  LocationScheduleView,
+  ScheduleCalendarReadService,
   ScheduleClientService,
   ScheduleOccurrenceView,
 } from '../src/features/schedule/application';
@@ -40,6 +45,49 @@ export type ScheduleClientOperationsContract = Assert<
   Equal<keyof ScheduleClientService, 'getSchedulesByDay'>
 >;
 
+export type ScheduleClientDayQueryContract = Assert<
+  Equal<Parameters<ScheduleClientService['getSchedulesByDay']>, [GetSchedulesByDayQuery]>
+>;
+
+export type ScheduleClientDayResultContract = Assert<
+  Equal<
+    ReturnType<ScheduleClientService['getSchedulesByDay']>,
+    Promise<readonly ScheduleOccurrenceView[]>
+  >
+>;
+
+export type ScheduleCalendarReadOperationsContract = Assert<
+  Equal<
+    keyof ScheduleCalendarReadService,
+    'getSchedulesByDay' | 'getSchedulesByRange' | 'getLocationSchedules'
+  >
+>;
+
+export type ScheduleCalendarRangeQueryContract = Assert<
+  Equal<Parameters<ScheduleCalendarReadService['getSchedulesByRange']>, [GetSchedulesByRangeQuery]>
+>;
+
+export type ScheduleCalendarRangeResultContract = Assert<
+  Equal<
+    ReturnType<ScheduleCalendarReadService['getSchedulesByRange']>,
+    Promise<readonly ScheduleOccurrenceView[]>
+  >
+>;
+
+export type ScheduleCalendarLocationQueryContract = Assert<
+  Equal<
+    Parameters<ScheduleCalendarReadService['getLocationSchedules']>,
+    [GetLocationSchedulesQuery]
+  >
+>;
+
+export type ScheduleCalendarLocationResultContract = Assert<
+  Equal<
+    ReturnType<ScheduleCalendarReadService['getLocationSchedules']>,
+    Promise<readonly LocationScheduleView[]>
+  >
+>;
+
 export type ScheduleSyncOperationsContract = Assert<
   Equal<keyof ScheduleSyncService, 'applyScheduleSnapshotToSqlite'>
 >;
@@ -58,6 +106,19 @@ export type ScheduleOccurrenceViewContract = Assert<
     | 'reminderStrength'
     | 'occurrenceStart'
     | 'occurrenceEnd'
+  >
+>;
+
+export type LocationScheduleViewContract = Assert<
+  Equal<
+    keyof LocationScheduleView,
+    | 'scheduleId'
+    | 'scheduleCategory'
+    | 'title'
+    | 'timezone'
+    | 'locationName'
+    | 'reminderType'
+    | 'reminderStrength'
   >
 >;
 

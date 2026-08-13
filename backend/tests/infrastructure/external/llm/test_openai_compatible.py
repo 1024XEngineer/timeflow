@@ -273,6 +273,52 @@ async def test_invalid_known_chunk_fields_raise_protocol_error(chunk: object) ->
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "chunk",
+    [
+        SimpleNamespace(choices="not-a-list", usage=None),
+        SimpleNamespace(choices=[SimpleNamespace(delta=None, finish_reason=None)], usage=None),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content=None, tool_calls="not-a-list"),
+                    finish_reason=None,
+                )
+            ],
+            usage=None,
+        ),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(
+                        content=None,
+                        tool_calls=[SimpleNamespace(index=0, id="call", function=None)],
+                    ),
+                    finish_reason=None,
+                )
+            ],
+            usage=None,
+        ),
+    ],
+)
+async def test_invalid_chunk_container_shapes_raise_protocol_error(chunk: object) -> None:
+    provider = OpenAICompatibleLlm(settings(), client=FakeClient(FakeStream([chunk])))
+
+    with pytest.raises(LlmProtocolError):
+        _ = [event async for event in provider.stream([ChatMessage(role="user", content="x")], [])]
+
+
+@pytest.mark.asyncio
+async def test_empty_choice_without_usage_is_ignored() -> None:
+    stream = FakeStream([SimpleNamespace(choices=[], usage=None)])
+    provider = OpenAICompatibleLlm(settings(), client=FakeClient(stream))
+
+    events = [event async for event in provider.stream([ChatMessage(role="user", content="x")], [])]
+
+    assert events == [LlmStreamCompleted(None, None)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("field", "message"),
     [
         ("openai_base_url", "OpenAI-compatible base URL is not configured"),

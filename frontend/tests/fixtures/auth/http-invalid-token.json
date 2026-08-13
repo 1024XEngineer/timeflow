@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "AUTH_INVALID_TOKEN",
+    "message": "Invalid access token"
+  }
+}

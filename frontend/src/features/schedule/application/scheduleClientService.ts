@@ -34,6 +34,21 @@ export interface GetSchedulesByDayQuery {
   timezone: string;
 }
 
+/** Half-open local calendar range used by month and agenda views. */
+export interface GetSchedulesByRangeQuery {
+  accountId: string;
+  /** Inclusive lower calendar date, formatted as YYYY-MM-DD. */
+  startDate: string;
+  /** Exclusive upper calendar date, formatted as YYYY-MM-DD. */
+  endDate: string;
+  timezone: string;
+}
+
+/** Account-scoped query for location schedules shown outside the calendar timeline. */
+export interface GetLocationSchedulesQuery {
+  accountId: string;
+}
+
 /** One displayable occurrence returned to the calendar UI. */
 export interface ScheduleOccurrenceView {
   scheduleId: string;
@@ -49,6 +64,17 @@ export interface ScheduleOccurrenceView {
   occurrenceEnd: string | null;
 }
 
+/** One location-triggered schedule shown independently from dated occurrences. */
+export interface LocationScheduleView {
+  scheduleId: string;
+  scheduleCategory: 'location';
+  title: string;
+  timezone: string;
+  locationName: string | null;
+  reminderType: ReminderType | null;
+  reminderStrength: ReminderStrength | null;
+}
+
 /**
  * Local calendar read operation above the SQLite adapter.
  */
@@ -62,13 +88,19 @@ export interface ScheduleClientService {
   getSchedulesByDay(query: GetSchedulesByDayQuery): Promise<readonly ScheduleOccurrenceView[]>;
 }
 
+/** Calendar-only read capabilities built on top of the stable #167 contract. */
+export interface ScheduleCalendarReadService extends ScheduleClientService {
+  getSchedulesByRange(query: GetSchedulesByRangeQuery): Promise<readonly ScheduleOccurrenceView[]>;
+  getLocationSchedules(query: GetLocationSchedulesQuery): Promise<readonly LocationScheduleView[]>;
+}
+
 type CalendarRepository = Pick<
   ScheduleLocalRepository,
   'listSchedules' | 'listOccurrenceOverrides'
 >;
 
 /** SQLite-backed implementation of the stable local calendar read operation. */
-export class SqliteScheduleClientService implements ScheduleClientService {
+export class SqliteScheduleClientService implements ScheduleCalendarReadService {
   public constructor(private readonly repository: CalendarRepository) {}
 
   public async getSchedulesByDay(
@@ -84,19 +116,68 @@ export class SqliteScheduleClientService implements ScheduleClientService {
     }
     const dayStart = zonedPartsToInstant(selectedDate, query.timezone);
     const dayEnd = zonedPartsToInstant(addLocalDays(selectedDate, 1), query.timezone);
-    const schedules = (await this.repository.listSchedules(query.accountId)).filter(
+    return this.resolveOccurrencesInRange(query.accountId, dayStart, dayEnd);
+  }
+
+  public async getSchedulesByRange(
+    query: GetSchedulesByRangeQuery,
+  ): Promise<readonly ScheduleOccurrenceView[]> {
+    const startDate = parseDateOnly(query.startDate);
+    const endDate = parseDateOnly(query.endDate);
+    if (
+      query.accountId.trim().length === 0 ||
+      startDate === null ||
+      endDate === null ||
+      !isValidIanaTimezone(query.timezone)
+    ) {
+      throw new TypeError('Invalid local calendar range query');
+    }
+    const rangeStart = zonedPartsToInstant(startDate, query.timezone);
+    const rangeEnd = zonedPartsToInstant(endDate, query.timezone);
+    if (rangeStart >= rangeEnd) {
+      throw new TypeError('Invalid local calendar range query');
+    }
+    return this.resolveOccurrencesInRange(query.accountId, rangeStart, rangeEnd);
+  }
+
+  public async getLocationSchedules(
+    query: GetLocationSchedulesQuery,
+  ): Promise<readonly LocationScheduleView[]> {
+    if (query.accountId.trim().length === 0) {
+      throw new TypeError('Invalid location schedule query');
+    }
+    const schedules = await this.repository.listSchedules(query.accountId);
+    return schedules
+      .filter(
+        (schedule): schedule is LocalScheduleRow & { schedule_type: 'location' } =>
+          schedule.schedule_type === 'location' && schedule.status === 'active',
+      )
+      .map(toLocationView);
+  }
+
+  private async resolveOccurrencesInRange(
+    accountId: string,
+    rangeStart: Date,
+    rangeEnd: Date,
+  ): Promise<readonly ScheduleOccurrenceView[]> {
+    const schedules = (await this.repository.listSchedules(accountId)).filter(
       (schedule) => schedule.status === 'active',
     );
-    const overrides = await this.repository.listOccurrenceOverrides(query.accountId);
+    const overrides = await this.repository.listOccurrenceOverrides(accountId);
     const overridesBySchedule = groupOverrides(overrides);
     const occurrences = schedules.flatMap((schedule) =>
-      resolveScheduleForDay(schedule, overridesBySchedule.get(schedule.id) ?? [], dayStart, dayEnd),
+      resolveScheduleInRange(
+        schedule,
+        overridesBySchedule.get(schedule.id) ?? [],
+        rangeStart,
+        rangeEnd,
+      ),
     );
     return occurrences.sort(compareOccurrences);
   }
 }
 
-function resolveScheduleForDay(
+function resolveScheduleInRange(
   schedule: LocalScheduleRow,
   overrides: readonly LocalScheduleOccurrenceOverrideRow[],
   dayStart: Date,
@@ -124,11 +205,11 @@ function resolveScheduleForDay(
   const localStart = instantToZonedParts(start, scheduleTimezone);
   const floatingStart = localPartsToFloatingDate(localStart);
   const localDuration = getLocalDuration(start, end, scheduleTimezone);
-  const dayLower = localPartsToFloatingDate(instantToZonedParts(dayStart, scheduleTimezone));
+  const rangeLower = localPartsToFloatingDate(instantToZonedParts(dayStart, scheduleTimezone));
   const lower =
     schedule.is_all_day === 1 && localDuration !== null
-      ? new Date(dayLower.getTime() - localDuration)
-      : dayLower;
+      ? new Date(rangeLower.getTime() - localDuration)
+      : rangeLower;
   const upper = localPartsToFloatingDate(instantToZonedParts(dayEnd, scheduleTimezone));
   let floatingOccurrences: Date[];
   try {
@@ -202,6 +283,20 @@ function toView(
     reminderStrength: schedule.reminder_strength,
     occurrenceStart: occurrenceStart.toISOString(),
     occurrenceEnd: occurrenceEnd?.toISOString() ?? null,
+  };
+}
+
+function toLocationView(
+  schedule: LocalScheduleRow & { schedule_type: 'location' },
+): LocationScheduleView {
+  return {
+    scheduleId: schedule.id,
+    scheduleCategory: schedule.schedule_type,
+    title: schedule.title,
+    timezone: schedule.timezone,
+    locationName: schedule.location_name,
+    reminderType: schedule.reminder_type,
+    reminderStrength: schedule.reminder_strength,
   };
 }
 

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, get_args
 
 from timeflow.intelligence.conversation import asr, llm
+from timeflow.intelligence.speech import tts
 
 VENDOR_MODEL_SDKS = ("openai", "dashscope")
 TRANSPORT_LIBRARIES = ("websockets", "httpx", "httpx2")
@@ -213,5 +214,36 @@ def test_llm_public_contract_is_provider_neutral() -> None:
         "base_url",
         "extra_body",
         "asyncopenai",
+    }
+    assert not any(term in source for term in provider_specific_terms)
+
+
+def test_tts_public_contract_is_provider_neutral() -> None:
+    """The TTS port exposes immutable segments, audio events, and stream API."""
+    event_types = (tts.SpeechSegment, tts.TtsAudioChunk, tts.TtsCompleted)
+    for event_type in event_types:
+        assert is_dataclass(event_type)
+        dataclass_type: Any = event_type
+        assert dataclass_type.__dataclass_params__.frozen is True
+
+    assert set(get_args(tts.TtsEvent)) == {tts.TtsAudioChunk, tts.TtsCompleted}
+    assert tts.TtsPort.stream.__annotations__ == {
+        "segments": "AsyncIterable[SpeechSegment]",
+        "return": "AsyncIterator[TtsEvent]",
+    }
+    assert issubclass(tts.TtsConnectionError, tts.TtsError)
+    assert issubclass(tts.TtsProtocolError, tts.TtsError)
+    assert issubclass(tts.TtsSynthesisError, tts.TtsError)
+
+    tts_path = PACKAGE_ROOT / "intelligence" / "speech" / "tts.py"
+    source = tts_path.read_text(encoding="utf-8").lower()
+    provider_specific_terms = {
+        "qwen",
+        "aliyun",
+        "dashscope",
+        "websocket",
+        "run-task",
+        "continue-task",
+        "finish-task",
     }
     assert not any(term in source for term in provider_specific_terms)

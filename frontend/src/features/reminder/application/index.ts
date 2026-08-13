@@ -1,3 +1,4 @@
+export { LocalReminderApplication } from './LocalReminderApplication';
 export type {
   AlarmScheduleReceipt,
   AlarmScheduleRequest,
