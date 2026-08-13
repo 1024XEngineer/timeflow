@@ -33,6 +33,17 @@ type RegistrationRecord = ReminderRegistration & {
   schedule: LocalReminderSchedule;
 };
 
+const EMPTY_CHANNELS: ReminderDeliveryReceipt['channels'] = [];
+
+function emptyRegistration(scheduleId: string): ReminderRegistration {
+  return {
+    schedule_id: scheduleId,
+    time_listener_id: null,
+    location_listener_id: null,
+    alarm_id: null,
+  };
+}
+
 /** 本地提醒协调器：通过已注入端口完成注册、触发、送达与确认/延后。 */
 export class LocalReminderApplication implements ReminderApplicationPort {
   private started = false;
@@ -42,108 +53,23 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   private readonly registrations = new Map<string, RegistrationRecord>();
   private readonly activeDeliveries = new Set<string>();
   private readonly deliverLocks = new Set<string>();
-  private rebuildChain: Promise<void> = Promise.resolve();
+  private opChain: Promise<void> = Promise.resolve();
+  private stopRequested = false;
 
   constructor(readonly dependencies: ReminderApplicationDependencies) {}
 
   async start(): Promise<void> {
-    if (this.started) return;
-
-    await this.dependencies.recovery.registerForRestart();
-    this.unsubscribePresenter = this.dependencies.presenter.onAction((event) => {
-      void this.handlePresentationAction(event.schedule_id, event.action);
-    });
-
-    // IntervalTimeListener 不在 start 时同步打点；先挂上 listener id 再 rebuild。
-    const timeHandle = await this.dependencies.time.start(
-      (tick) => {
-        void this.handleTime(tick);
-      },
-      { background: true },
-    );
-    this.timeListenerId = timeHandle.listener_id;
-
-    await this.enqueueRebuild();
-
-    this.unsubscribeSchedules = this.dependencies.schedules.subscribe(() => {
-      void this.enqueueRebuild();
-    });
-    this.started = true;
+    return this.enqueueOp(() => this.startInternal());
   }
 
   async stop(): Promise<void> {
-    if (!this.started && this.timeListenerId == null) return;
-
-    this.unsubscribePresenter?.();
-    this.unsubscribePresenter = null;
-    this.unsubscribeSchedules?.();
-    this.unsubscribeSchedules = null;
-
-    if (this.timeListenerId != null) {
-      await this.dependencies.time.stop(this.timeListenerId);
-      this.timeListenerId = null;
-    }
-
-    for (const registration of this.registrations.values()) {
-      if (registration.location_listener_id != null) {
-        await this.dependencies.location.unwatch(registration.location_listener_id);
-      }
-      if (registration.alarm_id != null) {
-        await this.dependencies.alarms.cancel(registration.alarm_id);
-      }
-    }
-    this.registrations.clear();
-    this.activeDeliveries.clear();
-    this.deliverLocks.clear();
-    this.started = false;
+    this.stopRequested = true;
+    this.detachListeners();
+    return this.enqueueOp(() => this.stopInternal());
   }
 
   async register(schedule: LocalReminderSchedule): Promise<ReminderRegistration> {
-    const merged = await this.withStoredRuntime(schedule);
-    if (!this.isSchedulable(merged)) {
-      return {
-        schedule_id: merged.id,
-        time_listener_id: null,
-        location_listener_id: null,
-        alarm_id: null,
-      };
-    }
-
-    const existing = this.registrations.get(merged.id);
-    if (existing?.location_listener_id != null) {
-      await this.dependencies.location.unwatch(existing.location_listener_id);
-    }
-    if (existing?.alarm_id != null) {
-      await this.dependencies.alarms.cancel(existing.alarm_id);
-    }
-
-    let locationListenerId: string | null = null;
-    let alarmId: string | null = null;
-
-    if (merged.schedule_type === 'location') {
-      const handle = await this.watchLocationSchedule(merged);
-      locationListenerId = handle?.listener_id ?? null;
-    }
-
-    if (merged.schedule_type === 'time') {
-      const receipt = await this.scheduleAlarmFor(merged);
-      alarmId = receipt?.scheduled ? receipt.alarm_id : null;
-    }
-
-    const registration: RegistrationRecord = {
-      schedule_id: merged.id,
-      time_listener_id: this.timeListenerId,
-      location_listener_id: locationListenerId,
-      alarm_id: alarmId,
-      schedule: merged,
-    };
-    this.registrations.set(merged.id, registration);
-    return {
-      schedule_id: registration.schedule_id,
-      time_listener_id: registration.time_listener_id,
-      location_listener_id: registration.location_listener_id,
-      alarm_id: registration.alarm_id,
-    };
+    return this.enqueueOp(() => this.registerInternal(schedule));
   }
 
   async rebuild(): Promise<readonly ReminderRegistration[]> {
@@ -151,26 +77,30 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   }
 
   async handleTime(tick: { observed_at: string }): Promise<void> {
+    if (this.stopRequested) return;
     const schedules = await this.dependencies.schedules.listReminderSchedules();
     for (const raw of schedules) {
+      if (this.stopRequested) return;
       const schedule = await this.withStoredRuntime(raw);
       if (!(await this.canDeliver(schedule, tick.observed_at))) continue;
 
       if (isSnoozeExpired(schedule, tick.observed_at)) {
-        await this.deliver(this.buildTrigger(schedule, 'snooze_expired', tick.observed_at));
+        await this.deliverOne(this.buildTrigger(schedule, 'snooze_expired', tick.observed_at));
         continue;
       }
 
       if (isTimeWindowReached(schedule, tick.observed_at)) {
         const reason = toTimeReason(schedule);
-        await this.deliver(this.buildTrigger(schedule, reason, tick.observed_at));
+        await this.deliverOne(this.buildTrigger(schedule, reason, tick.observed_at));
       }
     }
   }
 
   async handleLocation(sample: LocationSample): Promise<void> {
+    if (this.stopRequested) return;
     const schedules = await this.dependencies.schedules.listReminderSchedules();
     for (const raw of schedules) {
+      if (this.stopRequested) return;
       const schedule = await this.withStoredRuntime(raw);
       if (schedule.schedule_type !== 'location') continue;
       await this.applyLocationSample(schedule, sample);
@@ -178,12 +108,21 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   }
 
   async deliver(trigger: ReminderTrigger): Promise<ReminderDeliveryReceipt> {
+    if (this.stopRequested) {
+      return {
+        delivery_id: `stopped-${trigger.schedule_id}`,
+        schedule_id: trigger.schedule_id,
+        delivered_at: trigger.triggered_at,
+        channels: EMPTY_CHANNELS,
+        used_fallback_audio: false,
+      };
+    }
     if (this.deliverLocks.has(trigger.schedule_id)) {
       return {
         delivery_id: `inflight-${trigger.schedule_id}`,
         schedule_id: trigger.schedule_id,
         delivered_at: trigger.triggered_at,
-        channels: [],
+        channels: EMPTY_CHANNELS,
         used_fallback_audio: false,
       };
     }
@@ -199,7 +138,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
           delivery_id: `missing-${trigger.schedule_id}`,
           schedule_id: trigger.schedule_id,
           delivered_at: trigger.triggered_at,
-          channels: [],
+          channels: EMPTY_CHANNELS,
           used_fallback_audio: false,
         };
       }
@@ -218,6 +157,15 @@ export class LocalReminderApplication implements ReminderApplicationPort {
       };
 
       try {
+        if (this.stopRequested) {
+          return {
+            delivery_id: `stopped-${trigger.schedule_id}`,
+            schedule_id: trigger.schedule_id,
+            delivered_at: trigger.triggered_at,
+            channels: EMPTY_CHANNELS,
+            used_fallback_audio: false,
+          };
+        }
         await this.patchRuntime(schedule.id, {
           ...schedule.runtime,
           reminder_disposition_state: 'pending',
@@ -248,6 +196,18 @@ export class LocalReminderApplication implements ReminderApplicationPort {
           });
         }
 
+        if (this.stopRequested) {
+          await this.patchRuntime(schedule.id, rollbackRuntime);
+          await this.teardownDelivery(schedule.id);
+          return {
+            delivery_id: `stopped-${trigger.schedule_id}`,
+            schedule_id: trigger.schedule_id,
+            delivered_at: trigger.triggered_at,
+            channels: EMPTY_CHANNELS,
+            used_fallback_audio: false,
+          };
+        }
+
         return {
           ...receipt,
           channels: [
@@ -260,11 +220,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         };
       } catch (error) {
         await this.patchRuntime(schedule.id, rollbackRuntime);
-        try {
-          await this.teardownDelivery(schedule.id);
-        } catch {
-          // 尽力拆掉已启动通道，仍抛出原始送达错误。
-        }
+        await this.teardownDelivery(schedule.id);
         throw error;
       }
     } finally {
@@ -278,6 +234,235 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   }
 
   async confirm(scheduleId: string, confirmedAt: string): Promise<ReminderApplicationResult> {
+    return this.enqueueOp(() => this.confirmInternal(scheduleId, confirmedAt));
+  }
+
+  async snooze(request: ReminderSnoozeRequest): Promise<ReminderApplicationResult> {
+    return this.enqueueOp(() => this.snoozeInternal(request));
+  }
+
+  private enqueueOp<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.opChain.then(fn);
+    this.opChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private enqueueRebuild(): Promise<readonly ReminderRegistration[]> {
+    if (this.stopRequested) return Promise.resolve([]);
+    return this.enqueueOp(() => this.rebuildInternal());
+  }
+
+  private async startInternal(): Promise<void> {
+    if (this.started) return;
+    this.stopRequested = false;
+
+    try {
+      await this.dependencies.recovery.registerForRestart();
+      if (this.stopRequested) {
+        await this.stopInternal();
+        return;
+      }
+
+      this.unsubscribePresenter = this.dependencies.presenter.onAction((event) => {
+        void this.handlePresentationAction(event.schedule_id, event.action);
+      });
+
+      // IntervalTimeListener 不在 start 时同步打点；先挂上 listener id 再 rebuild。
+      const timeHandle = await this.dependencies.time.start(
+        (tick) => {
+          void this.handleTime(tick);
+        },
+        { background: true },
+      );
+      this.timeListenerId = timeHandle.listener_id;
+      if (this.stopRequested) {
+        await this.stopInternal();
+        return;
+      }
+
+      this.unsubscribeSchedules = this.dependencies.schedules.subscribe(() => {
+        void this.enqueueRebuild();
+      });
+      await this.rebuildInternal();
+      if (this.stopRequested) {
+        await this.stopInternal();
+        return;
+      }
+      this.started = true;
+    } catch (error) {
+      const stopping = this.stopRequested;
+      this.stopRequested = true;
+      await this.stopInternal();
+      if (!stopping) this.stopRequested = false;
+      throw error;
+    }
+  }
+
+  private async stopInternal(): Promise<void> {
+    this.detachListeners();
+
+    if (this.timeListenerId != null) {
+      try {
+        await this.dependencies.time.stop(this.timeListenerId);
+      } catch {
+        // 停机尽力释放时间监听。
+      }
+      this.timeListenerId = null;
+    }
+
+    for (const registration of [...this.registrations.values()]) {
+      await this.dropRegistration(registration.schedule_id);
+    }
+    this.activeDeliveries.clear();
+    this.deliverLocks.clear();
+    this.started = false;
+  }
+
+  private detachListeners(): void {
+    this.unsubscribePresenter?.();
+    this.unsubscribePresenter = null;
+    this.unsubscribeSchedules?.();
+    this.unsubscribeSchedules = null;
+  }
+
+  private async registerInternal(schedule: LocalReminderSchedule): Promise<ReminderRegistration> {
+    const merged = await this.withStoredRuntime(schedule);
+    if (this.stopRequested || !this.isSchedulable(merged)) {
+      await this.dropRegistration(merged.id);
+      return emptyRegistration(merged.id);
+    }
+
+    await this.dropRegistration(merged.id);
+
+    const registration: RegistrationRecord = {
+      schedule_id: merged.id,
+      time_listener_id: this.timeListenerId,
+      location_listener_id: null,
+      alarm_id: null,
+      schedule: merged,
+    };
+    this.registrations.set(merged.id, registration);
+
+    if (merged.schedule_type === 'location') {
+      const handle = await this.watchLocationSchedule(merged);
+      registration.location_listener_id = handle?.listener_id ?? null;
+    }
+
+    if (merged.schedule_type === 'time') {
+      const receipt = await this.scheduleAlarmFor(merged);
+      registration.alarm_id = receipt?.scheduled ? receipt.alarm_id : null;
+    }
+
+    if (this.stopRequested) {
+      await this.dropRegistration(merged.id);
+      return emptyRegistration(merged.id);
+    }
+
+    return {
+      schedule_id: registration.schedule_id,
+      time_listener_id: registration.time_listener_id,
+      location_listener_id: registration.location_listener_id,
+      alarm_id: registration.alarm_id,
+    };
+  }
+
+  private async rebuildInternal(): Promise<readonly ReminderRegistration[]> {
+    if (this.stopRequested) return [];
+
+    const schedules = await this.dependencies.schedules.listReminderSchedules();
+    const active: LocalReminderSchedule[] = [];
+    for (const raw of schedules) {
+      const merged = await this.withStoredRuntime(raw);
+      if (this.isSchedulable(merged)) {
+        active.push(merged);
+      }
+    }
+
+    if (this.stopRequested) return [];
+
+    for (const registration of [...this.registrations.values()]) {
+      await this.dropRegistration(registration.schedule_id);
+    }
+
+    if (this.stopRequested) return [];
+
+    const locationSchedules = active.filter((schedule) => schedule.schedule_type === 'location');
+    const locationHandles = await this.dependencies.location.rebuild(locationSchedules, (event) => {
+      void this.handleLocationMonitorEvent(event);
+    });
+    const locationBySchedule = new Map<string, LocationWatchHandle>(
+      locationHandles.map((handle) => [handle.schedule_id, handle]),
+    );
+
+    if (this.stopRequested) {
+      await this.discardRebuildResources(locationHandles, []);
+      return [];
+    }
+
+    for (const schedule of active) {
+      this.registrations.set(schedule.id, {
+        schedule_id: schedule.id,
+        time_listener_id: this.timeListenerId,
+        location_listener_id: locationBySchedule.get(schedule.id)?.listener_id ?? null,
+        alarm_id: null,
+        schedule,
+      });
+    }
+
+    const alarmRequests = active
+      .filter((schedule) => schedule.schedule_type === 'time')
+      .map((schedule) => {
+        const triggerAt = resolveEffectiveTriggerAt(schedule);
+        if (triggerAt == null) return null;
+        return {
+          schedule_id: schedule.id,
+          trigger_at: triggerAt,
+          title: schedule.title,
+          exact: true,
+        };
+      })
+      .filter((request): request is NonNullable<typeof request> => request != null);
+
+    const alarmReceipts = await this.dependencies.alarms.rebuild(alarmRequests);
+    const alarmBySchedule = new Map<string, AlarmScheduleReceipt>(
+      alarmReceipts.map((receipt) => [receipt.schedule_id, receipt]),
+    );
+
+    if (this.stopRequested) {
+      for (const receipt of alarmReceipts) {
+        if (receipt.scheduled) {
+          await this.discardHandles(null, receipt.alarm_id);
+        }
+      }
+      for (const registration of [...this.registrations.values()]) {
+        await this.dropRegistration(registration.schedule_id);
+      }
+      return [];
+    }
+
+    const results: ReminderRegistration[] = [];
+    for (const schedule of active) {
+      const registration = this.registrations.get(schedule.id);
+      if (registration == null) continue;
+      const alarm = alarmBySchedule.get(schedule.id);
+      registration.alarm_id = alarm?.scheduled ? alarm.alarm_id : null;
+      results.push({
+        schedule_id: registration.schedule_id,
+        time_listener_id: registration.time_listener_id,
+        location_listener_id: registration.location_listener_id,
+        alarm_id: registration.alarm_id,
+      });
+    }
+    return results;
+  }
+
+  private async confirmInternal(
+    scheduleId: string,
+    confirmedAt: string,
+  ): Promise<ReminderApplicationResult> {
     await this.teardownDelivery(scheduleId);
 
     const disposition: ReminderConfirmedDisposition = {
@@ -299,16 +484,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
       sync_status: 'pending',
     });
 
-    const registration = this.registrations.get(scheduleId);
-    if (registration?.alarm_id != null) {
-      await this.dependencies.alarms.cancel(registration.alarm_id);
-      registration.alarm_id = null;
-    }
-    if (registration?.location_listener_id != null) {
-      await this.dependencies.location.unwatch(registration.location_listener_id);
-      registration.location_listener_id = null;
-    }
-    this.registrations.delete(scheduleId);
+    await this.dropRegistration(scheduleId);
 
     const sync = await this.dependencies.dispositionSync.submitConfirmed(disposition);
     const synced: ReminderDisposition = {
@@ -327,7 +503,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     return { accepted: true, schedule_id: scheduleId, disposition: synced };
   }
 
-  async snooze(request: ReminderSnoozeRequest): Promise<ReminderApplicationResult> {
+  private async snoozeInternal(request: ReminderSnoozeRequest): Promise<ReminderApplicationResult> {
     const nowIso = new Date().toISOString();
     const snoozedUntil = resolveSnoozeUntil(nowIso, request.snooze_until, request.snooze_minutes);
     await this.teardownDelivery(request.schedule_id);
@@ -352,28 +528,36 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     };
     await this.patchRuntime(request.schedule_id, nextRuntime);
 
-    const raw =
-      (await this.dependencies.schedules.getReminderSchedule(request.schedule_id)) ??
-      this.registrations.get(request.schedule_id)?.schedule;
-    if (raw != null) {
-      const schedule = await this.withStoredRuntime({
-        ...raw,
-        runtime: nextRuntime,
-      });
-      const previous = this.registrations.get(request.schedule_id);
-      if (previous?.alarm_id != null) {
-        await this.dependencies.alarms.cancel(previous.alarm_id);
-      }
-      const receipt = await this.dependencies.alarms.schedule({
-        schedule_id: schedule.id,
-        trigger_at: snoozedUntil,
-        title: schedule.title,
-        exact: true,
-      });
-      const registration = this.registrations.get(request.schedule_id);
-      if (registration != null) {
-        registration.alarm_id = receipt.scheduled ? receipt.alarm_id : null;
-        registration.schedule = schedule;
+    if (!this.stopRequested) {
+      const raw =
+        (await this.dependencies.schedules.getReminderSchedule(request.schedule_id)) ??
+        this.registrations.get(request.schedule_id)?.schedule;
+      if (raw != null) {
+        const schedule = { ...raw, runtime: nextRuntime };
+        const previous = this.registrations.get(request.schedule_id);
+        if (previous?.alarm_id != null) {
+          await this.dependencies.alarms.cancel(previous.alarm_id);
+          previous.alarm_id = null;
+        }
+        const receipt = await this.dependencies.alarms.schedule({
+          schedule_id: schedule.id,
+          trigger_at: snoozedUntil,
+          title: schedule.title,
+          exact: true,
+        });
+        if (this.stopRequested) {
+          if (receipt.scheduled) {
+            await this.dependencies.alarms.cancel(receipt.alarm_id);
+          }
+        } else {
+          const registration = this.registrations.get(request.schedule_id);
+          if (registration != null) {
+            registration.alarm_id = receipt.scheduled ? receipt.alarm_id : null;
+            registration.schedule = schedule;
+          } else if (receipt.scheduled) {
+            await this.dependencies.alarms.cancel(receipt.alarm_id);
+          }
+        }
       }
     }
 
@@ -381,80 +565,12 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     return { accepted: true, schedule_id: request.schedule_id, disposition };
   }
 
-  private enqueueRebuild(): Promise<readonly ReminderRegistration[]> {
-    const run = this.rebuildChain.then(() => this.rebuildInternal());
-    this.rebuildChain = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
-  }
-
-  private async rebuildInternal(): Promise<readonly ReminderRegistration[]> {
-    const schedules = await this.dependencies.schedules.listReminderSchedules();
-    const active: LocalReminderSchedule[] = [];
-    for (const raw of schedules) {
-      const merged = await this.withStoredRuntime(raw);
-      if (this.isSchedulable(merged)) {
-        active.push(merged);
-      }
+  private async deliverOne(trigger: ReminderTrigger): Promise<void> {
+    try {
+      await this.deliver(trigger);
+    } catch {
+      // 单条送达失败不阻断其余日程。
     }
-
-    for (const registration of [...this.registrations.values()]) {
-      if (registration.location_listener_id != null) {
-        await this.dependencies.location.unwatch(registration.location_listener_id);
-      }
-      if (registration.alarm_id != null) {
-        await this.dependencies.alarms.cancel(registration.alarm_id);
-      }
-    }
-    this.registrations.clear();
-
-    const locationHandles = await this.dependencies.location.rebuild(active, (event) => {
-      void this.handleLocationMonitorEvent(event);
-    });
-    const locationBySchedule = new Map<string, LocationWatchHandle>(
-      locationHandles.map((handle) => [handle.schedule_id, handle]),
-    );
-
-    const alarmRequests = active
-      .filter((schedule) => schedule.schedule_type === 'time')
-      .map((schedule) => {
-        const triggerAt = resolveEffectiveTriggerAt(schedule);
-        if (triggerAt == null) return null;
-        return {
-          schedule_id: schedule.id,
-          trigger_at: triggerAt,
-          title: schedule.title,
-          exact: true,
-        };
-      })
-      .filter((request): request is NonNullable<typeof request> => request != null);
-
-    const alarmReceipts = await this.dependencies.alarms.rebuild(alarmRequests);
-    const alarmBySchedule = new Map<string, AlarmScheduleReceipt>(
-      alarmReceipts.map((receipt) => [receipt.schedule_id, receipt]),
-    );
-
-    const results: ReminderRegistration[] = [];
-    for (const schedule of active) {
-      const alarm = alarmBySchedule.get(schedule.id);
-      const registration: RegistrationRecord = {
-        schedule_id: schedule.id,
-        time_listener_id: this.timeListenerId,
-        location_listener_id: locationBySchedule.get(schedule.id)?.listener_id ?? null,
-        alarm_id: alarm?.scheduled ? alarm.alarm_id : null,
-        schedule,
-      };
-      this.registrations.set(schedule.id, registration);
-      results.push({
-        schedule_id: registration.schedule_id,
-        time_listener_id: registration.time_listener_id,
-        location_listener_id: registration.location_listener_id,
-        alarm_id: registration.alarm_id,
-      });
-    }
-    return results;
   }
 
   private async handlePresentationAction(
@@ -469,6 +585,8 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   }
 
   private async handleLocationMonitorEvent(event: LocationMonitorEvent): Promise<void> {
+    if (this.stopRequested) return;
+    if (!this.registrations.has(event.schedule_id)) return;
     const raw =
       (await this.dependencies.schedules.getReminderSchedule(event.schedule_id)) ??
       this.registrations.get(event.schedule_id)?.schedule;
@@ -482,6 +600,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     schedule: LocalReminderSchedule,
     sample: LocationSample,
   ): Promise<void> {
+    if (this.stopRequested) return;
     if (!(await this.canDeliver(schedule, sample.observed_at))) return;
 
     const mode = resolveWatchMode(schedule);
@@ -500,7 +619,48 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         geofence_armed: false,
       });
       const reason = toLocationReason(schedule);
-      await this.deliver(this.buildTrigger(schedule, reason, sample.observed_at));
+      await this.deliverOne(this.buildTrigger(schedule, reason, sample.observed_at));
+    }
+  }
+
+  private async dropRegistration(scheduleId: string): Promise<void> {
+    const existing = this.registrations.get(scheduleId);
+    if (existing == null) return;
+    this.registrations.delete(scheduleId);
+    await this.discardHandles(existing.location_listener_id, existing.alarm_id);
+  }
+
+  private async discardHandles(
+    locationListenerId: string | null,
+    alarmId: string | null,
+  ): Promise<void> {
+    if (locationListenerId != null) {
+      try {
+        await this.dependencies.location.unwatch(locationListenerId);
+      } catch {
+        // 尽力取消围栏监听。
+      }
+    }
+    if (alarmId != null) {
+      try {
+        await this.dependencies.alarms.cancel(alarmId);
+      } catch {
+        // 尽力取消系统闹钟。
+      }
+    }
+  }
+
+  private async discardRebuildResources(
+    locationHandles: readonly LocationWatchHandle[],
+    alarmReceipts: readonly AlarmScheduleReceipt[],
+  ): Promise<void> {
+    for (const handle of locationHandles) {
+      await this.discardHandles(handle.listener_id, null);
+    }
+    for (const receipt of alarmReceipts) {
+      if (receipt.scheduled) {
+        await this.discardHandles(null, receipt.alarm_id);
+      }
     }
   }
 
@@ -511,6 +671,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   }
 
   private async canDeliver(schedule: LocalReminderSchedule, nowIso: string): Promise<boolean> {
+    if (this.stopRequested) return false;
     if (schedule.status !== 'active') return false;
     if (this.activeDeliveries.has(schedule.id)) return false;
     if (this.deliverLocks.has(schedule.id)) return false;
