@@ -30,6 +30,7 @@ export function MonthCalendar({
         <Pressable
           accessibilityLabel="上个月"
           accessibilityRole="button"
+          hitSlop={6}
           onPress={() => onChangeMonth(-1)}
           style={styles.nav}
         >
@@ -39,6 +40,7 @@ export function MonthCalendar({
         <Pressable
           accessibilityLabel="下个月"
           accessibilityRole="button"
+          hitSlop={6}
           onPress={() => onChangeMonth(1)}
           style={styles.nav}
         >
@@ -63,18 +65,38 @@ export function MonthCalendar({
             <Pressable
               accessibilityLabel={`${day.getMonth() + 1}月${day.getDate()}日`}
               accessibilityRole="button"
+              accessibilityState={{ selected }}
               disabled={!inMonth}
               key={key}
               onPress={() => onSelectDate(day)}
-              style={[styles.day, selected && styles.selected, todayMatch && styles.today]}
+              style={({ pressed }) => [styles.day, pressed && inMonth && styles.dayPressed]}
             >
-              <Text
-                style={[styles.dayText, !inMonth && styles.muted, selected && styles.selectedText]}
+              <View
+                style={[
+                  styles.dateBubble,
+                  todayMatch && styles.todayBubble,
+                  selected && styles.selectedBubble,
+                ]}
               >
-                {day.getDate()}
-              </Text>
+                <Text
+                  style={[
+                    styles.dayText,
+                    !inMonth && styles.muted,
+                    todayMatch && styles.todayText,
+                    selected && styles.selectedText,
+                  ]}
+                >
+                  {day.getDate()}
+                </Text>
+              </View>
               {hasItems ? (
-                <View style={[styles.marker, selected && styles.selectedMarker]} />
+                <View
+                  style={[
+                    styles.marker,
+                    !inMonth && styles.hiddenMarker,
+                    selected && styles.selectedMarker,
+                  ]}
+                />
               ) : (
                 <View style={styles.markerPlaceholder} />
               )}
@@ -89,31 +111,54 @@ export function MonthCalendar({
 const styles = StyleSheet.create({
   container: {
     backgroundColor: colors.surface,
-    borderBottomColor: colors.border,
-    borderBottomWidth: 1,
-    paddingBottom: spacing.md,
-    paddingHorizontal: spacing.sm,
-    paddingTop: spacing.sm,
+    borderColor: colors.border,
+    borderRadius: 20,
+    borderWidth: 1,
+    marginHorizontal: spacing.md,
+    padding: spacing.md,
   },
-  day: { alignItems: 'center', aspectRatio: 1, justifyContent: 'center', width: '14.285%' },
+  dateBubble: {
+    alignItems: 'center',
+    borderRadius: 999,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  day: { alignItems: 'center', height: 44, justifyContent: 'center', width: '14.285%' },
+  dayPressed: { opacity: 0.6 },
   dayText: { color: colors.text, fontSize: 14, fontWeight: '600' },
   grid: { flexDirection: 'row', flexWrap: 'wrap' },
-  marker: { backgroundColor: colors.focus, borderRadius: 3, height: 5, marginTop: 3, width: 5 },
-  markerPlaceholder: { height: 5, marginTop: 3, width: 5 },
+  hiddenMarker: { opacity: 0 },
+  marker: { backgroundColor: colors.focus, borderRadius: 999, height: 4, marginTop: 2, width: 4 },
+  markerPlaceholder: { height: 4, marginTop: 2, width: 4 },
   monthHeader: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: spacing.sm,
+    paddingBottom: spacing.md,
   },
-  monthTitle: { color: colors.text, fontSize: 18, fontWeight: '700' },
-  muted: { color: colors.mutedText },
-  nav: { alignItems: 'center', height: 36, justifyContent: 'center', width: 42 },
-  navText: { color: colors.text, fontSize: 28, fontWeight: '400', lineHeight: 30 },
-  selected: { backgroundColor: colors.text, borderRadius: 8 },
-  selectedMarker: { backgroundColor: colors.accent },
+  monthTitle: { color: colors.text, fontSize: 19, fontWeight: '800' },
+  muted: { color: colors.border },
+  nav: {
+    alignItems: 'center',
+    backgroundColor: colors.input,
+    borderRadius: 12,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  navText: { color: colors.text, fontSize: 25, fontWeight: '500', lineHeight: 27 },
+  selectedBubble: { backgroundColor: colors.text, borderColor: colors.text, borderWidth: 1 },
+  selectedMarker: { backgroundColor: colors.text },
   selectedText: { color: colors.onPrimary },
-  today: { borderColor: colors.accent, borderRadius: 8, borderWidth: 1 },
-  weekdays: { flexDirection: 'row', paddingBottom: spacing.xs },
-  weekday: { color: colors.mutedText, fontSize: 12, textAlign: 'center', width: '14.285%' },
+  todayBubble: { backgroundColor: colors.accent },
+  todayText: { fontWeight: '800' },
+  weekdays: { flexDirection: 'row', paddingBottom: spacing.sm },
+  weekday: {
+    color: colors.mutedText,
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
+    width: '14.285%',
+  },
 });
