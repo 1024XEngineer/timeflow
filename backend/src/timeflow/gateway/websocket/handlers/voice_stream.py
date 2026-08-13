@@ -39,6 +39,7 @@ class _ActiveStream:
     request_id: str | None
     queue: asyncio.Queue[bytes | None]
     max_audio_bytes: int
+    max_audio_duration_ms: int
     total_audio_bytes: int = 0
     task: asyncio.Task[None] | None = None
     input_started: asyncio.Event = field(default_factory=asyncio.Event)
@@ -62,13 +63,19 @@ class VoiceStreamHandlers:
         audio_sink: AudioSink,
         *,
         max_audio_duration_ms: int = 120_000,
+        max_continuous_audio_duration_ms: int = 1_800_000,
         queue_max_chunks: int = 32,
         stream_id_factory: Callable[[], str] | None = None,
         conversation_id_factory: Callable[[], str] | None = None,
     ) -> None:
-        """Store the sink plus the audio limits and id seams."""
+        """Store the sink plus the audio limits and id seams.
+
+        The duration budget is sized for one press-and-hold; continuous mode has no such
+        bound and can run for minutes, so it gets a much larger budget of its own.
+        """
         self._audio_sink = audio_sink
         self._max_audio_duration_ms = max_audio_duration_ms
+        self._max_continuous_audio_duration_ms = max_continuous_audio_duration_ms
         self._queue_max_chunks = queue_max_chunks
         self._stream_id_factory = stream_id_factory or new_stream_id
         self._conversation_id_factory = conversation_id_factory or new_conversation_id
@@ -110,11 +117,13 @@ class VoiceStreamHandlers:
             audio_config=audio_config,
             request_id=request_id,
         )
+        duration_ms = self._duration_ms_for(context.voice_mode)
         stream = _ActiveStream(
             context=context,
             request_id=request_id,
             queue=asyncio.Queue(maxsize=self._queue_max_chunks),
-            max_audio_bytes=self._max_audio_bytes(audio_config),
+            max_audio_bytes=self._max_audio_bytes(audio_config, duration_ms),
+            max_audio_duration_ms=duration_ms,
         )
         self._active_streams[session.session_id] = stream
 
@@ -164,7 +173,7 @@ class VoiceStreamHandlers:
             await self._abort(session.session_id, stream)
             return self._error(
                 stream.request_id,
-                f"The audio stream exceeded {self._max_audio_duration_ms} ms",
+                f"The audio stream exceeded {stream.max_audio_duration_ms} ms",
                 stream,
             )
 
@@ -236,10 +245,16 @@ class VoiceStreamHandlers:
 
         task.add_done_callback(discard)
 
-    def _max_audio_bytes(self, audio_config: AudioConfig) -> int:
-        """Convert the duration budget into a byte budget for this format."""
+    def _duration_ms_for(self, voice_mode: str) -> int:
+        """Return the duration budget that applies to a stream's voice mode."""
+        if voice_mode == "continuous":
+            return self._max_continuous_audio_duration_ms
+        return self._max_audio_duration_ms
+
+    def _max_audio_bytes(self, audio_config: AudioConfig, duration_ms: int) -> int:
+        """Convert a duration budget into a byte budget for this format."""
         bytes_per_sample = BYTES_PER_SAMPLE[audio_config.audio_format]
-        duration_seconds = self._max_audio_duration_ms / 1000
+        duration_seconds = duration_ms / 1000
         return int(
             audio_config.sample_rate_hz
             * audio_config.channels

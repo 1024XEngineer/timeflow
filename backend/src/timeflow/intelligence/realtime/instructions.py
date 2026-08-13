@@ -4,8 +4,6 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
-LOCAL = ZoneInfo("Asia/Shanghai")
-
 _WEEKDAYS = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
 
 _ROLE = """你是 TimeFlow 的日程助手，帮用户用说话的方式管理日程和提醒。
@@ -27,6 +25,8 @@ _ROLE = """你是 TimeFlow 的日程助手，帮用户用说话的方式管理�
 - schedule_query 查询日程，按时间范围、标题或地点筛选。
 - schedule_create 新建日程，schedule_update 修改，schedule_delete 删除。
 - request_user_input 向用户提问。
+- end_conversation 结束这次语音对话。用户说「结束对话」「先这样」「不用了」「退出语音
+  模式」「停止监听」这类明确想停下来的话时调用，想道别就先说再调用。
 
 改动日程的规矩
 - 必要信息没齐就别建：时间型日程要有开始时间，地点型日程要有地点。缺什么先问。
@@ -53,12 +53,13 @@ _ROLE = """你是 TimeFlow 的日程助手，帮用户用说话的方式管理�
 """
 
 
-def build_instructions(now: Callable[[], datetime] | None = None) -> str:
-    """Return the instructions with the current local time stated at the top."""
+def build_instructions(timezone: str, now: Callable[[], datetime] | None = None) -> str:
+    """Return the instructions with the current time in the client's zone stated at the top."""
     clock = now or (lambda: datetime.now(UTC))
-    local = clock().astimezone(LOCAL)
+    tz = ZoneInfo(timezone)
+    local = clock().astimezone(tz)
     return (
         f"当前时间：{local.strftime('%Y年%m月%d日')} {_WEEKDAYS[local.weekday()]} "
-        f"{local.strftime('%H:%M')}（时区 Asia/Shanghai）。"
+        f"{local.strftime('%H:%M')}（时区 {timezone}）。"
         "用户说的今天、明天、这周都以此为基准。\n\n" + _ROLE
     )

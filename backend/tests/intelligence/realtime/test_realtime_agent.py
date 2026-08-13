@@ -20,6 +20,8 @@ class _Stream:
     """Identifiers of the audio stream a turn answers."""
 
     account_id: str = "acc_test"
+    timezone: str = "Asia/Shanghai"
+    voice_mode: str = "push_to_talk"
     session_id: str = "ws_session_test"
     stream_id: str = "stream_test"
     conversation_id: str = "conversation_test"
@@ -56,6 +58,14 @@ class RecordingSink:
         async for chunk in chunks:
             self.calls.append(("audio", chunk))
         self.calls.append(("audio_end", reply.audio_id))
+
+    async def deliver_canceled(self, canceled: Any, stream: Any) -> None:
+        """Record that a reply was cut short."""
+        self.calls.append(("canceled", canceled))
+
+    async def deliver_session_end(self, stream: Any) -> None:
+        """Record that the client was told to hang up."""
+        self.calls.append(("session_end", None))
 
     def kinds(self) -> list[str]:
         """Return just the kind of each recorded call."""
@@ -103,7 +113,9 @@ class ScriptedFactory:
         self._session = session
         self.instructions: str | None = None
 
-    async def open(self, instructions: str, tools: list[dict[str, Any]]) -> ScriptedSession:
+    async def open(
+        self, instructions: str, tools: list[dict[str, Any]], voice_mode: str
+    ) -> ScriptedSession:
         """Record the configuration and return the scripted session."""
         self.instructions = instructions
         return self._session
@@ -112,7 +124,9 @@ class ScriptedFactory:
 class FailingFactory:
     """A factory that cannot reach the model."""
 
-    async def open(self, instructions: str, tools: list[dict[str, Any]]) -> ScriptedSession:
+    async def open(
+        self, instructions: str, tools: list[dict[str, Any]], voice_mode: str
+    ) -> ScriptedSession:
         """Fail as an unreachable model would."""
         raise ConnectionRefusedError
 
@@ -262,7 +276,7 @@ def test_the_instructions_are_applied_when_the_session_opens() -> None:
         factory = ScriptedFactory(ScriptedSession([]))
 
         await RealtimeAgent(
-            factory, RecordingSink(), instructions=lambda: "你是日程助手"
+            factory, RecordingSink(), instructions=lambda _timezone: "你是日程助手"
         ).handle_audio(_chunks(b"a"), _Stream())
 
         assert factory.instructions == "你是日程助手"

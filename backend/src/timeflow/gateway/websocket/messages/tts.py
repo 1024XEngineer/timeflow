@@ -36,3 +36,15 @@ class VoiceTtsEnd(BaseModel):
     type: Literal["voice.tts.end"] = "voice.tts.end"
     conversation_id: str
     audio_id: str
+
+
+class VoiceTtsCanceled(BaseModel):
+    """Server message announcing that the user's speech interrupted this reply.
+
+    Sent before voice.tts.end, which still follows -- a client must not assume that
+    receiving it alone means the reply finished normally.
+    """
+
+    type: Literal["voice.tts.canceled"] = "voice.tts.canceled"
+    conversation_id: str
+    audio_id: str

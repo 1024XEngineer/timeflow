@@ -6,10 +6,13 @@ import json
 from typing import Any
 
 from timeflow.infrastructure.external.realtime.qwen_audio import (
+    CONTINUOUS,
+    PUSH_TO_TALK,
     Observer,
     QwenAudioConfig,
     QwenAudioSession,
     QwenAudioSessionFactory,
+    turn_detection_for,
 )
 from timeflow.intelligence.realtime.ports import (
     RealtimeSession,
@@ -76,6 +79,14 @@ class RecordingObserver:
         """Record a tool call request."""
         self.calls.append(("tool", (call_id, name, arguments)))
 
+    async def turn_completed(self) -> None:
+        """Record that one reply on a continuous stream finished normally."""
+        self.calls.append(("turn_completed", None))
+
+    async def interrupted(self) -> None:
+        """Record that the user spoke over an in-progress reply."""
+        self.calls.append(("interrupted", None))
+
     async def failed(self, message: str) -> None:
         """Record a session failure."""
         self.calls.append(("failed", message))
@@ -99,6 +110,34 @@ def test_the_endpoint_carries_the_workspace_and_model() -> None:
     assert CONFIG.headers() == {"Authorization": "Bearer key-abc"}
 
 
+def test_turn_detection_for_push_to_talk_is_none() -> None:
+    """Push-to-talk never gets a vendor turn_detection, regardless of config."""
+    assert turn_detection_for(PUSH_TO_TALK, CONFIG) is None
+
+
+def test_turn_detection_for_continuous_defaults_to_smart_turn() -> None:
+    """CONFIG's default turn_detection is smart_turn, so continuous mode picks it up."""
+    assert turn_detection_for(CONTINUOUS, CONFIG) == {"type": "smart_turn"}
+
+
+def test_turn_detection_for_continuous_can_use_server_vad_with_its_own_params() -> None:
+    """server_vad carries its own threshold and silence duration, not smart_turn's."""
+    config = QwenAudioConfig(
+        api_key="key-abc",
+        workspace_id="ws_001",
+        model="qwen-audio-3.0-realtime-plus",
+        turn_detection="server_vad",
+        vad_threshold=0.3,
+        vad_silence_duration_ms=500,
+    )
+
+    assert turn_detection_for(CONTINUOUS, config) == {
+        "type": "server_vad",
+        "threshold": 0.3,
+        "silence_duration_ms": 500,
+    }
+
+
 def test_configure_puts_the_session_in_push_to_talk() -> None:
     """turn_detection is null, because our own protocol owns turn boundaries.
 
@@ -109,7 +148,7 @@ def test_configure_puts_the_session_in_push_to_talk() -> None:
     async def scenario() -> None:
         """Configure a session and read back what was sent."""
         transport = FakeTransport()
-        session = QwenAudioSession(transport, CONFIG)
+        session = QwenAudioSession(transport, CONFIG, PUSH_TO_TALK)
 
         await session.configure("你是日程助手", [{"type": "function"}])
 
@@ -129,7 +168,7 @@ def test_empty_optional_configuration_is_omitted_from_the_vendor_event() -> None
     async def scenario() -> None:
         transport = FakeTransport()
 
-        await QwenAudioSession(transport, CONFIG).configure("", [])
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).configure("", [])
 
         session = transport.sent[0]["session"]
         assert "instructions" not in session
@@ -144,7 +183,7 @@ def test_audio_is_base64_encoded_on_the_way_out() -> None:
     async def scenario() -> None:
         """Send one chunk and inspect the frame."""
         transport = FakeTransport()
-        session = QwenAudioSession(transport, CONFIG)
+        session = QwenAudioSession(transport, CONFIG, PUSH_TO_TALK)
 
         await session.send_audio(b"\x01\x02\x03")
 
@@ -160,11 +199,41 @@ def test_finishing_input_commits_then_asks_for_a_reply() -> None:
     async def scenario() -> None:
         """Finish the input and read back what was sent."""
         transport = FakeTransport()
-        session = QwenAudioSession(transport, CONFIG)
+        session = QwenAudioSession(transport, CONFIG, PUSH_TO_TALK)
 
         await session.finish_input()
 
         assert transport.types() == ["input_audio_buffer.commit", "response.create"]
+
+    asyncio.run(scenario())
+
+
+def test_configure_in_continuous_mode_uses_the_configured_turn_detection() -> None:
+    """Continuous mode's turn_detection comes from config, not push-to-talk's null."""
+
+    async def scenario() -> None:
+        transport = FakeTransport()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).configure("", [])
+
+        assert transport.sent[0]["session"]["turn_detection"] == {"type": "smart_turn"}
+
+    asyncio.run(scenario())
+
+
+def test_finish_input_in_continuous_mode_sends_nothing() -> None:
+    """The vendor's own VAD ends a continuous turn; committing here would race it.
+
+    Sending commit/response.create anyway would double up the reply once the vendor's
+    own turn_detection also fires.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).finish_input()
+
+        assert transport.sent == []
 
     asyncio.run(scenario())
 
@@ -183,7 +252,7 @@ def test_a_turn_is_reported_as_transcript_speech_audio_then_ends() -> None:
         )
         observer = RecordingObserver()
 
-        await QwenAudioSession(transport, CONFIG).pump(observer)
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(observer)
 
         assert observer.calls == [
             ("heard", "明天开会"),
@@ -203,7 +272,7 @@ def test_pump_returns_when_the_turn_is_done() -> None:
         transport = FakeTransport(_event("response.done"))
 
         await asyncio.wait_for(
-            QwenAudioSession(transport, CONFIG).pump(RecordingObserver()), timeout=1.0
+            QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(RecordingObserver()), timeout=1.0
         )
 
     asyncio.run(scenario())
@@ -225,7 +294,7 @@ def test_a_tool_call_is_reported_with_parsed_arguments() -> None:
         )
         observer = RecordingObserver()
 
-        await QwenAudioSession(transport, CONFIG).pump(observer)
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(observer)
 
         assert observer.calls == [("tool", ("call_1", "list_schedules", {"range": "this_week"}))]
 
@@ -246,7 +315,7 @@ def test_a_tool_call_without_a_call_id_fails_the_turn() -> None:
         )
         observer = RecordingObserver()
 
-        await QwenAudioSession(transport, CONFIG).pump(observer)
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(observer)
 
         # The reason matters, not just that it failed: reading past the end of the script
         # also reports a failure, so a weaker assertion would pass even if this guard
@@ -263,7 +332,7 @@ def test_sending_a_tool_result_lets_the_model_continue() -> None:
     async def scenario() -> None:
         """Send a tool result and read back what was sent."""
         transport = FakeTransport()
-        session = QwenAudioSession(transport, CONFIG)
+        session = QwenAudioSession(transport, CONFIG, PUSH_TO_TALK)
 
         await session.send_tool_result("call_1", '{"count":2}')
 
@@ -285,7 +354,7 @@ def test_first_response_done_does_not_end_a_tool_extended_turn() -> None:
             _event("response.audio_transcript.done", transcript="工具执行完成"),
             _event("response.done"),
         )
-        session = QwenAudioSession(transport, CONFIG)
+        session = QwenAudioSession(transport, CONFIG, PUSH_TO_TALK)
         observer = RecordingObserver()
         await session.finish_input()
         await session.send_tool_result("call-1", "{}")
@@ -311,6 +380,7 @@ def test_tool_arguments_must_be_parseable_when_present() -> None:
                 _event("response.done"),
             ),
             CONFIG,
+            PUSH_TO_TALK,
         ).pump(accepted)
         assert accepted.calls == [("tool", ("call-1", "query", {}))]
 
@@ -325,6 +395,7 @@ def test_tool_arguments_must_be_parseable_when_present() -> None:
                 )
             ),
             CONFIG,
+            PUSH_TO_TALK,
         ).pump(malformed)
         assert malformed.kinds() == ["failed"]
 
@@ -343,7 +414,7 @@ def test_a_malformed_audio_delta_is_dropped_not_fatal() -> None:
         )
         observer = RecordingObserver()
 
-        await QwenAudioSession(transport, CONFIG).pump(observer)
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(observer)
 
         assert observer.calls == [("audio", b"good")]
 
@@ -359,7 +430,7 @@ def test_empty_and_non_string_audio_deltas_are_dropped_not_fatal() -> None:
         )
         observer = RecordingObserver()
 
-        await QwenAudioSession(transport, CONFIG).pump(observer)
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(observer)
 
         assert observer.calls == []
 
@@ -374,7 +445,7 @@ def test_a_vendor_error_event_fails_the_turn_with_its_message() -> None:
         transport = FakeTransport(_event("error", error={"message": "quota exceeded"}))
         observer = RecordingObserver()
 
-        await QwenAudioSession(transport, CONFIG).pump(observer)
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(observer)
 
         assert observer.calls == [("failed", "quota exceeded")]
 
@@ -385,7 +456,9 @@ def test_a_vendor_error_without_a_message_uses_the_stable_fallback() -> None:
     async def scenario() -> None:
         observer = RecordingObserver()
 
-        await QwenAudioSession(FakeTransport(_event("error", error={})), CONFIG).pump(observer)
+        await QwenAudioSession(FakeTransport(_event("error", error={})), CONFIG, PUSH_TO_TALK).pump(
+            observer
+        )
 
         assert observer.calls == [("failed", "realtime session reported an error")]
 
@@ -396,13 +469,13 @@ def test_binary_frames_are_ignored_but_malformed_text_frames_fail_the_turn() -> 
     async def scenario() -> None:
         binary_observer = RecordingObserver()
         await QwenAudioSession(
-            FakeTransport(b"vendor-binary", _event("response.done")), CONFIG
+            FakeTransport(b"vendor-binary", _event("response.done")), CONFIG, PUSH_TO_TALK
         ).pump(binary_observer)
         assert binary_observer.calls == []
 
         for frame, expected in (("not-json", "non-JSON"), ("[]", "non-object")):
             observer = RecordingObserver()
-            await QwenAudioSession(FakeTransport(frame), CONFIG).pump(observer)
+            await QwenAudioSession(FakeTransport(frame), CONFIG, PUSH_TO_TALK).pump(observer)
             assert observer.calls == [("failed", f"realtime session sent a {expected} frame")]
 
     asyncio.run(scenario())
@@ -423,7 +496,7 @@ def test_a_dropped_connection_fails_the_turn() -> None:
 
         observer = RecordingObserver()
 
-        await QwenAudioSession(BrokenTransport(), CONFIG).pump(observer)
+        await QwenAudioSession(BrokenTransport(), CONFIG, PUSH_TO_TALK).pump(observer)
 
         assert observer.kinds() == ["failed"]
         assert "ConnectionResetError" in observer.calls[0][1]
@@ -450,7 +523,7 @@ def test_unknown_vendor_events_are_ignored() -> None:
         )
         observer = RecordingObserver()
 
-        await QwenAudioSession(transport, CONFIG).pump(observer)
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(observer)
 
         assert observer.calls == [("heard", "喂")]
 
@@ -470,10 +543,11 @@ def test_opening_a_session_connects_then_configures() -> None:
             return transport
 
         factory = QwenAudioSessionFactory(CONFIG, connect=connect)
-        session = await factory.open("你是日程助手", [])
+        session = await factory.open("你是日程助手", [], PUSH_TO_TALK)
 
         assert isinstance(session, QwenAudioSession)
         assert transport.types() == ["session.update"]
+        assert transport.sent[0]["session"]["turn_detection"] is None
 
     asyncio.run(scenario())
 
@@ -491,7 +565,7 @@ def test_closing_a_session_that_already_went_away_is_not_an_error() -> None:
                 """Fail as an already-closed socket would."""
                 raise ConnectionResetError
 
-        await QwenAudioSession(RefusesToClose(), CONFIG).close()
+        await QwenAudioSession(RefusesToClose(), CONFIG, PUSH_TO_TALK).close()
 
     asyncio.run(scenario())
 
@@ -516,7 +590,7 @@ def test_the_reply_text_is_reported_from_its_increments() -> None:
         )
         observer = RecordingObserver()
 
-        await QwenAudioSession(transport, CONFIG).pump(observer)
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(observer)
 
         assert observer.calls == [
             ("spoke", "好，"),
@@ -539,7 +613,7 @@ def test_a_reply_with_no_increments_is_still_reported() -> None:
         )
         observer = RecordingObserver()
 
-        await QwenAudioSession(transport, CONFIG).pump(observer)
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(observer)
 
         assert observer.calls == [("spoke", "好")]
 
@@ -552,7 +626,7 @@ def test_the_adapter_satisfies_the_dialogue_layer_s_ports() -> None:
     Neither side imports the other, so nothing else would notice one of them drifting.
     mypy rejects these assignments the moment they stop matching; no call site needed.
     """
-    session: RealtimeSession = QwenAudioSession(FakeTransport(), CONFIG)
+    session: RealtimeSession = QwenAudioSession(FakeTransport(), CONFIG, PUSH_TO_TALK)
     factory: RealtimeSessionFactory = QwenAudioSessionFactory(CONFIG)
     observer: Observer = _SeamObserver()
     also_a_turn_observer: TurnObserver = _SeamObserver()
@@ -575,6 +649,12 @@ class _SeamObserver:
     async def tool_requested(self, call_id: str, name: str, arguments: dict[str, Any]) -> None:
         """Ignore the tool request."""
 
+    async def turn_completed(self) -> None:
+        """Ignore the completed reply."""
+
+    async def interrupted(self) -> None:
+        """Ignore the interruption."""
+
     async def failed(self, message: str) -> None:
         """Ignore the failure."""
 
@@ -595,7 +675,7 @@ def test_a_session_that_cannot_be_configured_closes_its_transport() -> None:
         factory = QwenAudioSessionFactory(CONFIG, connect=lambda config: _ready(transport))
 
         try:
-            await factory.open("", [])
+            await factory.open("", [], PUSH_TO_TALK)
         except ConnectionResetError:
             pass
         else:
@@ -633,7 +713,7 @@ def test_a_binary_frame_is_skipped_and_the_turn_carries_on() -> None:
         transport = BinaryTransport(b"\x00\x01", _event("response.done"))
         observer = RecordingObserver()
 
-        await QwenAudioSession(transport, CONFIG).pump(observer)
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(observer)
 
         assert observer.calls == []
 
@@ -647,7 +727,7 @@ def test_a_frame_that_is_not_json_fails_the_turn() -> None:
         transport = FakeTransport("not json at all")
         observer = RecordingObserver()
 
-        await QwenAudioSession(transport, CONFIG).pump(observer)
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(observer)
 
         assert observer.kinds() == ["failed"]
         assert "non-JSON" in observer.calls[0][1]
@@ -662,7 +742,7 @@ def test_a_json_frame_that_is_not_an_object_fails_the_turn() -> None:
         transport = FakeTransport(json.dumps([1, 2, 3]))
         observer = RecordingObserver()
 
-        await QwenAudioSession(transport, CONFIG).pump(observer)
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(observer)
 
         assert observer.kinds() == ["failed"]
         assert "non-object" in observer.calls[0][1]
@@ -681,7 +761,7 @@ def test_an_empty_audio_delta_reaches_nobody() -> None:
         )
         observer = RecordingObserver()
 
-        await QwenAudioSession(transport, CONFIG).pump(observer)
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(observer)
 
         assert observer.calls == []
 
@@ -702,7 +782,7 @@ def test_a_tool_call_with_unparsable_arguments_fails_the_turn() -> None:
         )
         observer = RecordingObserver()
 
-        await QwenAudioSession(transport, CONFIG).pump(observer)
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(observer)
 
         assert observer.kinds() == ["failed"]
 
@@ -724,7 +804,7 @@ def test_a_tool_call_whose_arguments_are_not_an_object_runs_with_none() -> None:
         )
         observer = RecordingObserver()
 
-        await QwenAudioSession(transport, CONFIG).pump(observer)
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(observer)
 
         assert observer.calls[0] == ("tool", ("call_1", "schedule_query", {}))
 
@@ -738,8 +818,184 @@ def test_an_error_event_with_no_message_still_reads_as_a_failure() -> None:
         transport = FakeTransport(_event("error"))
         observer = RecordingObserver()
 
-        await QwenAudioSession(transport, CONFIG).pump(observer)
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(observer)
 
         assert observer.calls == [("failed", "realtime session reported an error")]
+
+    asyncio.run(scenario())
+
+
+def test_a_tool_call_with_no_arguments_field_runs_with_none() -> None:
+    """A tool call event that omits arguments entirely defaults to an empty dict."""
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event(
+                "response.function_call_arguments.done",
+                call_id="call_1",
+                name="list_schedules",
+            ),
+            _event("response.done"),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(observer)
+
+        assert observer.calls[0] == ("tool", ("call_1", "list_schedules", {}))
+
+    asyncio.run(scenario())
+
+
+def test_continuous_pump_reports_multiple_replies_without_returning() -> None:
+    """turn_completed fires after each response.done, and the pump keeps listening.
+
+    Unlike push-to-talk, response.done does not end a continuous pump: the vendor may
+    still start another reply on the same stream, so the loop only stops when told to.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("response.created"),
+            _event("response.audio_transcript.done", transcript="第一句"),
+            _event("response.audio.delta", delta=base64.b64encode(b"pcm-1").decode()),
+            _event("response.done"),
+            _event("response.created"),
+            _event("response.audio_transcript.done", transcript="第二句"),
+            _event("response.audio.delta", delta=base64.b64encode(b"pcm-2").decode()),
+            _event("response.done"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+
+        assert observer.calls == [
+            ("spoke", "第一句"),
+            ("audio", b"pcm-1"),
+            ("turn_completed", None),
+            ("spoke", "第二句"),
+            ("audio", b"pcm-2"),
+            ("turn_completed", None),
+            ("failed", "stream ended"),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_continuous_pump_cancels_and_reports_an_interruption() -> None:
+    """speech_started while a reply is in flight cancels it and tells the observer.
+
+    The vendor may still emit a few queued deltas for the cancelled reply before it
+    catches up; those must be dropped, not reported as if they belonged to the next one.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("response.created"),
+            _event("response.audio_transcript.delta", delta="半句"),
+            _event("input_audio_buffer.speech_started"),
+            _event("response.audio_transcript.delta", delta="不该出现的"),
+            _event("response.audio.delta", delta=base64.b64encode(b"stale").decode()),
+            _event("response.done"),
+            _event("response.created"),
+            _event("response.audio_transcript.done", transcript="新的回复"),
+            _event("response.done"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+
+        assert observer.calls == [
+            ("spoke", "半句"),
+            ("interrupted", None),
+            ("turn_completed", None),
+            ("spoke", "新的回复"),
+            ("turn_completed", None),
+            ("failed", "stream ended"),
+        ]
+        assert transport.types() == ["response.cancel"]
+
+    asyncio.run(scenario())
+
+
+def test_continuous_pump_reports_tool_calls_and_a_bad_one_ends_the_stream() -> None:
+    """Continuous mode reports tool calls the same way push-to-talk does."""
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event(
+                "response.function_call_arguments.done",
+                call_id="call_1",
+                name="list_schedules",
+                arguments='{"range":"today"}',
+            ),
+            _event(
+                "response.function_call_arguments.done",
+                name="list_schedules",
+                arguments="{}",
+            ),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+
+        assert observer.calls == [
+            ("tool", ("call_1", "list_schedules", {"range": "today"})),
+            ("failed", "realtime session sent an unusable tool call"),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_continuous_pump_stops_when_a_frame_cannot_be_parsed() -> None:
+    """A malformed frame ends a continuous stream the same way it ends push-to-talk."""
+
+    async def scenario() -> None:
+        transport = FakeTransport("not json at all")
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+
+        assert observer.kinds() == ["failed"]
+        assert "non-JSON" in observer.calls[0][1]
+
+    asyncio.run(scenario())
+
+
+def test_continuous_pump_ignores_empty_transcript_and_audio_deltas() -> None:
+    """Empty or non-advancing content is silently dropped rather than reported as new."""
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("response.created"),
+            _event("response.audio_transcript.done", transcript=""),
+            _event("response.audio.delta", delta=""),
+            _event("error", error={"message": "stream ended"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+
+        assert observer.calls == [("failed", "stream ended")]
+
+    asyncio.run(scenario())
+
+
+def test_continuous_pump_ignores_speech_started_before_any_reply() -> None:
+    """speech_started with nothing in flight is the user starting to talk, not a barge-in."""
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("input_audio_buffer.speech_started"),
+            _event("conversation.item.input_audio_transcription.completed", transcript="你好"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+
+        assert observer.calls == [("heard", "你好"), ("failed", "stream ended")]
+        assert transport.types() == []
 
     asyncio.run(scenario())

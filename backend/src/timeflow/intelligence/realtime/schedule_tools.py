@@ -33,7 +33,7 @@ from timeflow.intelligence.realtime.tool_mapping import (
 
 logger = logging.getLogger(__name__)
 
-LOCAL = ZoneInfo("Asia/Shanghai")
+DEFAULT_TIMEZONE = "Asia/Shanghai"
 
 # Tool names from the conversation contract; names reach the client, so keep them.
 SCHEDULE_CREATE = "schedule_create"
@@ -41,6 +41,7 @@ SCHEDULE_QUERY = "schedule_query"
 SCHEDULE_UPDATE = "schedule_update"
 SCHEDULE_DELETE = "schedule_delete"
 REQUEST_USER_INPUT = "request_user_input"
+END_CONVERSATION = "end_conversation"
 
 # Four question kinds registered; clients branch on this enum.
 QUESTION_KINDS = ("missing_field", "ambiguous_target", "recurrence_scope", "confirmation")
@@ -53,6 +54,7 @@ class ToolResult:
     output: str
     outcome: dict[str, Any] | None = None
     question: dict[str, Any] | None = None
+    ends_conversation: bool = False
 
 
 _DATETIME_SCHEMA = {"type": ["string", "null"], "format": "date-time"}
@@ -224,6 +226,18 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": END_CONVERSATION,
+            "description": (
+                "用户明确表示想结束这次语音对话、退出免提模式、不想再继续时调用，"
+                "例如说「结束对话」「先这样」「不用了」「退出语音模式」「停止监听」等。"
+                "想说句告别的话可以说，说完再调用；调用之后客户端会自己挂断，不用再多说。"
+            ),
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+    },
 )
 
 
@@ -234,12 +248,14 @@ class ToolBox:
         self,
         account_id: str,
         service: ScheduleAgentService,
+        timezone: str = DEFAULT_TIMEZONE,
         now: Callable[[], datetime] | None = None,
     ) -> None:
-        """Store the account, the service, and the clock seam."""
+        """Store the account, the service, the client's zone, and the clock seam."""
         self._account_id = account_id
         self._service = service
-        self._now = now or (lambda: datetime.now(LOCAL))
+        self._timezone = ZoneInfo(timezone)
+        self._now = now or (lambda: datetime.now(self._timezone))
 
     # The service is synchronous and reaches Postgres over a socket, so every call goes
     # to a worker thread: awaiting it inline would stall the loop streaming this turn's
@@ -253,9 +269,13 @@ class ToolBox:
         """Run a tool and report what each side of the conversation should get."""
         if name == REQUEST_USER_INPUT:
             return self._ask(arguments)
+        if name == END_CONVERSATION:
+            return ToolResult(
+                output=json.dumps({"status": "ok"}, ensure_ascii=False), ends_conversation=True
+            )
 
         # Normalize datetime fields before mapping
-        arguments = normalize_datetime_args(arguments)
+        arguments = normalize_datetime_args(arguments, self._timezone)
 
         try:
             if name == SCHEDULE_CREATE:
@@ -275,18 +295,18 @@ class ToolBox:
         return _refusal(f"工具 {name} 不可用。")
 
     async def _create(self, arguments: dict[str, Any]) -> ToolResult:
-        command = map_create_schedule_command(arguments)
+        command = map_create_schedule_command(arguments, self._timezone)
         result = await asyncio.to_thread(
             partial(self._service.create_schedule, account_id=self._account_id, command=command)
         )
-        return _mutation_result(result, "create_schedule")
+        return _mutation_result(result, "create_schedule", self._timezone)
 
     async def _find(self, arguments: dict[str, Any]) -> ToolResult:
         query = map_find_schedules_query(arguments)
         result = await asyncio.to_thread(
             partial(self._service.find_schedules, account_id=self._account_id, query=query)
         )
-        schedules_with_local_time = [_for_model(s) for s in result.schedules]
+        schedules_with_local_time = [_for_model(s, self._timezone) for s in result.schedules]
         return ToolResult(
             output=json.dumps(
                 {"count": len(result.schedules), "schedules": schedules_with_local_time},
@@ -304,7 +324,7 @@ class ToolBox:
         result = await asyncio.to_thread(
             partial(self._service.update_schedule, account_id=self._account_id, command=command)
         )
-        return _mutation_result(result, "update_schedule")
+        return _mutation_result(result, "update_schedule", self._timezone)
 
     async def _delete(self, arguments: dict[str, Any]) -> ToolResult:
         command = map_delete_schedule_command(arguments)
@@ -324,7 +344,7 @@ class ToolBox:
                     command=command,
                 )
             )
-        return _mutation_result(result, "delete_schedule")
+        return _mutation_result(result, "delete_schedule", self._timezone)
 
     def _ask(self, arguments: dict[str, Any]) -> ToolResult:
         """Turn a request to ask the user into a question, or refuse an unusable one."""
@@ -381,12 +401,12 @@ def _business_error(error: ScheduleBusinessError) -> ToolResult:
     )
 
 
-def _mutation_result(result: ScheduleMutationResult, operation: str) -> ToolResult:
+def _mutation_result(result: ScheduleMutationResult, operation: str, tz: ZoneInfo) -> ToolResult:
     """Convert a mutation result into model output and client outcome."""
     snapshot = result.schedules[0] if result.schedules else None
     return ToolResult(
         output=json.dumps(
-            {"status": "applied", "schedule": _for_model_dict(snapshot)}, ensure_ascii=False
+            {"status": "applied", "schedule": _for_model_dict(snapshot, tz)}, ensure_ascii=False
         ),
         outcome={
             "operation": operation,
@@ -396,19 +416,19 @@ def _mutation_result(result: ScheduleMutationResult, operation: str) -> ToolResu
     )
 
 
-def _for_model(schedule: Any) -> dict[str, Any]:
+def _for_model(schedule: Any, tz: ZoneInfo) -> dict[str, Any]:
     """Add a spoken-language local time beside the stored instant."""
     spoken = asdict(schedule)
-    spoken["starts_at_local"] = _local_text(spoken.get("start_time"))
+    spoken["starts_at_local"] = _local_text(spoken.get("start_time"), tz)
     result = _json_value(spoken)
     assert isinstance(result, dict)
     return result
 
 
-def _for_model_dict(schedule: Any) -> dict[str, Any] | None:
+def _for_model_dict(schedule: Any, tz: ZoneInfo) -> dict[str, Any] | None:
     if schedule is None:
         return None
-    return _for_model(schedule)
+    return _for_model(schedule, tz)
 
 
 def _snapshot_for_client(snapshot: Any) -> dict[str, Any]:
@@ -421,11 +441,11 @@ def _snapshot_for_client(snapshot: Any) -> dict[str, Any]:
     }
 
 
-def _local_text(instant: datetime | None) -> str:
+def _local_text(instant: datetime | None, tz: ZoneInfo) -> str:
     """Render a stored instant as local wall-clock text, empty for a schedule without one."""
     if instant is None:
         return ""
-    return instant.astimezone(LOCAL).strftime("%Y-%m-%d %H:%M")
+    return instant.astimezone(tz).strftime("%Y-%m-%d %H:%M")
 
 
 def _candidates(value: Any) -> tuple[dict[str, Any], ...]:

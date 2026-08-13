@@ -101,6 +101,25 @@ def test_deliver_transcript_sends_voice_asr_completed() -> None:
     asyncio.run(scenario())
 
 
+def test_deliver_session_end_sends_voice_session_end() -> None:
+    """Telling the client to hang up carries no payload beyond the conversation id."""
+
+    async def scenario() -> None:
+        """Deliver a session-end signal to a connected session."""
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register(SESSION_ID, connection)
+
+        await WebSocketResultSink(connections).deliver_session_end(_Identity())
+
+        assert len(connection.frames) == 1
+        frame = connection.frames[0]
+        assert frame["type"] == "voice.session.end"
+        assert frame["conversation_id"] == "conversation_test"
+
+    asyncio.run(scenario())
+
+
 def test_deliver_result_sends_voice_command_result() -> None:
     """The command result goes out on its own, without needing a transcript first."""
 

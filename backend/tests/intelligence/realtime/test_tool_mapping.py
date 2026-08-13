@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from zoneinfo import ZoneInfo
+
 import pytest
 
 from timeflow.business.calendar import (
@@ -14,7 +16,6 @@ from timeflow.business.calendar import (
     ScheduleType,
 )
 from timeflow.intelligence.realtime.tool_mapping import (
-    LOCAL,
     ToolInputError,
     map_create_schedule_command,
     map_delete_schedule_command,
@@ -22,6 +23,8 @@ from timeflow.intelligence.realtime.tool_mapping import (
     map_update_schedule_command,
     normalize_datetime_args,
 )
+
+TZ = ZoneInfo("Asia/Shanghai")
 
 MINIMAL_CREATE = {
     "schedule_type": "time",
@@ -31,34 +34,34 @@ MINIMAL_CREATE = {
 
 
 def test_a_bare_datetime_is_read_as_local_time() -> None:
-    arguments = normalize_datetime_args({"start_time": "2026-09-08T07:00:00"})
+    arguments = normalize_datetime_args({"start_time": "2026-09-08T07:00:00"}, TZ)
     assert arguments["start_time"] == "2026-09-08T07:00:00+08:00"
 
 
 def test_an_offset_the_model_supplied_is_left_alone() -> None:
-    arguments = normalize_datetime_args({"start_time": "2026-09-08T07:00:00Z"})
+    arguments = normalize_datetime_args({"start_time": "2026-09-08T07:00:00Z"}, TZ)
     assert arguments["start_time"] == "2026-09-08T07:00:00Z"
 
 
 def test_a_negative_offset_the_model_supplied_is_left_alone() -> None:
-    """A "+"/"Z" check alone would miss this and reattach LOCAL, shifting the instant."""
-    arguments = normalize_datetime_args({"start_time": "2026-09-08T07:00:00-05:00"})
+    """A "+"/"Z" check alone would miss this and reattach the zone, shifting the instant."""
+    arguments = normalize_datetime_args({"start_time": "2026-09-08T07:00:00-05:00"}, TZ)
     assert arguments["start_time"] == "2026-09-08T07:00:00-05:00"
 
 
 def test_nested_change_datetimes_are_normalized_too() -> None:
-    arguments = normalize_datetime_args({"changes": {"start_time": "2026-09-08T07:00:00"}})
+    arguments = normalize_datetime_args({"changes": {"start_time": "2026-09-08T07:00:00"}}, TZ)
     assert arguments["changes"] == {"start_time": "2026-09-08T07:00:00+08:00"}
 
 
 def test_text_that_only_looks_like_a_datetime_is_left_alone() -> None:
-    arguments = normalize_datetime_args({"title": "Talk about T-shirts"})
+    arguments = normalize_datetime_args({"title": "Talk about T-shirts"}, TZ)
     assert arguments["title"] == "Talk about T-shirts"
 
 
 def test_a_create_without_a_timezone_gets_the_deployment_zone() -> None:
-    command = map_create_schedule_command(dict(MINIMAL_CREATE))
-    assert command.timezone == str(LOCAL.key)
+    command = map_create_schedule_command(dict(MINIMAL_CREATE), TZ)
+    assert command.timezone == str(TZ.key)
     assert command.is_all_day is False
     assert command.schedule_type is ScheduleType.TIME
     assert command.schedule_kind is ScheduleKind.ONCE
@@ -82,7 +85,8 @@ def test_a_create_carries_every_optional_field_through() -> None:
             "reminder_trigger_at": "2026-09-08T06:30:00+08:00",
             "reminder_offset_minutes": 30,
             "reminder_strength": "high",
-        }
+        },
+        TZ,
     )
     assert command.timezone == "UTC"
     assert command.is_all_day is True
@@ -123,7 +127,7 @@ def test_a_create_the_contract_will_not_take_is_refused(
     overrides: dict[str, object], message: str
 ) -> None:
     with pytest.raises(ToolInputError, match=message):
-        map_create_schedule_command({**MINIMAL_CREATE, **overrides})
+        map_create_schedule_command({**MINIMAL_CREATE, **overrides}, TZ)
 
 
 def test_a_query_takes_every_filter() -> None:

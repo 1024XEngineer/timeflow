@@ -1,4 +1,6 @@
-"""Audio stream lifecycle messages: start, started, end."""
+"""Audio stream lifecycle messages: start, started, end -- and the server-initiated end
+of a voice session.
+"""
 
 from typing import Literal
 
@@ -50,3 +52,14 @@ class VoiceStreamEnd(BaseModel):
     type: Literal["voice.stream.end"]
     request_id: str | None = None
     payload: VoiceStreamEndPayload
+
+
+class VoiceSessionEnd(BaseModel):
+    """Server message telling the client this voice session should end now.
+
+    Sent when the model recognized the user's intent to stop (continuous mode only,
+    always after any farewell audio has already gone out -- see agent.py's _finish_reply).
+    """
+
+    type: Literal["voice.session.end"] = "voice.session.end"
+    conversation_id: str

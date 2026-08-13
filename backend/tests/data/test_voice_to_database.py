@@ -104,7 +104,9 @@ class OneSessionFactory:
         self._session = session
         self.tools: list[dict[str, Any]] = []
 
-    async def open(self, instructions: str, tools: list[dict[str, Any]]) -> ToolCallingSession:
+    async def open(
+        self, instructions: str, tools: list[dict[str, Any]], voice_mode: str
+    ) -> ToolCallingSession:
         """Record the registered tools and return the scripted session."""
         self.tools = tools
         return self._session
@@ -165,8 +167,8 @@ def _build_app(engine: Engine, session: ToolCallingSession) -> tuple[FastAPI, On
         lambda: SqlAlchemyScheduleUnitOfWork(session_factory)
     )
 
-    def bind_account(account_id: str) -> ToolBox:
-        return ToolBox(account_id, schedule_service)
+    def bind_account(account_id: str, timezone: str) -> ToolBox:
+        return ToolBox(account_id, schedule_service, timezone)
 
     agent = RealtimeAgent(
         factory,

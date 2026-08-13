@@ -322,3 +322,20 @@ def test_a_blank_required_response_is_reported_as_absent() -> None:
     )
     assert result.question is not None
     assert result.question["required_response"] is None
+
+
+def test_ending_the_conversation_reaches_the_client_and_not_the_calendar() -> None:
+    result = run("end_conversation", {})
+    assert json.loads(result.output) == {"status": "ok"}
+    assert result.ends_conversation is True
+    assert result.outcome is None
+    assert result.question is None
+
+
+def test_every_other_tool_leaves_the_conversation_running() -> None:
+    for tool in refusing_toolbox().tools():
+        name = tool["function"]["name"]
+        if name == "end_conversation":
+            continue
+        result = run(name, {})
+        assert result.ends_conversation is False

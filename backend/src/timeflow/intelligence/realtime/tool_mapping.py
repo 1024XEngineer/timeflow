@@ -23,14 +23,13 @@ from timeflow.business.calendar import (
 )
 
 _EnumT = TypeVar("_EnumT", bound=StrEnum)
-LOCAL = ZoneInfo("Asia/Shanghai")
 
 
 class ToolInputError(ValueError):
     """A tool payload cannot be mapped to the business contract."""
 
 
-def normalize_datetime_args(arguments: dict[str, object]) -> dict[str, object]:
+def normalize_datetime_args(arguments: dict[str, object], tz: ZoneInfo) -> dict[str, object]:
     """Add local timezone offset to datetime strings that lack one.
 
     Mutates and returns the input dict for chaining.
@@ -42,16 +41,18 @@ def normalize_datetime_args(arguments: dict[str, object]) -> dict[str, object]:
             except ValueError:
                 continue
             # A "+" or "Z" check alone misses negative offsets like "-05:00", which
-            # fromisoformat parses as already aware -- reattaching LOCAL to those would
+            # fromisoformat parses as already aware -- reattaching tz to those would
             # silently shift the instant by the difference between the two zones.
             if parsed.tzinfo is None or parsed.utcoffset() is None:
-                arguments[key] = parsed.replace(tzinfo=LOCAL).isoformat()
+                arguments[key] = parsed.replace(tzinfo=tz).isoformat()
         elif isinstance(value, dict):
-            normalize_datetime_args(value)
+            normalize_datetime_args(value, tz)
     return arguments
 
 
-def map_create_schedule_command(arguments: Mapping[str, object]) -> CreateScheduleCommand:
+def map_create_schedule_command(
+    arguments: Mapping[str, object], tz: ZoneInfo
+) -> CreateScheduleCommand:
     """Map model arguments into the stable create business command."""
     allowed = {"schedule_type", "schedule_kind", *ScheduleUpdatePatch.__optional_keys__}
     _reject_unknown(arguments, allowed)
@@ -61,7 +62,7 @@ def map_create_schedule_command(arguments: Mapping[str, object]) -> CreateSchedu
         title=_required_string(arguments, "title"),
         # Both default rather than being asked of the model: one deployment, one zone, and
         # a model made to state them every call is a model that eventually invents them.
-        timezone=_optional_string(arguments, "timezone") or str(LOCAL.key),
+        timezone=_optional_string(arguments, "timezone") or str(tz.key),
         is_all_day=_optional_bool(arguments, "is_all_day", default=False),
         start_time=_optional_datetime(arguments, "start_time"),
         end_time=_optional_datetime(arguments, "end_time"),
