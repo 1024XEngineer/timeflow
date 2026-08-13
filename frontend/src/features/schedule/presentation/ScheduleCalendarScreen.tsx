@@ -18,12 +18,15 @@ export function ScheduleCalendarScreen({
   service,
   accountId,
   timezone,
+  refreshSignal,
 }: {
   service: ScheduleCalendarReadService;
   accountId: string;
   timezone: string;
+  /** 外部触发刷新用（比如语音写完一条日程）；变化即重取，不用管具体数值。 */
+  refreshSignal?: number;
 }) {
-  const calendar = useScheduleCalendar(service, accountId, timezone);
+  const calendar = useScheduleCalendar(service, accountId, timezone, undefined, refreshSignal);
   const [selectedOccurrence, setSelectedOccurrence] = useState<ScheduleOccurrenceView | null>(null);
   const [selectedLocation, setSelectedLocation] = useState<LocationScheduleView | null>(null);
   const selectedLabel = `${calendar.selectedDate.getMonth() + 1}月${calendar.selectedDate.getDate()}日`;

@@ -5,6 +5,11 @@ export interface SessionHello {
   readonly payload: {
     readonly access_token: string;
     readonly device_id: string;
+    readonly timezone?: string;
+    readonly latitude?: number;
+    readonly longitude?: number;
+    /** 标注 latitude/longitude 的坐标系；设备定位给的是原始值，不做转换。 */
+    readonly coordinate_system?: 'WGS84';
   };
 }
 
@@ -38,9 +43,20 @@ export function createSessionHello(options: {
   readonly accessToken: string;
   readonly deviceId: string;
   readonly requestId: string;
+  /** IANA 时区键（如 "Asia/Shanghai"）；设备本地时区，不是可选的地理能力。 */
+  readonly timezone?: string;
+  /** 拿不到定位就不带；原始 WGS84，不做坐标系转换，由消费方自己决定要不要转。 */
+  readonly location?: { readonly latitude: number; readonly longitude: number };
 }): SessionHello {
   return {
-    payload: { access_token: options.accessToken, device_id: options.deviceId },
+    payload: {
+      access_token: options.accessToken,
+      coordinate_system: options.location ? 'WGS84' : undefined,
+      device_id: options.deviceId,
+      latitude: options.location?.latitude,
+      longitude: options.location?.longitude,
+      timezone: options.timezone,
+    },
     request_id: options.requestId,
     type: 'session.hello',
   };

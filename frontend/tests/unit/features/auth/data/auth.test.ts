@@ -128,8 +128,8 @@ describe('createAuthAccess', () => {
 });
 
 describe('isAuthAccessResponse', () => {
-  it('accepts the fixed 3600-second token response', () => {
-    expect(isAuthAccessResponse(response)).toBe(true);
+  it.each([1, 3599, 3600, 7200])('accepts the positive finite expires_in %p', (expires_in) => {
+    expect(isAuthAccessResponse({ ...response, expires_in })).toBe(true);
   });
 
   it('requires every response field to be an own property', () => {
@@ -170,9 +170,12 @@ describe('isAuthAccessResponse', () => {
     }
   });
 
-  it.each([0, 3599, 3601, '3600', Infinity])('rejects expires_in %p', (expires_in) => {
-    expect(isAuthAccessResponse({ ...response, expires_in })).toBe(false);
-  });
+  it.each([0, -1, Number.NaN, Infinity, Number.NEGATIVE_INFINITY, '3600'])(
+    'rejects expires_in %p',
+    (expires_in) => {
+      expect(isAuthAccessResponse({ ...response, expires_in })).toBe(false);
+    },
+  );
 
   it.each([
     { ...response, account_id: '' },

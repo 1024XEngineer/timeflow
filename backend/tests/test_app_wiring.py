@@ -46,6 +46,7 @@ def _build_with_environment(
     environment: str,
     *,
     jwt_secret: str = TEST_JWT_SECRET,
+    cors_allowed_origins: str = "",
     audio_configured: bool = False,
     voice_agent_mode: str = "1",
     **injected: Any,
@@ -66,6 +67,7 @@ def _build_with_environment(
         **TEST_JWT_ENVIRONMENT,
         "TIMEFLOW_ENVIRONMENT": environment,
         "TIMEFLOW_JWT_SECRET": jwt_secret,
+        "TIMEFLOW_CORS_ALLOWED_ORIGINS": cors_allowed_origins,
         "TIMEFLOW_VOICE_AGENT_MODE": voice_agent_mode,
         **credentials,
     }
@@ -120,6 +122,36 @@ def test_injected_token_service_is_shared_by_http_and_websocket() -> None:
 def test_building_in_development_still_works_without_a_real_model() -> None:
     """开发环境没有外部模型时仍可使用显式的测试音频接收器。"""
     assert _build_with_environment("development", audio_sink=_Sink()) is not None
+
+
+def test_configured_cors_origin_allows_expo_web_authentication() -> None:
+    """浏览器预检只允许显式配置的 Expo Web 来源。"""
+    application = _build_with_environment(
+        "development",
+        audio_sink=_Sink(),
+        cors_allowed_origins="http://localhost:8081",
+    )
+
+    with TestClient(application) as client:
+        allowed = client.options(
+            "/api/v1/auth/access",
+            headers={
+                "Access-Control-Request-Headers": "content-type",
+                "Access-Control-Request-Method": "POST",
+                "Origin": "http://localhost:8081",
+            },
+        )
+        rejected = client.options(
+            "/api/v1/auth/access",
+            headers={
+                "Access-Control-Request-Method": "POST",
+                "Origin": "https://unconfigured.example.com",
+            },
+        )
+
+    assert allowed.status_code == 200
+    assert allowed.headers["access-control-allow-origin"] == "http://localhost:8081"
+    assert "access-control-allow-origin" not in rejected.headers
 
 
 def test_production_without_a_real_audio_sink_fails_closed() -> None:

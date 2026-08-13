@@ -12,6 +12,15 @@ export type AuthenticatedWebSocketMessage = string | ArrayBuffer;
 export type AuthenticatedWebSocketMessageListener = (
   message: AuthenticatedWebSocketMessage,
 ) => void;
+export interface AuthenticatedWebSocketCloseEvent {
+  readonly code: number;
+  readonly reason: string;
+}
+export type AuthenticatedWebSocketCloseListener = (event: AuthenticatedWebSocketCloseEvent) => void;
+export interface AuthenticatedWebSocketLocation {
+  readonly latitude: number;
+  readonly longitude: number;
+}
 
 const HANDSHAKE_TIMEOUT_MS = 5_000;
 const LOCAL_UNAUTHENTICATED_MESSAGE = 'Authentication is required';
@@ -64,6 +73,7 @@ export class AuthenticatedWebSocketClient {
   private requestCounter = 0;
   private connectionAttempt = 0;
   private readonly messageListeners = new Set<AuthenticatedWebSocketMessageListener>();
+  private readonly closeListeners = new Set<AuthenticatedWebSocketCloseListener>();
 
   constructor(private readonly options: AuthenticatedWebSocketClientOptions) {}
 
@@ -71,8 +81,11 @@ export class AuthenticatedWebSocketClient {
     return this.state;
   }
 
-  /** 重复连接复用当前握手，避免产生第二个 socket。 */
-  connect(): Promise<SessionReady> {
+  /**
+   * 重复连接复用当前握手，避免产生第二个 socket——location 只在真正发起新连接
+   * 时会被送进 session.hello；复用已有/正在进行的握手时静默忽略，不会补发。
+   */
+  connect(location?: AuthenticatedWebSocketLocation): Promise<SessionReady> {
     if (this.connection) {
       return this.connection;
     }
@@ -88,8 +101,14 @@ export class AuthenticatedWebSocketClient {
       this.rejectConnection = reject;
     });
     this.connection = connection;
-    void this.open(attempt);
+    void this.open(attempt, location);
     return connection;
+  }
+
+  /** 订阅"已经 ready 的连接掉线"；握手阶段的失败走 connect() 的 rejection，不走这里。 */
+  onClose(listener: AuthenticatedWebSocketCloseListener): () => void {
+    this.closeListeners.add(listener);
+    return () => this.closeListeners.delete(listener);
   }
 
   /** ready 前一律拒绝；业务层可按自身契约序列化 JSON。 */
@@ -111,7 +130,7 @@ export class AuthenticatedWebSocketClient {
     this.disposeCurrent(new WebSocketConnectionError(), true);
   }
 
-  private async open(attempt: number): Promise<void> {
+  private async open(attempt: number, location?: AuthenticatedWebSocketLocation): Promise<void> {
     let token: string | undefined;
     try {
       token = await this.options.coordinator.getAccessToken();
@@ -150,7 +169,13 @@ export class AuthenticatedWebSocketClient {
       }
       socket.send(
         JSON.stringify(
-          createSessionHello({ accessToken: token, deviceId: this.options.deviceId, requestId }),
+          createSessionHello({
+            accessToken: token,
+            deviceId: this.options.deviceId,
+            location,
+            requestId,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          }),
         ),
       );
     };
@@ -210,18 +235,26 @@ export class AuthenticatedWebSocketClient {
     resolve?.(message);
   }
 
-  private handleClose(socket: WebSocketPort, _code: number | undefined): void {
+  private handleClose(socket: WebSocketPort, code: number | undefined): void {
     if (socket !== this.socket) {
       return;
     }
-    this.disposeCurrent(new WebSocketConnectionError(), false, socket);
+    this.disposeCurrent(new WebSocketConnectionError(), false, socket, code);
   }
 
-  private disposeCurrent(error: Error, closeSocket: boolean, expectedSocket?: WebSocketPort): void {
+  private disposeCurrent(
+    error: Error,
+    closeSocket: boolean,
+    expectedSocket?: WebSocketPort,
+    closeCode?: number,
+  ): void {
     if (expectedSocket && expectedSocket !== this.socket) {
       return;
     }
     const socket = this.socket;
+    // 只有已经 ready 过的连接掉线才通知订阅方；握手阶段的失败已经由 connect()
+    // 的 rejection 表达过一次，onClose 不重复触发。
+    const wasReady = this.state === 'ready';
     this.clearTimeout();
     this.socket = undefined;
     this.state = 'disconnected';
@@ -234,6 +267,11 @@ export class AuthenticatedWebSocketClient {
       socket.close();
     }
     reject?.(error);
+    if (wasReady) {
+      for (const listener of this.closeListeners) {
+        listener({ code: closeCode ?? 0, reason: '' });
+      }
+    }
   }
 
   private disposeAttempt(attempt: number, error: Error, closeSocket: boolean): void {

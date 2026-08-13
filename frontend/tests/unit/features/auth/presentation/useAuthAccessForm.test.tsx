@@ -4,7 +4,7 @@ import { act, renderHook } from '@testing-library/react-native';
 import { AuthController } from '../../../../../src/features/auth/application';
 import { AuthProvider } from '../../../../../src/features/auth/presentation/AuthProvider';
 import { useAuthAccessForm } from '../../../../../src/features/auth/presentation/useAuthAccessForm';
-import { FakeAuthSessionStore } from '../../../../../src/features/auth/testing/FakeAuthSessionStore';
+import { FakeAuthSessionStore } from '../../../../fakes/FakeAuthSessionStore';
 
 describe('useAuthAccessForm', () => {
   it('clears only the edited field error', async () => {

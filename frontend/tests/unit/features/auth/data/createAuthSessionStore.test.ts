@@ -26,6 +26,7 @@ describe('createAuthSessionStore', () => {
       accountId: 'acc_001',
       accessToken: 'opaque-token-value',
       expiresAt: 1_030_001,
+      username: 'timeflow_user',
     };
 
     expect(firstStore).toBeInstanceOf(MemoryAuthSessionStore);

@@ -28,6 +28,12 @@ export interface ApplyScheduleSnapshotCommand {
   snapshot: CloudScheduleSnapshot;
 }
 
+/** Complete account snapshot returned by the HTTP recovery endpoint. */
+export interface ApplyFullScheduleSnapshotCommand {
+  accountId: string;
+  snapshot: CloudScheduleSnapshot;
+}
+
 export type SnapshotApplyStatus = 'applied' | 'ignored_stale' | 'failed';
 
 export type SnapshotApplyErrorCode =
@@ -51,6 +57,22 @@ export interface SnapshotApplyFailureResult {
 /** Result used by the WebSocket owner to decide whether an ACK can be sent. */
 export type SnapshotApplyResult = SnapshotApplySuccessResult | SnapshotApplyFailureResult;
 
+export interface FullSnapshotApplySuccessResult {
+  status: 'applied';
+  changedScheduleIds: readonly string[];
+  removedScheduleIds: readonly string[];
+}
+
+export interface FullSnapshotApplyFailureResult {
+  status: 'failed';
+  changedScheduleIds: readonly string[];
+  removedScheduleIds: readonly string[];
+  errorCode: SnapshotApplyErrorCode;
+}
+
+export type FullSnapshotApplyResult =
+  FullSnapshotApplySuccessResult | FullSnapshotApplyFailureResult;
+
 /** Apply server-confirmed schedule snapshots to the local SQLite projection. */
 export interface ScheduleSyncService {
   /**
@@ -64,10 +86,19 @@ export interface ScheduleSyncService {
   ): Promise<SnapshotApplyResult>;
 }
 
+/** Apply an HTTP recovery snapshot as the complete cloud projection for one account. */
+export interface FullScheduleSnapshotSyncService {
+  applyFullScheduleSnapshotToSqlite(
+    command: ApplyFullScheduleSnapshotCommand,
+  ): Promise<FullSnapshotApplyResult>;
+}
+
 class LocalAccountMismatchError extends Error {}
 
 /** SQLite implementation of the stable confirmed-snapshot application boundary. */
-export class SqliteScheduleSyncService implements ScheduleSyncService {
+export class SqliteScheduleSyncService
+  implements ScheduleSyncService, FullScheduleSnapshotSyncService
+{
   public constructor(private readonly database: SQLiteDatabase) {}
 
   public async applyScheduleSnapshotToSqlite(
@@ -141,20 +172,144 @@ export class SqliteScheduleSyncService implements ScheduleSyncService {
       changedScheduleIds: [...changedScheduleIds],
     };
   }
+
+  public async applyFullScheduleSnapshotToSqlite(
+    command: ApplyFullScheduleSnapshotCommand,
+  ): Promise<FullSnapshotApplyResult> {
+    const errorCode = validateFullSnapshotCommand(command);
+    if (errorCode !== null) {
+      return failedFullSnapshot(errorCode);
+    }
+
+    const changedScheduleIds = new Set<string>();
+    const removedScheduleIds = new Set<string>();
+    try {
+      await this.database.withExclusiveTransactionAsync(async (transaction) => {
+        const existingRows = await loadExistingRows(transaction, command.snapshot.schedules);
+        const freshnessBySchedule = new Map<string, ScheduleFreshness>();
+        for (const schedule of command.snapshot.schedules) {
+          const existing = existingRows.get(schedule.id);
+          if (existing !== undefined && existing.account_id !== command.accountId) {
+            throw new LocalAccountMismatchError();
+          }
+          freshnessBySchedule.set(
+            schedule.id,
+            existing === undefined
+              ? 'newer'
+              : existing.cloud_revision < schedule.revision
+                ? 'newer'
+                : existing.cloud_revision === schedule.revision
+                  ? 'same'
+                  : 'stale',
+          );
+        }
+        await assertReferencedRowsDoNotCrossAccount(transaction, command);
+
+        const repository = new ScheduleLocalRepository(transaction);
+        const localOverrides = await repository.listOccurrenceOverrides(command.accountId);
+        const protectedScheduleIds = new Set<string>();
+        for (const override of localOverrides) {
+          if (freshnessBySchedule.get(override.schedule_id) === 'stale') {
+            protectedScheduleIds.add(override.schedule_id);
+            if (override.replacement_schedule_id !== null) {
+              protectedScheduleIds.add(override.replacement_schedule_id);
+            }
+            continue;
+          }
+          if (!(await purgeOccurrenceOverride(transaction, command.accountId, override.id))) {
+            throw new Error(`Could not purge occurrence override ${override.id}`);
+          }
+          changedScheduleIds.add(override.schedule_id);
+        }
+
+        const incomingScheduleIds = new Set(
+          command.snapshot.schedules.map((schedule) => schedule.id),
+        );
+        for (const localSchedule of await repository.listSchedules(command.accountId)) {
+          if (
+            incomingScheduleIds.has(localSchedule.id) ||
+            protectedScheduleIds.has(localSchedule.id)
+          ) {
+            continue;
+          }
+          if (!(await repository.purgeSchedule(command.accountId, localSchedule.id))) {
+            throw new Error(`Could not purge stale schedule ${localSchedule.id}`);
+          }
+          changedScheduleIds.add(localSchedule.id);
+          removedScheduleIds.add(localSchedule.id);
+        }
+
+        for (const schedule of command.snapshot.schedules) {
+          if (freshnessBySchedule.get(schedule.id) === 'stale') {
+            continue;
+          }
+          if (!(await repository.applyCloudSchedule(toCloudRow(schedule)))) {
+            throw new Error(`Could not apply cloud schedule ${schedule.id}`);
+          }
+          changedScheduleIds.add(schedule.id);
+        }
+
+        for (const override of command.snapshot.occurrence_overrides) {
+          if (freshnessBySchedule.get(override.schedule_id) === 'stale') {
+            continue;
+          }
+          if (
+            !(await repository.upsertOccurrenceOverride(
+              command.accountId,
+              toLocalOverride(override),
+            ))
+          ) {
+            throw new Error(`Could not apply occurrence override ${override.id}`);
+          }
+          changedScheduleIds.add(override.schedule_id);
+        }
+      });
+    } catch (error) {
+      return failedFullSnapshot(
+        error instanceof LocalAccountMismatchError
+          ? 'account_mismatch'
+          : 'sqlite_transaction_failed',
+      );
+    }
+
+    return {
+      status: 'applied',
+      changedScheduleIds: [...changedScheduleIds].sort(),
+      removedScheduleIds: [...removedScheduleIds].sort(),
+    };
+  }
 }
 
 function validateCommand(command: ApplyScheduleSnapshotCommand): SnapshotApplyErrorCode | null {
   if (command.messageId.trim().length === 0 || command.accountId.trim().length === 0) {
     return 'invalid_snapshot';
   }
-  if (command.snapshot.schedules.some((schedule) => schedule.account_id !== command.accountId)) {
+  return validateSnapshot(command.accountId, command.snapshot, false, false);
+}
+
+function validateFullSnapshotCommand(
+  command: ApplyFullScheduleSnapshotCommand,
+): SnapshotApplyErrorCode | null {
+  if (command.accountId.trim().length === 0) {
+    return 'invalid_snapshot';
+  }
+  return validateSnapshot(command.accountId, command.snapshot, true, true);
+}
+
+function validateSnapshot(
+  accountId: string,
+  snapshot: CloudScheduleSnapshot,
+  allowEmpty: boolean,
+  requireAllOverrideReferences: boolean,
+): SnapshotApplyErrorCode | null {
+  if (snapshot.schedules.some((schedule) => schedule.account_id !== accountId)) {
     return 'account_mismatch';
   }
-  if (command.snapshot.schedules.length === 0) {
+  if (!allowEmpty && snapshot.schedules.length === 0) {
     return 'invalid_snapshot';
   }
   const scheduleIds = new Set<string>();
-  for (const schedule of command.snapshot.schedules) {
+  for (const schedule of snapshot.schedules) {
     if (scheduleIds.has(schedule.id) || !isValidSchedule(schedule)) {
       return 'invalid_snapshot';
     }
@@ -162,12 +317,15 @@ function validateCommand(command: ApplyScheduleSnapshotCommand): SnapshotApplyEr
   }
   const overrideIds = new Set<string>();
   const occurrenceKeys = new Set<string>();
-  for (const override of command.snapshot.occurrence_overrides) {
+  for (const override of snapshot.occurrence_overrides) {
     const occurrenceKey = `${override.schedule_id}\u0000${override.occurrence_start}`;
     if (
       overrideIds.has(override.id) ||
       occurrenceKeys.has(occurrenceKey) ||
       !scheduleIds.has(override.schedule_id) ||
+      (requireAllOverrideReferences &&
+        override.replacement_schedule_id !== null &&
+        !scheduleIds.has(override.replacement_schedule_id)) ||
       !isValidOverride(override)
     ) {
       return 'invalid_snapshot';
@@ -244,6 +402,12 @@ function isValidSchedule(schedule: ScheduleSnapshot): boolean {
     return false;
   }
   if (schedule.reminder_trigger_at !== null && reminderTrigger === null) {
+    return false;
+  }
+  if (schedule.start_time !== null && start === null) {
+    return false;
+  }
+  if (schedule.end_time !== null && end === null) {
     return false;
   }
   if (
@@ -412,7 +576,7 @@ async function loadExistingRows(
 
 async function assertReferencedRowsDoNotCrossAccount(
   database: SQLiteDatabase,
-  command: ApplyScheduleSnapshotCommand,
+  command: Pick<ApplyScheduleSnapshotCommand, 'accountId' | 'snapshot'>,
 ): Promise<void> {
   const referencedIds = new Set<string>();
   for (const override of command.snapshot.occurrence_overrides) {
@@ -430,6 +594,21 @@ async function assertReferencedRowsDoNotCrossAccount(
       throw new LocalAccountMismatchError();
     }
   }
+}
+
+async function purgeOccurrenceOverride(
+  database: SQLiteDatabase,
+  accountId: string,
+  overrideId: string,
+): Promise<boolean> {
+  const result = await database.runAsync(
+    `DELETE FROM local_schedule_occurrence_overrides
+     WHERE id = ?
+       AND schedule_id IN (SELECT id FROM local_schedules WHERE account_id = ?)`,
+    overrideId,
+    accountId,
+  );
+  return result.changes === 1;
 }
 
 function toCloudRow(schedule: ScheduleSnapshot): CloudScheduleRow {
@@ -475,6 +654,15 @@ function failed(messageId: string, errorCode: SnapshotApplyErrorCode): SnapshotA
     messageId,
     status: 'failed',
     changedScheduleIds: [],
+    errorCode,
+  };
+}
+
+function failedFullSnapshot(errorCode: SnapshotApplyErrorCode): FullSnapshotApplyFailureResult {
+  return {
+    status: 'failed',
+    changedScheduleIds: [],
+    removedScheduleIds: [],
     errorCode,
   };
 }

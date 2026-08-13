@@ -1,8 +1,8 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
 import { createAuthRuntime } from '../../../src/app/authRuntime';
-import { FakeAuthSessionStore } from '../../../src/features/auth/testing/FakeAuthSessionStore';
-import { FakeWebSocket } from '../../../src/infrastructure/websocket/testing/FakeWebSocket';
+import { FakeAuthSessionStore } from '../../fakes/FakeAuthSessionStore';
+import { FakeWebSocket } from '../../fakes/FakeWebSocket';
 
 describe('createAuthRuntime', () => {
   it('composes the authentication access entry with the shared public client', async () => {

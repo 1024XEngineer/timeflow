@@ -1,8 +1,8 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
 import { describe, expect, it, jest } from '@jest/globals';
 
-import type { ScheduleCalendarReadService } from '../application';
-import { useScheduleCalendar } from './useScheduleCalendar';
+import type { ScheduleCalendarReadService } from '../../../../../src/features/schedule/application';
+import { useScheduleCalendar } from '../../../../../src/features/schedule/presentation/useScheduleCalendar';
 
 describe('useScheduleCalendar', () => {
   it('loads a 42-day grid through one range query and selects the first day when changing month', async () => {

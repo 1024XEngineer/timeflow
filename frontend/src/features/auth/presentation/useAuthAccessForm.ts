@@ -17,6 +17,7 @@ const AUTH_ERROR_MESSAGES: Partial<Record<AuthErrorCode, string>> = {
   AUTH_INVALID_CREDENTIALS: '用户名或密码错误',
   AUTH_INVALID_PASSWORD: '密码格式不正确',
   AUTH_INVALID_USERNAME: '用户名格式不正确',
+  AUTH_RATE_LIMITED: '请求过于频繁，请稍后重试',
 };
 
 /**

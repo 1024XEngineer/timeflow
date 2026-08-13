@@ -1,6 +1,6 @@
 import { isAuthSession, isObviouslyExpired, type AuthSession } from '../domain/authSession';
 
-const AUTH_SESSION_RECORD_VERSION = 1;
+const AUTH_SESSION_RECORD_VERSION = 2;
 const INVALID_AUTH_SESSION_RECORD_MESSAGE = 'Invalid authentication session record';
 
 interface AuthSessionRecord {
@@ -45,6 +45,7 @@ function copyAuthSession(session: AuthSession): AuthSession {
     accountId: session.accountId,
     accessToken: session.accessToken,
     expiresAt: session.expiresAt,
+    username: session.username,
   };
 }
 

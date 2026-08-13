@@ -8,7 +8,12 @@ describe('AuthInvalidationCoordinator', () => {
     const deferred = createDeferred<void>();
     const controller = {
       getState: () => ({
-        session: { accountId: 'acc_001', accessToken: 'opaque-token', expiresAt: 200_000 },
+        session: {
+          accountId: 'acc_001',
+          accessToken: 'opaque-token',
+          expiresAt: 200_000,
+          username: 'timeflow_user',
+        },
         status: 'authenticated' as const,
       }),
       getAccessToken: () => 'opaque-token',
@@ -30,7 +35,12 @@ describe('AuthInvalidationCoordinator', () => {
     let invalidated = false;
     const controller = {
       getState: () => ({
-        session: { accountId: 'acc_001', accessToken: 'opaque-token', expiresAt: 130_000 },
+        session: {
+          accountId: 'acc_001',
+          accessToken: 'opaque-token',
+          expiresAt: 130_000,
+          username: 'timeflow_user',
+        },
         status: 'authenticated' as const,
       }),
       getAccessToken: () => 'opaque-token',
@@ -55,7 +65,12 @@ describe('AuthInvalidationCoordinator', () => {
       controller: {
         getAccessToken: () => 'opaque-token',
         getState: () => ({
-          session: { accountId: 'acc_001', accessToken: 'opaque-token', expiresAt: 200_000 },
+          session: {
+            accountId: 'acc_001',
+            accessToken: 'opaque-token',
+            expiresAt: 200_000,
+            username: 'timeflow_user',
+          },
           status: 'authenticated' as const,
         }),
         invalidate: async () => {

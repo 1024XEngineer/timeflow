@@ -87,11 +87,6 @@ export function createAuthRuntime(options: CreateAuthRuntimeOptions = {}): AuthR
   };
 }
 
-/** 保留根组件的简洁入口；业务 HTTP 由完整 runtime 注入。 */
-export function createAuthController(): AuthController {
-  return createAuthRuntime().controller;
-}
-
 function createNativeWebSocket(url: string): WebSocketPort {
   const socket = new WebSocket(url);
   socket.binaryType = 'arraybuffer';

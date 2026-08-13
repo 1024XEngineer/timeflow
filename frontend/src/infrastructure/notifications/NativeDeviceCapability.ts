@@ -27,22 +27,17 @@ export class NativeDeviceCapability implements DeviceCapabilityPort {
   async getStatus(): Promise<DeviceCapabilityStatus> {
     const platform = toPlatform();
     if (!isTimeflowAlarmAvailable()) {
-      return {
-        platform,
-        supported: false,
-        permissions: emptyPermissions(false),
-        background_execution: false,
-      };
+      return unsupportedStatus(platform);
     }
 
-    const status = await nativeGetAlarmPermissionStatus();
+    let status;
+    try {
+      status = await nativeGetAlarmPermissionStatus();
+    } catch {
+      return unsupportedStatus(platform);
+    }
     if (status == null) {
-      return {
-        platform,
-        supported: false,
-        permissions: emptyPermissions(false),
-        background_execution: false,
-      };
+      return unsupportedStatus(platform);
     }
 
     return {
@@ -63,14 +58,22 @@ export class NativeDeviceCapability implements DeviceCapabilityPort {
 
   async requestPermission(permission: DevicePermission): Promise<boolean> {
     if (permission === 'notifications') {
-      return nativeRequestNotificationPermission();
+      try {
+        return await nativeRequestNotificationPermission();
+      } catch {
+        return false;
+      }
     }
     return this.openSettings(permission);
   }
 
   async openSettings(permission: DevicePermission): Promise<boolean> {
     const kind = SETTINGS_KIND[permission] ?? 'app';
-    return nativeOpenAlarmPermissionSettings(kind);
+    try {
+      return await nativeOpenAlarmPermissionSettings(kind);
+    } catch {
+      return false;
+    }
   }
 }
 
@@ -79,6 +82,15 @@ function toPlatform(): DeviceCapabilityStatus['platform'] {
   if (Platform.OS === 'ios') return 'ios';
   if (Platform.OS === 'web') return 'web';
   return 'unknown';
+}
+
+function unsupportedStatus(platform: DeviceCapabilityStatus['platform']): DeviceCapabilityStatus {
+  return {
+    platform,
+    supported: false,
+    permissions: emptyPermissions(false),
+    background_execution: false,
+  };
 }
 
 function emptyPermissions(value: boolean): Readonly<Record<DevicePermission, boolean>> {

@@ -1,6 +1,6 @@
 import { isAuthAccessResponse } from '../../../contracts/auth';
 
-const AUTH_SESSION_TTL_MS = 3_600_000;
+const MILLISECONDS_PER_SECOND = 1000;
 const EXPIRY_SKEW_MS = 30_000;
 const INVALID_AUTH_ACCESS_RESPONSE_MESSAGE = 'Invalid authentication access response';
 
@@ -9,6 +9,7 @@ export interface AuthSession {
   readonly accountId: string;
   readonly accessToken: string;
   readonly expiresAt: number;
+  readonly username: string;
 }
 
 /** 应用层认证状态；加载失败只在初始化分支携带可展示信息。 */
@@ -21,18 +22,19 @@ export type AuthState =
 export type AuthViewState =
   | { status: 'loading'; initializationError?: string }
   | { status: 'unauthenticated' }
-  | { status: 'authenticated'; accountId: string };
+  | { status: 'authenticated'; accountId: string; username: string };
 
-/** 将服务端认证响应收敛为带固定生命周期的领域会话。 */
-export function createAuthSession(response: unknown, now: number): AuthSession {
-  if (!isAuthAccessResponse(response)) {
+/** 将服务端认证响应收敛为与服务端有效期一致的领域会话。 */
+export function createAuthSession(response: unknown, username: unknown, now: number): AuthSession {
+  if (!isAuthAccessResponse(response) || !isNonBlankString(username)) {
     throw new Error(INVALID_AUTH_ACCESS_RESPONSE_MESSAGE);
   }
 
   return {
     accountId: response.account_id,
     accessToken: response.access_token,
-    expiresAt: now + AUTH_SESSION_TTL_MS,
+    expiresAt: now + response.expires_in * MILLISECONDS_PER_SECOND,
+    username: username.trim(),
   };
 }
 
@@ -46,10 +48,12 @@ export function isAuthSession(value: unknown): value is AuthSession {
     hasOwnProperty(value, 'accountId') &&
     hasOwnProperty(value, 'accessToken') &&
     hasOwnProperty(value, 'expiresAt') &&
+    hasOwnProperty(value, 'username') &&
     isNonBlankString(value.accountId) &&
     isNonBlankString(value.accessToken) &&
     typeof value.expiresAt === 'number' &&
-    Number.isFinite(value.expiresAt)
+    Number.isFinite(value.expiresAt) &&
+    isNonBlankString(value.username)
   );
 }
 

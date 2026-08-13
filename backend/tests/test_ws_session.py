@@ -273,17 +273,20 @@ def test_slow_token_verification_is_bounded_by_the_handshake_timeout() -> None:
 
 def test_second_hello_does_not_replace_the_session() -> None:
     """Repeating session.hello is refused and leaves the established session intact."""
-    client = TestClient(_build_app())
+    tokens = build_test_token_service()
+    client = TestClient(_build_app(access_token_service=tokens))
 
-    with client.websocket_connect("/ws?device_id=device_001") as websocket:
-        websocket.send_json(VALID_HELLO)
-        first = websocket.receive_json()
-        websocket.send_json(VALID_HELLO)
-        second = websocket.receive_json()
+    with mock.patch.object(tokens, "verify", wraps=tokens.verify) as verify:
+        with client.websocket_connect("/ws?device_id=device_001") as websocket:
+            websocket.send_json(VALID_HELLO)
+            first = websocket.receive_json()
+            websocket.send_json(VALID_HELLO)
+            second = websocket.receive_json()
 
     assert first["payload"]["session_id"] == "ws_session_test"
     assert second["type"] == "session.error"
     assert second["error"]["code"] == "UNAUTHENTICATED"
+    verify.assert_called_once_with(VALID_HELLO["payload"]["access_token"])
 
 
 def test_unauthenticated_connections_are_capped() -> None:

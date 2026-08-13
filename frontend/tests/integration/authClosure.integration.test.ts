@@ -2,10 +2,10 @@ import { describe, expect, it, jest } from '@jest/globals';
 
 import { createAuthRuntime, type AuthRuntime } from '../../src/app/authRuntime';
 import type { AuthDiagnosticEvent } from '../../src/features/auth/application';
-import { FakeAuthSessionStore } from '../../src/features/auth/testing/FakeAuthSessionStore';
+import { FakeAuthSessionStore } from '../fakes/FakeAuthSessionStore';
 import { ApiError } from '../../src/infrastructure/network/client';
 import { WebSocketConnectionError } from '../../src/infrastructure/websocket';
-import { FakeWebSocket } from '../../src/infrastructure/websocket/testing/FakeWebSocket';
+import { FakeWebSocket } from '../fakes/FakeWebSocket';
 import httpAccessSuccess from '../fixtures/auth/http-access-success.json';
 import httpInvalidCredentials from '../fixtures/auth/http-invalid-credentials.json';
 import httpInvalidToken from '../fixtures/auth/http-invalid-token.json';
@@ -39,6 +39,7 @@ describe('authentication closure', () => {
     expect(harness.runtime.controller.getViewState()).toEqual({
       accountId: 'acc_002',
       status: 'authenticated',
+      username: 'existing_user',
     });
   });
 
@@ -186,6 +187,7 @@ describe('authentication closure', () => {
     expect(harness.runtime.controller.getViewState()).toEqual({
       accountId: 'acc_002',
       status: 'authenticated',
+      username: 'second_user',
     });
   });
 

@@ -3,7 +3,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 import { AuthSessionDeletionRetrier } from '../../../../../src/features/auth/application/AuthSessionDeletionRetrier';
 import { AuthController } from '../../../../../src/features/auth/application/AuthController';
 import type { AuthDiagnosticEvent } from '../../../../../src/features/auth/application/AuthDiagnostics';
-import { FakeAuthSessionStore } from '../../../../../src/features/auth/testing/FakeAuthSessionStore';
+import { FakeAuthSessionStore } from '../../../../fakes/FakeAuthSessionStore';
 
 describe('AuthSessionDeletionRetrier', () => {
   it('waits for an in-flight old clear before allowing cancellation to finish', async () => {
@@ -29,7 +29,12 @@ describe('AuthSessionDeletionRetrier', () => {
 
   it('blocks a new session write until every overlapping old clear has finished', async () => {
     const store = new FakeAuthSessionStore();
-    store.session = { accountId: 'old', accessToken: 'old-token', expiresAt: 200_000 };
+    store.session = {
+      accountId: 'old',
+      accessToken: 'old-token',
+      expiresAt: 200_000,
+      username: 'old_user',
+    };
     const first = createDeferred<void>();
     const second = createDeferred<void>();
     let clearCount = 0;
@@ -46,7 +51,7 @@ describe('AuthSessionDeletionRetrier', () => {
       store,
     });
 
-    const firstClear = controller.signOut();
+    const firstClear = controller.invalidate('revoked');
     await Promise.resolve();
     const secondClear = controller.invalidate('expired');
     await Promise.resolve();
@@ -62,7 +67,11 @@ describe('AuthSessionDeletionRetrier', () => {
 
     first.resolve();
     await Promise.all([firstClear, authenticating]);
-    expect(store.session).toMatchObject({ accountId: 'new', accessToken: 'new-token' });
+    expect(store.session).toMatchObject({
+      accountId: 'new',
+      accessToken: 'new-token',
+      username: 'timeflow_user',
+    });
   });
 
   it('records a fixed session-store event when clear schedules a retry', async () => {

@@ -13,6 +13,7 @@ const session = {
   accountId: 'acc_001',
   accessToken: 'opaque-token-value',
   expiresAt: now + 30_001,
+  username: 'timeflow_user',
 };
 
 describe('SecureAuthSessionStore', () => {
@@ -106,10 +107,11 @@ describe('SecureAuthSessionStore', () => {
 
   it.each([
     ['invalid JSON', '{'],
-    ['an unknown version', JSON.stringify({ version: 2, session })],
+    ['a v1 record', JSON.stringify({ version: 1, session })],
+    ['an unknown version', JSON.stringify({ version: 3, session })],
     [
       'an expired session',
-      JSON.stringify({ version: 1, session: { ...session, expiresAt: now + 30_000 } }),
+      JSON.stringify({ version: 2, session: { ...session, expiresAt: now + 30_000 } }),
     ],
   ])('deletes %s and returns undefined', async (_description, rawRecord) => {
     const client = createClient();
@@ -121,7 +123,7 @@ describe('SecureAuthSessionStore', () => {
   });
 
   it('cleans stored sessions whose required fields only exist on Object.prototype', async () => {
-    const fields = ['accountId', 'accessToken', 'expiresAt'] as const;
+    const fields = ['accountId', 'accessToken', 'expiresAt', 'username'] as const;
     const descriptors = new Map(
       fields.map((field) => [field, Object.getOwnPropertyDescriptor(Object.prototype, field)]),
     );
@@ -132,6 +134,7 @@ describe('SecureAuthSessionStore', () => {
         accountId: { configurable: true, value: session.accountId, writable: true },
         accessToken: { configurable: true, value: session.accessToken, writable: true },
         expiresAt: { configurable: true, value: session.expiresAt, writable: true },
+        username: { configurable: true, value: session.username, writable: true },
       });
 
       for (const missingField of fields) {
@@ -139,7 +142,7 @@ describe('SecureAuthSessionStore', () => {
         delete storedSession[missingField];
         const client = createClient();
         client.getItemAsync.mockResolvedValue(
-          JSON.stringify({ version: 1, session: storedSession }),
+          JSON.stringify({ version: 2, session: storedSession }),
         );
         const store = new SecureAuthSessionStore(client, () => now);
 

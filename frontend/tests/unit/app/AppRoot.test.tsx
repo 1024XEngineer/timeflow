@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-
 
 import { AppRoot } from '../../../src/app/AppRoot';
 import { AuthController } from '../../../src/features/auth/application';
-import { FakeAuthSessionStore } from '../../../src/features/auth/testing/FakeAuthSessionStore';
+import { FakeAuthSessionStore } from '../../fakes/FakeAuthSessionStore';
 import { openTimeflowDatabase } from '../../../src/infrastructure/database';
 
 jest.mock('../../../src/infrastructure/database', () => ({
@@ -18,6 +18,21 @@ jest.mock('../../../src/features/schedule/presentation/ScheduleCalendarScreen', 
     const { Text } = jest.requireActual('react-native') as typeof import('react-native');
     return <Text>日程日历</Text>;
   },
+}));
+// 语音助手这几个真实实现都要接原生模块（麦克风/播放/定位），测试环境没有对应的
+// native module 注册，AppRoot 一 import 到就会在模块加载阶段直接抛错；跟上面的
+// SQLite/日历屏一样，只测装配逻辑，不需要真实实现。
+jest.mock('../../../src/features/assistant/data/audio/ExpoAudioCapture', () => ({
+  ExpoAudioCapture: jest.fn(),
+}));
+jest.mock('../../../src/features/assistant/data/audio/ExpoAudioPlayback', () => ({
+  ExpoAudioPlayback: jest.fn(),
+}));
+jest.mock('../../../src/infrastructure/location/ExpoLocationProvider', () => ({
+  ExpoLocationProvider: jest.fn(),
+}));
+jest.mock('../../../src/features/assistant/presentation/AssistantVoiceOverlay', () => ({
+  AssistantVoiceOverlay: () => null,
 }));
 
 const mockedOpenTimeflowDatabase = openTimeflowDatabase as jest.MockedFunction<
@@ -42,7 +57,12 @@ describe('AppRoot', () => {
     ['renders unauthenticated state', undefined, undefined, false, '登录或注册'],
     [
       'renders authenticated state',
-      { accountId: 'acc_001', accessToken: 'opaque-token', expiresAt: 200_000 },
+      {
+        accountId: 'acc_internal_001',
+        accessToken: 'opaque-token',
+        expiresAt: 200_000,
+        username: 'timeflow_user',
+      },
       undefined,
       false,
       '日程日历',
@@ -64,14 +84,30 @@ describe('AppRoot', () => {
     render(<AppRoot authController={controller} />);
 
     await screen.findByLabelText('用户名');
-    fireEvent.changeText(screen.getByLabelText('用户名'), 'timeflow_user');
+    fireEvent.changeText(screen.getByLabelText('用户名'), '  timeflow_user  ');
     fireEvent.changeText(screen.getByLabelText('密码'), 'password123');
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: '继续' }));
     });
 
     await waitFor(() => expect(screen.getByText('日程日历')).toBeTruthy());
+    expect(screen.getByText('账号：timeflow_user')).toBeTruthy();
+    expect(screen.queryByText(/acc_001/)).toBeNull();
     expect(screen.queryByText('登录或注册')).toBeNull();
+    expect(screen.queryByText('opaque-token')).toBeNull();
+  });
+
+  it('shows the restored username without rendering the internal account id', async () => {
+    const controller = createController({
+      accountId: 'acc_internal_001',
+      accessToken: 'opaque-token',
+      expiresAt: 200_000,
+      username: 'restored_user',
+    });
+    render(<AppRoot authController={controller} />);
+
+    await screen.findByText('账号：restored_user');
+    expect(screen.queryByText(/acc_internal_001/)).toBeNull();
     expect(screen.queryByText('opaque-token')).toBeNull();
   });
 
@@ -83,6 +119,7 @@ describe('AppRoot', () => {
       accountId: 'acc_001',
       accessToken: 'opaque-token',
       expiresAt: 200_000,
+      username: 'timeflow_user',
     });
     render(<AppRoot authController={controller} />);
 
@@ -92,10 +129,26 @@ describe('AppRoot', () => {
     await waitFor(() => expect(mockedOpenTimeflowDatabase).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.getByText('日程日历')).toBeTruthy());
   });
+
+  it('signs out from the authenticated account shell', async () => {
+    const controller = createController({
+      accountId: 'acc_001',
+      accessToken: 'opaque-token',
+      expiresAt: 200_000,
+      username: 'timeflow_user',
+    });
+    render(<AppRoot authController={controller} />);
+
+    await screen.findByText('日程日历');
+    fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
+
+    await waitFor(() => expect(screen.getByText('登录或注册')).toBeTruthy());
+    expect(controller.getViewState()).toEqual({ status: 'unauthenticated' });
+  });
 });
 
 function createController(
-  session?: { accountId: string; accessToken: string; expiresAt: number },
+  session?: { accountId: string; accessToken: string; expiresAt: number; username: string },
   readError?: unknown,
   pending = false,
 ) {
