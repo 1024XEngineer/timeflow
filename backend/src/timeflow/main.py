@@ -1,14 +1,26 @@
 """FastAPI application composition root."""
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket
+from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from timeflow.business.auth import AccessTokenService, AuthAccessService
 from timeflow.business.calendar.service import ScheduleApplicationService
 from timeflow.business.health import HealthService
+from timeflow.data.account_uow import SqlAlchemyAuthUnitOfWork
 from timeflow.data.database import build_engine, build_session_factory
 from timeflow.data.schedule_unit_of_work import SqlAlchemyScheduleUnitOfWork
+from timeflow.gateway.http import (
+    AuthAccess,
+    AuthRateLimiter,
+    create_auth_router,
+    create_authenticated_account_dependency,
+    install_auth_http_error_handler,
+)
 from timeflow.gateway.websocket.agent_ports import Agent
 from timeflow.gateway.websocket.connection_manager import ConnectionManager
 from timeflow.gateway.websocket.endpoint import (
@@ -20,13 +32,13 @@ from timeflow.gateway.websocket.handlers.agent_result import WebSocketResultSink
 from timeflow.gateway.websocket.handlers.message_ack import handle_message_ack
 from timeflow.gateway.websocket.handlers.session import SessionHandshake
 from timeflow.gateway.websocket.handlers.voice_stream import VoiceStreamHandlers
-from timeflow.gateway.websocket.ports import AudioSink, TokenVerifier
+from timeflow.gateway.websocket.ports import AudioSink
 from timeflow.gateway.websocket.router import MessageRouter
 from timeflow.infrastructure.external.realtime.qwen_audio import (
     QwenAudioConfig,
     QwenAudioSessionFactory,
 )
-from timeflow.infrastructure.security.token_verifier import FakeTokenVerifier
+from timeflow.infrastructure.security import Argon2PasswordHasher, JwtAccessTokenService
 from timeflow.infrastructure.settings import Settings, get_settings
 from timeflow.intelligence.fake_agent import FakeAgent
 from timeflow.intelligence.realtime.agent import RealtimeAgent
@@ -38,32 +50,50 @@ logger = logging.getLogger(__name__)
 
 def create_app(
     *,
-    token_verifier: TokenVerifier | None = None,
     audio_sink: AudioSink | None = None,
+    auth_access: AuthAccess | None = None,
+    access_token_service: AccessTokenService | None = None,
+    engine: Engine | None = None,
+    auth_rate_limiter: AuthRateLimiter | None = None,
 ) -> FastAPI:
     """Build the application and connect the minimal inbound surface."""
     settings = get_settings()
-    application = FastAPI(title=settings.app_name, version="0.1.0")
+    access_tokens = access_token_service or _build_access_token_service(settings)
+    owned_engine: Engine | None = None
+    session_factory: sessionmaker[Session] | None = None
+
+    # 认证仓储和实时日程工具共用同一个数据库会话工厂，避免两套连接池分裂。
+    if engine is None and (auth_access is None or audio_sink is None):
+        engine = build_engine(settings.database_url)
+        owned_engine = engine
+    if engine is not None:
+        session_factory = build_session_factory(engine)
+
+    if auth_access is None:
+        assert session_factory is not None
+        auth_access = AuthAccessService(
+            lambda: SqlAlchemyAuthUnitOfWork(session_factory),
+            Argon2PasswordHasher(),
+            access_tokens,
+        )
+
+    @asynccontextmanager
+    async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            if owned_engine is not None:
+                owned_engine.dispose()
+
+    application = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
     health_service = HealthService()
 
-    session_factory = build_session_factory(build_engine(settings.database_url))
-
-    if token_verifier is None:
-        # Fail closed: the stand-in verifier accepts any non-empty token, so falling back
-        # to it outside development would leave /ws effectively unauthenticated.
-        if settings.environment != "development":
-            raise RuntimeError(
-                "No TokenVerifier was injected and the stand-in one is development-only; "
-                f"TIMEFLOW_ENVIRONMENT is {settings.environment!r}. "
-                "Inject a real verifier before exposing /ws."
-            )
-        token_verifier = FakeTokenVerifier()
-
-    handshake = SessionHandshake(token_verifier)
+    handshake = SessionHandshake(access_tokens)
     connections = ConnectionManager()
     limiter = UnauthenticatedConnectionLimiter(settings.ws_max_unauthenticated_connections)
 
     if audio_sink is None:
+        assert session_factory is not None
         audio_sink = AgentAudioSink(
             _build_agent(settings, WebSocketResultSink(connections), session_factory)
         )
@@ -77,6 +107,12 @@ def create_app(
     router.register("voice.stream.start", voice_streams.handle_start)
     router.register("voice.stream.end", voice_streams.handle_end)
     router.register("message.ack", handle_message_ack)
+
+    install_auth_http_error_handler(application)
+    application.include_router(create_auth_router(auth_access, rate_limiter=auth_rate_limiter))
+    application.state.authenticated_account_dependency = create_authenticated_account_dependency(
+        access_tokens
+    )
 
     @application.get("/api/v1/health")
     def health() -> dict[str, str]:
@@ -98,6 +134,16 @@ def create_app(
         )
 
     return application
+
+
+def _build_access_token_service(settings: Settings) -> JwtAccessTokenService:
+    """构建所有入口共同使用的唯一 v1 JWT 实现。"""
+    return JwtAccessTokenService(
+        secret=settings.jwt_secret,
+        issuer=settings.jwt_issuer,
+        audience=settings.jwt_audience,
+        access_ttl_seconds=settings.jwt_access_ttl_seconds,
+    )
 
 
 def _build_agent(

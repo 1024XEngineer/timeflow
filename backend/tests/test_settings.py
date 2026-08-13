@@ -33,6 +33,12 @@ TTS_ENVIRONMENT_VARIABLES = (
     "TIMEFLOW_ALIYUN_TTS_CONNECT_TIMEOUT_SECONDS",
     "TIMEFLOW_ALIYUN_TTS_TASK_TIMEOUT_SECONDS",
 )
+JWT_ENVIRONMENT_VARIABLES = (
+    "TIMEFLOW_JWT_SECRET",
+    "TIMEFLOW_JWT_ISSUER",
+    "TIMEFLOW_JWT_AUDIENCE",
+    "TIMEFLOW_JWT_ACCESS_TTL_SECONDS",
+)
 
 
 def clear_asr_environment(monkeypatch: MonkeyPatch) -> None:
@@ -58,6 +64,8 @@ def clear_model_environment(monkeypatch: MonkeyPatch) -> None:
     clear_asr_environment(monkeypatch)
     clear_llm_environment(monkeypatch)
     clear_tts_environment(monkeypatch)
+    for name in JWT_ENVIRONMENT_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
 
 
 def test_settings_use_timeflow_environment(monkeypatch: MonkeyPatch) -> None:
@@ -148,6 +156,41 @@ def test_settings_use_qwen_tts_defaults(
     assert settings.aliyun_tts_voice == "longanhuan_v3.6"
     assert settings.aliyun_tts_connect_timeout_seconds == 10.0
     assert settings.aliyun_tts_task_timeout_seconds == 30.0
+
+
+def test_settings_allow_empty_jwt_secret_with_v1_defaults(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """工具无需构建真实认证组件也能读取配置。"""
+    clear_model_environment(monkeypatch)
+
+    settings = Settings.from_environment(tmp_path / "missing.env")
+
+    assert settings.jwt_secret == ""
+    assert settings.jwt_issuer == "timeflow-api"
+    assert settings.jwt_audience == "timeflow-app"
+    assert settings.jwt_access_ttl_seconds == 3600
+
+
+def test_settings_carry_explicit_jwt_environment_values(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """配置层承载原始 JWT 参数，真实服务负责校验 v1 约束。"""
+    clear_model_environment(monkeypatch)
+    monkeypatch.setenv("TIMEFLOW_JWT_SECRET", "configured-secret")
+    monkeypatch.setenv("TIMEFLOW_JWT_ISSUER", "another-issuer")
+    monkeypatch.setenv("TIMEFLOW_JWT_AUDIENCE", "another-audience")
+    monkeypatch.setenv("TIMEFLOW_JWT_ACCESS_TTL_SECONDS", "7200")
+
+    settings = Settings.from_environment(tmp_path / "missing.env")
+
+    assert settings.jwt_secret == "configured-secret"
+    assert settings.jwt_issuer == "another-issuer"
+    assert settings.jwt_audience == "another-audience"
+    assert settings.jwt_access_ttl_seconds == 7200
+    assert "configured-secret" not in repr(settings)
 
 
 def test_settings_convert_asr_environment_values(monkeypatch: MonkeyPatch) -> None:

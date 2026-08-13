@@ -26,7 +26,6 @@ from timeflow.gateway.websocket.handlers.message_ack import handle_message_ack
 from timeflow.gateway.websocket.handlers.session import SessionHandshake
 from timeflow.gateway.websocket.handlers.voice_stream import VoiceStreamHandlers
 from timeflow.gateway.websocket.router import MessageRouter
-from timeflow.infrastructure.security.token_verifier import FAKE_ACCOUNT_ID, FakeTokenVerifier
 from timeflow.intelligence.realtime.agent import RealtimeAgent
 from timeflow.intelligence.realtime.instructions import build_instructions
 from timeflow.intelligence.realtime.schedule_tools import SCHEDULE_CREATE, ToolBox
@@ -47,6 +46,22 @@ START: dict[str, Any] = {
     },
 }
 END: dict[str, Any] = {"type": "voice.stream.end", "request_id": "req_002", "payload": {}}
+
+FAKE_ACCOUNT_ID = "acc_fake_001"
+_REJECTED_TOKENS = frozenset({"bad", "invalid", "expired"})
+
+
+class FakeTokenVerifier:
+    """仅供本文件旧数据流集成测试使用的同步令牌替身。"""
+
+    def __init__(self, account_id: str = FAKE_ACCOUNT_ID) -> None:
+        self._account_id = account_id
+
+    def verify(self, access_token: str) -> str | None:
+        """返回测试账户身份，或拒绝明确标记为无效的令牌。"""
+        if not access_token or access_token in _REJECTED_TOKENS:
+            return None
+        return self._account_id
 
 
 class ToolCallingSession:
