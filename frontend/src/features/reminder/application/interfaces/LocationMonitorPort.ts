@@ -1,6 +1,11 @@
-import type { GeoPoint, LocalReminderSchedule, LocationSample } from '../../domain';
+import type { GeoPoint, LocationSample } from '../../domain';
 
 export type LocationWatchMode = 'arrive' | 'return';
+
+/** 围栏重建所需的最小日程标识，避免把完整领域日程泄漏给 infrastructure。 */
+export type LocationRebuildTarget = {
+  schedule_id: string;
+};
 
 export type LocationWatchRequest = {
   schedule_id: string;
@@ -29,7 +34,7 @@ export interface LocationMonitorPort {
   ): Promise<LocationWatchHandle>;
   unwatch(listenerId: string): Promise<void>;
   rebuild(
-    schedules: readonly LocalReminderSchedule[],
+    targets: readonly LocationRebuildTarget[],
     listener: (event: LocationMonitorEvent) => void,
   ): Promise<readonly LocationWatchHandle[]>;
   getLastSample(): Promise<LocationSample | null>;

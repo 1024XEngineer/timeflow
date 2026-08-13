@@ -1,9 +1,8 @@
-import { Alert } from 'react-native';
-
 import type {
   ReminderPresentationAction,
   ReminderPresentationReceipt,
   ReminderPresenterPort,
+  AlertDialogPort,
 } from '../application/interfaces';
 import type { ReminderDeliveryRequest } from '../domain';
 
@@ -16,7 +15,7 @@ const MESSAGE_BY_REASON: Record<string, string> = {
   mock: '日程提醒已触发，请及时处理。',
 };
 
-/** 使用系统 Alert 的提醒展示适配器（无自定义 Dialog 依赖）。 */
+/** 提醒展示编排；平台 Alert 由注入的 AlertDialogPort 完成。 */
 export class AlertReminderPresenter implements ReminderPresenterPort {
   private readonly actionListeners = new Set<
     (event: { schedule_id: string; action: ReminderPresentationAction }) => void
@@ -24,22 +23,28 @@ export class AlertReminderPresenter implements ReminderPresenterPort {
   private visibleScheduleId: string | null = null;
   private readonly suppressed = new Set<string>();
 
+  constructor(private readonly dialog: AlertDialogPort) {}
+
   async show(request: ReminderDeliveryRequest): Promise<ReminderPresentationReceipt> {
     this.suppressed.delete(request.schedule_id);
     this.visibleScheduleId = request.schedule_id;
     const message = MESSAGE_BY_REASON[request.trigger.reason] ?? '日程提醒已触发，请及时处理。';
 
-    Alert.alert(request.title || '日程提醒', message, [
-      {
-        text: '延后',
-        style: 'cancel',
-        onPress: () => this.emit(request.schedule_id, 'snooze'),
-      },
-      {
-        text: '确认',
-        onPress: () => this.emit(request.schedule_id, 'confirm'),
-      },
-    ]);
+    await this.dialog.show({
+      title: request.title || '日程提醒',
+      message,
+      buttons: [
+        {
+          text: '延后',
+          style: 'cancel',
+          onPress: () => this.emit(request.schedule_id, 'snooze'),
+        },
+        {
+          text: '确认',
+          onPress: () => this.emit(request.schedule_id, 'confirm'),
+        },
+      ],
+    });
 
     return {
       presentation_id: `alert-${request.schedule_id}`,

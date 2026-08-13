@@ -1,8 +1,8 @@
-import type { ReminderDeliveryPort } from '../../features/reminder/application/interfaces';
 import type {
+  ReminderDeliveryPort,
   ReminderDeliveryReceipt,
   ReminderDeliveryRequest,
-} from '../../features/reminder/domain';
+} from '../../features/reminder/application/interfaces';
 
 const MOCK_RECEIPT: ReminderDeliveryReceipt = {
   delivery_id: 'mock-delivery-001',

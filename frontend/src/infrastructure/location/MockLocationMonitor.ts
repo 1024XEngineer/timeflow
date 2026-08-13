@@ -1,23 +1,21 @@
 import type {
   LocationMonitorEvent,
   LocationMonitorPort,
+  LocationRebuildTarget,
   LocationWatchHandle,
   LocationWatchRequest,
 } from '../../features/reminder/application/interfaces';
-import type { LocalReminderSchedule, LocationSample } from '../../features/reminder/domain';
+import type { LocationSample } from '../../features/reminder/domain';
+import type { LocationObservation } from '../../contracts/reminder';
 
 import type { LocationProvider } from './LocationProvider';
 
-const MOCK_SAMPLE: LocationSample = {
+const MOCK_SAMPLE: LocationObservation = {
   latitude: 31.2304,
   longitude: 121.4737,
   accuracy_meters: 12,
   observed_at: '2026-08-07T01:00:00.000Z',
 };
-
-function isLocationSchedule(schedule: LocalReminderSchedule): boolean {
-  return schedule.schedule_type === 'location' && schedule.status === 'active';
-}
 
 /** 固定定位能力适配器，不访问平台定位接口。 */
 export class MockLocationMonitor implements LocationMonitorPort, LocationProvider {
@@ -36,12 +34,12 @@ export class MockLocationMonitor implements LocationMonitorPort, LocationProvide
   }
 
   async rebuild(
-    schedules: readonly LocalReminderSchedule[],
+    targets: readonly LocationRebuildTarget[],
     _listener: (event: LocationMonitorEvent) => void,
   ): Promise<readonly LocationWatchHandle[]> {
-    return schedules.filter(isLocationSchedule).map((schedule) => ({
-      listener_id: `mock-location-listener-${schedule.id}`,
-      schedule_id: schedule.id,
+    return targets.map((target) => ({
+      listener_id: `mock-location-listener-${target.schedule_id}`,
+      schedule_id: target.schedule_id,
     }));
   }
 
@@ -49,7 +47,7 @@ export class MockLocationMonitor implements LocationMonitorPort, LocationProvide
     return { ...MOCK_SAMPLE };
   }
 
-  async getCurrentSample(): Promise<LocationSample | null> {
+  async getCurrentSample(): Promise<LocationObservation | null> {
     return { ...MOCK_SAMPLE };
   }
 }

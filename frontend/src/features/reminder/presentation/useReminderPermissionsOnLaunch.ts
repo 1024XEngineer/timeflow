@@ -1,7 +1,10 @@
 import { useEffect, useRef } from 'react';
-import { Alert, AppState, type AppStateStatus, Platform } from 'react-native';
 
-import type { DeviceCapabilityPort, DevicePermission } from '../application/interfaces';
+import type {
+  AlertDialogPort,
+  DeviceCapabilityPort,
+  DevicePermission,
+} from '../application/interfaces';
 
 const PERMISSION_ORDER: DevicePermission[] = [
   'notifications',
@@ -35,30 +38,36 @@ const PERMISSION_PROMPTS: Partial<Record<DevicePermission, { title: string; mess
 };
 
 /**
- * 启动时逐项申请提醒相关权限；通过 DeviceCapabilityPort 访问平台，
- * 不在 UI 层直接依赖 NativeModules。
+ * 启动时逐项申请提醒相关权限；通过 DeviceCapabilityPort / AlertDialogPort 访问平台，
+ * 不在 UI 层直接依赖 react-native。
  */
-export function useReminderPermissionsOnLaunch(device: DeviceCapabilityPort | null): void {
+export function useReminderPermissionsOnLaunch(
+  device: DeviceCapabilityPort | null,
+  dialog: AlertDialogPort | null,
+): void {
   const busyRef = useRef(false);
   const awaitingReturnRef = useRef(false);
   const skippedRef = useRef(new Set<DevicePermission>());
 
   useEffect(() => {
-    if (Platform.OS !== 'android' || device == null) return;
+    if (device == null || dialog == null) return;
+
+    let cancelled = false;
 
     const runPrompt = () => {
+      if (cancelled) return;
       void promptNext().catch(() => {
         busyRef.current = false;
       });
     };
 
     const promptNext = async () => {
-      if (busyRef.current) return;
+      if (busyRef.current || cancelled) return;
       busyRef.current = true;
 
       try {
         const status = await device.getStatus();
-        if (!status.supported) return;
+        if (status.platform !== 'android' || !status.supported) return;
 
         const missing = PERMISSION_ORDER.find((permission) => {
           if (skippedRef.current.has(permission)) return false;
@@ -80,7 +89,7 @@ export function useReminderPermissionsOnLaunch(device: DeviceCapabilityPort | nu
           return;
         }
 
-        const shouldAuthorize = await confirmAsync(prompt.title, prompt.message);
+        const shouldAuthorize = await confirmAsync(dialog, prompt.title, prompt.message);
         if (!shouldAuthorize) {
           skippedRef.current.add(missing);
         } else {
@@ -96,27 +105,30 @@ export function useReminderPermissionsOnLaunch(device: DeviceCapabilityPort | nu
       }
     };
 
-    const onAppStateChange = (state: AppStateStatus) => {
-      if (state !== 'active') return;
+    const unsubscribe = device.onAppActive(() => {
       if (!awaitingReturnRef.current) return;
       awaitingReturnRef.current = false;
       setTimeout(runPrompt, 300);
-    };
+    });
 
     const timer = setTimeout(runPrompt, 600);
-    const subscription = AppState.addEventListener('change', onAppStateChange);
     return () => {
+      cancelled = true;
       clearTimeout(timer);
-      subscription.remove();
+      unsubscribe();
     };
-  }, [device]);
+  }, [device, dialog]);
 }
 
-function confirmAsync(title: string, message: string): Promise<boolean> {
+function confirmAsync(dialog: AlertDialogPort, title: string, message: string): Promise<boolean> {
   return new Promise((resolve) => {
-    Alert.alert(title, message, [
-      { text: '暂不', style: 'cancel', onPress: () => resolve(false) },
-      { text: '去授权', onPress: () => resolve(true) },
-    ]);
+    void dialog.show({
+      title,
+      message,
+      buttons: [
+        { text: '暂不', style: 'cancel', onPress: () => resolve(false) },
+        { text: '去授权', onPress: () => resolve(true) },
+      ],
+    });
   });
 }

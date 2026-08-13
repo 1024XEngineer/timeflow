@@ -35,6 +35,10 @@ export class MockDeviceCapability implements DeviceCapabilityPort {
   async openSettings(_permission: DevicePermission): Promise<boolean> {
     return true;
   }
+
+  onAppActive(_listener: () => void): () => void {
+    return () => undefined;
+  }
 }
 
 export { MOCK_STATUS as MOCK_DEVICE_CAPABILITY_STATUS };

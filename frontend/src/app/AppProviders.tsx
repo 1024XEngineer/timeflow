@@ -6,7 +6,7 @@ import { useReminderPermissionsOnLaunch } from '../features/reminder';
 /** 组合应用级提供器，并启动提醒运行时。 */
 export function AppProviders({ children }: PropsWithChildren) {
   const services = useMemo(() => createAppServices(), []);
-  useReminderPermissionsOnLaunch(services.reminderPorts.device);
+  useReminderPermissionsOnLaunch(services.reminderPorts.device, services.alertDialog);
 
   useEffect(() => {
     void services.runtime.start();

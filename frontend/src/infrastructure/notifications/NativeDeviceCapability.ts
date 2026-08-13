@@ -1,4 +1,4 @@
-import { Platform } from 'react-native';
+import { AppState, Platform, type AppStateStatus } from 'react-native';
 
 import type {
   DeviceCapabilityPort,
@@ -71,6 +71,14 @@ export class NativeDeviceCapability implements DeviceCapabilityPort {
   async openSettings(permission: DevicePermission): Promise<boolean> {
     const kind = SETTINGS_KIND[permission] ?? 'app';
     return nativeOpenAlarmPermissionSettings(kind);
+  }
+
+  onAppActive(listener: () => void): () => void {
+    const onChange = (state: AppStateStatus) => {
+      if (state === 'active') listener();
+    };
+    const subscription = AppState.addEventListener('change', onChange);
+    return () => subscription.remove();
   }
 }
 

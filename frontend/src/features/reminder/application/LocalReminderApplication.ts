@@ -9,6 +9,7 @@ import type {
   AlarmScheduleReceipt,
 } from './interfaces';
 import type {
+  DeliveryChannel,
   LocalReminderSchedule,
   LocationSample,
   ReminderDeliveryReceipt,
@@ -21,6 +22,7 @@ import type {
 } from '../domain';
 import { DEFAULT_SNOOZE_MINUTES } from '../domain';
 import { evaluateGeofence, resolveGeofenceCenter, resolveWatchMode } from '../domain/geofence';
+import { resolveStrengthDeliveryPlan } from '../domain/strengthDelivery';
 import {
   isSnoozeActive,
   isSnoozeExpired,
@@ -283,8 +285,10 @@ export class LocalReminderApplication implements ReminderApplicationPort {
 
     if (!this.isLive(generation)) return [];
 
-    const locationSchedules = active.filter((schedule) => schedule.schedule_type === 'location');
-    const locationHandles = await this.dependencies.location.rebuild(locationSchedules, (event) => {
+    const locationTargets = active
+      .filter((schedule) => schedule.schedule_type === 'location')
+      .map((schedule) => ({ schedule_id: schedule.id }));
+    const locationHandles = await this.dependencies.location.rebuild(locationTargets, (event) => {
       void this.handleLocationMonitorEvent(event);
     });
     const locationBySchedule = new Map<string, LocationWatchHandle>(
@@ -563,25 +567,47 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         });
 
         const request = toDeliveryRequest(schedule, trigger);
-        const receipt = await this.dependencies.delivery.deliver(request);
-        await this.dependencies.presenter.show(request);
-        await this.dependencies.systemNotification.show({
-          notification_id: `reminder-${schedule.id}`,
-          title: schedule.title,
-          body: schedule.location_name ?? schedule.title,
-        });
-        await this.dependencies.popup.show({
-          popup_id: `reminder-${schedule.id}`,
-          title: schedule.title,
-          body: schedule.location_name ?? schedule.title,
-        });
-        await this.dependencies.vibration.vibrate();
+        const plan = resolveStrengthDeliveryPlan(request.strength);
+        const channels: DeliveryChannel[] = [];
+        let usedFallbackAudio = false;
+        let deliveryId = `delivery-${schedule.id}`;
 
-        let audioReceipt = await this.dependencies.audio.playTts({ schedule_id: schedule.id });
-        if (!audioReceipt.played) {
-          audioReceipt = await this.dependencies.audio.playLocalFallback({
-            schedule_id: schedule.id,
+        // Wiki §3.2：low=系统通知；medium=弹窗+短震动；high=弹窗+短震动+TTS（失败则本地音）。
+        if (plan.useSystemNotification) {
+          const receipt = await this.dependencies.delivery.deliver(request);
+          deliveryId = receipt.delivery_id;
+          await this.dependencies.systemNotification.show({
+            notification_id: `reminder-${schedule.id}`,
+            title: schedule.title,
+            body: schedule.location_name ?? schedule.title,
           });
+          channels.push('system_notification');
+        }
+
+        if (plan.usePopup) {
+          await this.dependencies.presenter.show(request);
+          await this.dependencies.popup.show({
+            popup_id: `reminder-${schedule.id}`,
+            title: schedule.title,
+            body: schedule.location_name ?? schedule.title,
+          });
+          channels.push('popup');
+        }
+
+        if (plan.useVibration) {
+          await this.dependencies.vibration.vibrate();
+          channels.push('vibration');
+        }
+
+        if (plan.useAudio) {
+          let audioReceipt = await this.dependencies.audio.playTts({ schedule_id: schedule.id });
+          if (!audioReceipt.played) {
+            audioReceipt = await this.dependencies.audio.playLocalFallback({
+              schedule_id: schedule.id,
+            });
+          }
+          channels.push(audioReceipt.used_local_fallback ? 'local_sound' : 'tts');
+          usedFallbackAudio = audioReceipt.used_local_fallback;
         }
 
         if (!this.isLive(generation)) {
@@ -593,14 +619,11 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         }
 
         return {
-          ...receipt,
-          channels: [
-            ...receipt.channels,
-            'popup',
-            'vibration',
-            audioReceipt.used_local_fallback ? 'local_sound' : 'tts',
-          ],
-          used_fallback_audio: audioReceipt.used_local_fallback,
+          delivery_id: deliveryId,
+          schedule_id: schedule.id,
+          delivered_at: trigger.triggered_at,
+          channels,
+          used_fallback_audio: usedFallbackAudio,
         };
       } catch (error) {
         if (!this.acceptingWork || this.isLive(generation)) {
