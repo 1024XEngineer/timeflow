@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -86,6 +87,15 @@ def create_app(
                 owned_engine.dispose()
 
     application = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+    if settings.cors_allowed_origins:
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(settings.cors_allowed_origins),
+            allow_credentials=False,
+            allow_methods=["GET", "POST"],
+            allow_headers=["Authorization", "Content-Type"],
+            expose_headers=["Retry-After", "X-Auth-Event-Id"],
+        )
     health_service = HealthService()
 
     handshake = SessionHandshake(access_tokens)

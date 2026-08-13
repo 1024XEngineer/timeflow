@@ -16,40 +16,71 @@ const response: AuthAccessResponse = {
 };
 
 describe('createAuthSession', () => {
-  it('calculates its expiry from the fixed TTL', () => {
-    expect(createAuthSession(response, 1_000_000)).toEqual({
+  it.each([
+    [60, 1_060_000],
+    [3600, 4_600_000],
+    [7200, 8_200_000],
+  ])('calculates its expiry from the %i-second response TTL', (expiresIn, expiresAt) => {
+    expect(
+      createAuthSession({ ...response, expires_in: expiresIn }, '  timeflow_user  ', 1_000_000),
+    ).toEqual({
       accountId: 'acc_001',
       accessToken: '  opaque access token  ',
-      expiresAt: 4_600_000,
+      expiresAt,
+      username: 'timeflow_user',
     });
   });
 
   it('preserves the opaque token verbatim', () => {
-    expect(createAuthSession(response, 0).accessToken).toBe('  opaque access token  ');
+    expect(createAuthSession(response, 'timeflow_user', 0).accessToken).toBe(
+      '  opaque access token  ',
+    );
   });
 
   it('throws a fixed redacted error for an invalid response', () => {
     const rawToken = 'secret-token-must-not-appear';
 
     expect(() =>
-      createAuthSession({ account_id: 'acc_001', access_token: rawToken, expires_in: 3599 }, 0),
+      createAuthSession(
+        { account_id: 'acc_001', access_token: rawToken, expires_in: 0 },
+        'timeflow_user',
+        0,
+      ),
     ).toThrow('Invalid authentication access response');
     expect(() =>
-      createAuthSession({ account_id: 'acc_001', access_token: rawToken, expires_in: 3599 }, 0),
+      createAuthSession(
+        { account_id: 'acc_001', access_token: rawToken, expires_in: 0 },
+        'timeflow_user',
+        0,
+      ),
     ).not.toThrow(rawToken);
+  });
+
+  it.each([undefined, '', '   '])('rejects an invalid username without exposing it', (username) => {
+    expect(() => createAuthSession(response, username, 0)).toThrow(
+      'Invalid authentication access response',
+    );
   });
 });
 
 describe('isAuthSession', () => {
   it.each([
-    [{ accountId: 'acc_001', accessToken: 'token', expiresAt: 1 }, true],
-    [{ accountId: '', accessToken: 'token', expiresAt: 1 }, false],
-    [{ accountId: '   ', accessToken: 'token', expiresAt: 1 }, false],
-    [{ accountId: 'acc_001', accessToken: '', expiresAt: 1 }, false],
-    [{ accountId: 'acc_001', accessToken: '   ', expiresAt: 1 }, false],
-    [{ accountId: 'acc_001', accessToken: 'token', expiresAt: Infinity }, false],
+    [{ accountId: 'acc_001', accessToken: 'token', expiresAt: 1, username: 'timeflow_user' }, true],
+    [{ accountId: '', accessToken: 'token', expiresAt: 1, username: 'timeflow_user' }, false],
+    [{ accountId: '   ', accessToken: 'token', expiresAt: 1, username: 'timeflow_user' }, false],
+    [{ accountId: 'acc_001', accessToken: '', expiresAt: 1, username: 'timeflow_user' }, false],
+    [{ accountId: 'acc_001', accessToken: '   ', expiresAt: 1, username: 'timeflow_user' }, false],
+    [{ accountId: 'acc_001', accessToken: 'token', expiresAt: Infinity, username: 'user' }, false],
+    [{ accountId: 'acc_001', accessToken: 'token', expiresAt: 1 }, false],
+    [{ accountId: 'acc_001', accessToken: 'token', expiresAt: 1, username: '' }, false],
+    [{ accountId: 'acc_001', accessToken: 'token', expiresAt: 1, username: '   ' }, false],
     [
-      Object.assign([] as unknown[], { accountId: 'acc_001', accessToken: 'token', expiresAt: 1 }),
+      Object.assign([] as unknown[], {
+        accountId: 'acc_001',
+        accessToken: 'token',
+        expiresAt: 1,
+        username: 'timeflow_user',
+      }),
       false,
     ],
   ])('validates session fields for %p', (session, expected) => {
@@ -58,7 +89,12 @@ describe('isAuthSession', () => {
 });
 
 describe('isObviouslyExpired', () => {
-  const session = { accountId: 'acc_001', accessToken: 'token', expiresAt: 130_000 };
+  const session = {
+    accountId: 'acc_001',
+    accessToken: 'token',
+    expiresAt: 130_000,
+    username: 'timeflow_user',
+  };
 
   it('treats the 30-second boundary as expired', () => {
     expect(isObviouslyExpired(session, 100_000)).toBe(true);
@@ -74,12 +110,12 @@ describe('auth state discriminated unions', () => {
     const states: AuthState[] = [
       { status: 'loading', initializationError: 'Session restoration failed' },
       { status: 'unauthenticated' },
-      { status: 'authenticated', session: createAuthSession(response, 0) },
+      { status: 'authenticated', session: createAuthSession(response, 'timeflow_user', 0) },
     ];
     const viewStates: AuthViewState[] = [
       { status: 'loading', initializationError: 'Session restoration failed' },
       { status: 'unauthenticated' },
-      { status: 'authenticated', accountId: 'acc_001' },
+      { status: 'authenticated', accountId: 'acc_001', username: 'timeflow_user' },
     ];
 
     expect(states.map((state) => state.status)).toEqual([

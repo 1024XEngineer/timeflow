@@ -6,6 +6,7 @@ const session = {
   accountId: 'acc_001',
   accessToken: 'opaque-token-value',
   expiresAt: 1_030_001,
+  username: 'timeflow_user',
 };
 
 const persistentStorageGlobals = ['localStorage', 'sessionStorage', 'indexedDB'] as const;

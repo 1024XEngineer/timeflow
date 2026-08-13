@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { describe, expect, it, jest } from '@jest/globals';
 
-import type { ScheduleCalendarReadService } from '../application';
-import { ScheduleCalendarScreen } from './ScheduleCalendarScreen';
+import type { ScheduleCalendarReadService } from '../../../../../src/features/schedule/application';
+import { ScheduleCalendarScreen } from '../../../../../src/features/schedule/presentation/ScheduleCalendarScreen';
 
 function createService(): ScheduleCalendarReadService {
   return {

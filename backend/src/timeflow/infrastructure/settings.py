@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from os import environ
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -25,6 +26,7 @@ class Settings:
     ws_max_unauthenticated_connections: int
     ws_audio_queue_max_chunks: int
     ws_max_audio_duration_ms: int
+    cors_allowed_origins: tuple[str, ...] = ()
     jwt_secret: str = field(default="", repr=False)
     jwt_issuer: str = JWT_ISSUER
     jwt_audience: str = JWT_AUDIENCE
@@ -118,6 +120,9 @@ class Settings:
             ws_max_audio_duration_ms=int(
                 environ.get("TIMEFLOW_WS_MAX_AUDIO_DURATION_MS", "120000")
             ),
+            cors_allowed_origins=_parse_cors_allowed_origins(
+                environ.get("TIMEFLOW_CORS_ALLOWED_ORIGINS", "")
+            ),
             jwt_secret=environ.get("TIMEFLOW_JWT_SECRET", ""),
             jwt_issuer=environ.get("TIMEFLOW_JWT_ISSUER", JWT_ISSUER),
             jwt_audience=environ.get("TIMEFLOW_JWT_AUDIENCE", JWT_AUDIENCE),
@@ -164,6 +169,30 @@ class Settings:
         that sets just these gets a working model rather than a puzzling half-configured one.
         """
         return bool(self.aliyun_audio_api_key and self.aliyun_audio_workspace_id)
+
+
+def _parse_cors_allowed_origins(raw_value: str) -> tuple[str, ...]:
+    """规范化明确的 HTTP(S) 来源，并拒绝通配符与带路径的配置。"""
+    origins: list[str] = []
+    for item in raw_value.split(","):
+        origin = item.strip().rstrip("/")
+        if not origin:
+            continue
+        parsed = urlsplit(origin)
+        if (
+            origin == "*"
+            or parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "TIMEFLOW_CORS_ALLOWED_ORIGINS must contain only explicit HTTP(S) origins"
+            )
+        if origin not in origins:
+            origins.append(origin)
+    return tuple(origins)
 
 
 @lru_cache

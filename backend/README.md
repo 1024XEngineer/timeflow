@@ -23,6 +23,29 @@ The API is available at `http://127.0.0.1:8000`. Health check:
 curl http://127.0.0.1:8000/api/v1/health
 ```
 
+## Authentication integration smoke
+
+Start PostgreSQL and the API from the repository root. Compose applies migrations before
+starting Uvicorn and requires a JWT secret with at least 32 UTF-8 bytes:
+
+```bash
+TIMEFLOW_JWT_SECRET=replace-with-a-private-random-value docker compose up -d --build
+```
+
+Then verify the health endpoint, Expo Web CORS preflight, new and existing account access,
+and the authenticated WebSocket handshake. The command never prints credentials or tokens:
+
+```bash
+uv run python scripts/auth_integration_smoke.py
+```
+
+To exercise the real frontend authentication adapter and controller against the same API:
+
+```bash
+cd ../frontend
+EXPO_PUBLIC_API_URL=http://127.0.0.1:8000/api/v1 npm run test:auth:live
+```
+
 ## Verification
 
 Run the complete backend quality gate:

@@ -8,7 +8,7 @@ import {
   WebSocketNotReadyError,
   WebSocketUnauthenticatedError,
 } from '../../../../src/infrastructure/websocket';
-import { FakeWebSocket } from '../../../../src/infrastructure/websocket/testing/FakeWebSocket';
+import { FakeWebSocket } from '../../../fakes/FakeWebSocket';
 
 describe('AuthenticatedWebSocketClient', () => {
   afterEach(() => {
@@ -258,7 +258,12 @@ describe('AuthenticatedWebSocketClient', () => {
       controller: {
         getAccessToken: () => 'opaque-token',
         getState: () => ({
-          session: { accountId: 'acc_001', accessToken: 'opaque-token', expiresAt: 200_000 },
+          session: {
+            accountId: 'acc_001',
+            accessToken: 'opaque-token',
+            expiresAt: 200_000,
+            username: 'timeflow_user',
+          },
           status: 'authenticated' as const,
         }),
         invalidate,

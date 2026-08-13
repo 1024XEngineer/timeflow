@@ -7,18 +7,13 @@ import {
   useSyncExternalStore,
 } from 'react';
 
-import {
-  type AuthController,
-  type AuthInvalidationCoordinator,
-  type AuthInvalidationReason,
-} from '../application';
+import { type AuthController, type AuthInvalidationCoordinator } from '../application';
 import type { AuthAccessRequest } from '../../../contracts/auth';
 import type { AuthViewState } from '../domain';
 
 interface AuthContextValue {
   readonly viewState: AuthViewState;
   readonly authenticate: (credentials: AuthAccessRequest) => Promise<void>;
-  readonly invalidate: (reason: AuthInvalidationReason) => Promise<void>;
   readonly retryInitialization: () => Promise<void>;
   readonly signOut: () => Promise<void>;
 }
@@ -47,10 +42,9 @@ export function AuthProvider({
   const value = useMemo<AuthContextValue>(
     () => ({
       authenticate: (credentials) => controller.authenticate(credentials),
-      invalidate: (reason) =>
-        invalidationCoordinator?.invalidate(reason) ?? controller.invalidate(reason),
       retryInitialization: () => controller.retryInitialization(),
-      signOut: () => invalidationCoordinator?.invalidate('revoked') ?? controller.signOut(),
+      signOut: () =>
+        invalidationCoordinator?.invalidate('revoked') ?? controller.invalidate('revoked'),
       viewState,
     }),
     [controller, invalidationCoordinator, viewState],

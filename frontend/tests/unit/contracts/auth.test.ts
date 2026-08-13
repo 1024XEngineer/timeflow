@@ -14,6 +14,11 @@ describe('parseAuthErrorEnvelope', () => {
       true,
     ],
     [
+      'accepts the backend rate-limit envelope',
+      { error: { code: 'AUTH_RATE_LIMITED', message: 'Too many authentication requests' } },
+      true,
+    ],
+    [
       'rejects the legacy top-level code',
       { code: 'AUTH_INVALID_CREDENTIALS', message: 'Invalid credentials' },
       false,
@@ -35,5 +40,6 @@ describe('parseAuthErrorEnvelope', () => {
     expect(isAuthAccessErrorCode('AUTH_REQUIRED')).toBe(true);
     expect(isAuthAccessErrorCode('AUTH_INVALID_TOKEN')).toBe(true);
     expect(isAuthAccessErrorCode('AUTH_INVALID_CREDENTIALS')).toBe(false);
+    expect(isAuthAccessErrorCode('AUTH_RATE_LIMITED')).toBe(false);
   });
 });

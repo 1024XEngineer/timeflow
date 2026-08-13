@@ -31,7 +31,9 @@ export function isAuthAccessResponse(value: unknown): value is AuthAccessRespons
     hasOwnProperty(value, 'expires_in') &&
     isNonBlankString(value.account_id) &&
     isNonBlankString(value.access_token) &&
-    value.expires_in === 3600
+    typeof value.expires_in === 'number' &&
+    Number.isFinite(value.expires_in) &&
+    value.expires_in > 0
   );
 }
 
@@ -44,6 +46,7 @@ export const AUTH_INVALID_PASSWORD = 'AUTH_INVALID_PASSWORD';
 export const AUTH_INVALID_CREDENTIALS = 'AUTH_INVALID_CREDENTIALS';
 export const AUTH_REQUIRED = 'AUTH_REQUIRED';
 export const AUTH_INVALID_TOKEN = 'AUTH_INVALID_TOKEN';
+export const AUTH_RATE_LIMITED = 'AUTH_RATE_LIMITED';
 export const AUTH_INTERNAL_ERROR = 'AUTH_INTERNAL_ERROR';
 
 /** 冻结认证错误码，客户端只接受契约内的值。 */
@@ -53,6 +56,7 @@ export const AUTH_ERROR_CODES = Object.freeze([
   AUTH_INVALID_CREDENTIALS,
   AUTH_REQUIRED,
   AUTH_INVALID_TOKEN,
+  AUTH_RATE_LIMITED,
   AUTH_INTERNAL_ERROR,
 ] as const);
 

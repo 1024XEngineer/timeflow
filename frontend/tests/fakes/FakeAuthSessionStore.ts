@@ -1,5 +1,5 @@
-import type { AuthSessionStore } from '../application/interfaces';
-import type { AuthSession } from '../domain';
+import type { AuthSessionStore } from '../../src/features/auth/application/interfaces';
+import type { AuthSession } from '../../src/features/auth/domain';
 
 /** 认证应用层测试共用的可控存储，集中表达读写和清理故障。 */
 export class FakeAuthSessionStore implements AuthSessionStore {
