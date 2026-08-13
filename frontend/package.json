@@ -49,6 +49,7 @@
     "format:check": "prettier --check .",
     "test": "npm run test:vitest && npm run test:jest",
     "test:jest": "jest --runInBand",
+    "test:auth:live": "jest --runInBand --env=node --runTestsByPath tests/integration/authBackend.live.ts --testMatch \"**/tests/integration/authBackend.live.ts\"",
     "test:vitest": "vitest run tests --exclude \"tests/unit/**\" --exclude \"tests/integration/**/*.integration.test.ts\"",
     "typecheck": "tsc --noEmit",
     "check": "npm run lint && npm run format:check && npm run typecheck && npm run test",
@@ -58,7 +59,6 @@
   "jest": {
     "preset": "jest-expo",
     "roots": [
-      "<rootDir>/src",
       "<rootDir>/tests/unit",
       "<rootDir>/tests/integration"
     ],

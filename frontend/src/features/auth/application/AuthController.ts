@@ -54,7 +54,7 @@ export class AuthController {
 
   async authenticate(credentials: AuthAccessRequest): Promise<void> {
     const response = await this.options.authAccess(credentials);
-    const session = createAuthSession(response, this.options.now());
+    const session = createAuthSession(response, credentials.username, this.options.now());
     await this.retrier.cancel();
     try {
       await this.options.store.write(session);
@@ -66,10 +66,6 @@ export class AuthController {
   }
 
   async invalidate(_reason: AuthInvalidationReason): Promise<void> {
-    await this.clearAndUnauthenticate();
-  }
-
-  async signOut(): Promise<void> {
     await this.clearAndUnauthenticate();
   }
 
@@ -118,7 +114,11 @@ export class AuthController {
 /** 集中脱敏映射，确保任何展示订阅都无法获得会话或 Token。 */
 function toViewState(state: AuthState): AuthViewState {
   if (state.status === 'authenticated') {
-    return { accountId: state.session.accountId, status: 'authenticated' };
+    return {
+      accountId: state.session.accountId,
+      status: 'authenticated',
+      username: state.session.username,
+    };
   }
   return state.status === 'loading'
     ? { initializationError: state.initializationError, status: 'loading' }

@@ -1,4 +1,4 @@
-export { accessAuth, createAuthAccess } from './auth';
+export { createAuthAccess } from './auth';
 export {
   createAuthSessionStore,
   type CreateAuthSessionStoreOptions,

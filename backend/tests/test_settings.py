@@ -39,6 +39,7 @@ JWT_ENVIRONMENT_VARIABLES = (
     "TIMEFLOW_JWT_AUDIENCE",
     "TIMEFLOW_JWT_ACCESS_TTL_SECONDS",
 )
+CORS_ENVIRONMENT_VARIABLES = ("TIMEFLOW_CORS_ALLOWED_ORIGINS",)
 
 
 def clear_asr_environment(monkeypatch: MonkeyPatch) -> None:
@@ -64,7 +65,7 @@ def clear_model_environment(monkeypatch: MonkeyPatch) -> None:
     clear_asr_environment(monkeypatch)
     clear_llm_environment(monkeypatch)
     clear_tts_environment(monkeypatch)
-    for name in JWT_ENVIRONMENT_VARIABLES:
+    for name in JWT_ENVIRONMENT_VARIABLES + CORS_ENVIRONMENT_VARIABLES:
         monkeypatch.delenv(name, raising=False)
 
 
@@ -193,6 +194,24 @@ def test_settings_carry_explicit_jwt_environment_values(
     assert "configured-secret" not in repr(settings)
 
 
+def test_settings_normalize_explicit_cors_origins(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    clear_model_environment(monkeypatch)
+    monkeypatch.setenv(
+        "TIMEFLOW_CORS_ALLOWED_ORIGINS",
+        " http://localhost:8081/,https://app.example.com,http://localhost:8081 ",
+    )
+
+    settings = Settings.from_environment(tmp_path / "missing.env")
+
+    assert settings.cors_allowed_origins == (
+        "http://localhost:8081",
+        "https://app.example.com",
+    )
+
+
 def test_settings_convert_asr_environment_values(monkeypatch: MonkeyPatch) -> None:
     clear_model_environment(monkeypatch)
     monkeypatch.setenv("TIMEFLOW_ALIYUN_ASR_WS_URL", "wss://example.invalid/ws")
@@ -311,6 +330,16 @@ def test_settings_convert_tts_environment_values(monkeypatch: MonkeyPatch) -> No
             "TIMEFLOW_ALIYUN_TTS_TASK_TIMEOUT_SECONDS",
             "-1",
             "TTS timeouts must be greater than zero",
+        ),
+        (
+            "TIMEFLOW_CORS_ALLOWED_ORIGINS",
+            "*",
+            r"TIMEFLOW_CORS_ALLOWED_ORIGINS must contain only explicit HTTP\(S\) origins",
+        ),
+        (
+            "TIMEFLOW_CORS_ALLOWED_ORIGINS",
+            "https://app.example.com/path",
+            r"TIMEFLOW_CORS_ALLOWED_ORIGINS must contain only explicit HTTP\(S\) origins",
         ),
     ],
 )

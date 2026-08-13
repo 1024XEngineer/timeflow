@@ -4,7 +4,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-
 import { AuthAccessError, type AuthAccess } from '../../../src/contracts/auth';
 import { AuthController } from '../../../src/features/auth/application';
 import { AuthProvider } from '../../../src/features/auth/presentation/AuthProvider';
-import { FakeAuthSessionStore } from '../../../src/features/auth/testing/FakeAuthSessionStore';
+import { FakeAuthSessionStore } from '../../fakes/FakeAuthSessionStore';
 import { LoginScreen } from '../../../src/screens/LoginScreen';
 
 function renderLogin(authAccess: AuthAccess) {
@@ -61,6 +61,7 @@ describe('LoginScreen', () => {
 
   it.each([
     [new AuthAccessError('business', 'AUTH_INVALID_CREDENTIALS'), '用户名或密码错误'],
+    [new AuthAccessError('business', 'AUTH_RATE_LIMITED'), '请求过于频繁，请稍后重试'],
     [new AuthAccessError('network'), '无法连接服务器，请检查网络后重试'],
     [new AuthAccessError('timeout'), '请求超时，请稍后重试'],
   ])('shows the safe error for %p', async (error, message) => {

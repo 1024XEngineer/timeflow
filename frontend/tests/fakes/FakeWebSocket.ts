@@ -3,7 +3,7 @@ import type {
   WebSocketErrorEvent,
   WebSocketMessageEvent,
   WebSocketPort,
-} from '../WebSocketPort';
+} from '../../src/infrastructure/websocket/WebSocketPort';
 
 /** WebSocket 单元测试唯一可控 Fake，显式驱动连接事件。 */
 export class FakeWebSocket implements WebSocketPort {

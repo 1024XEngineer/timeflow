@@ -22,6 +22,13 @@ describe('auth feature structure', () => {
 
     expect(imports).toEqual(['src/features/auth/data/createAuthSessionStore.ts']);
   });
+
+  it('keeps account test doubles in the test tree', () => {
+    expect(existsSync(resolve(projectRoot, 'src/features/auth/testing'))).toBe(false);
+    expect(existsSync(resolve(projectRoot, 'src/infrastructure/websocket/testing'))).toBe(false);
+    expect(existsSync(resolve(projectRoot, 'tests/fakes/FakeAuthSessionStore.ts'))).toBe(true);
+    expect(existsSync(resolve(projectRoot, 'tests/fakes/FakeWebSocket.ts'))).toBe(true);
+  });
 });
 
 function listSourceFiles(directory: string): string[] {

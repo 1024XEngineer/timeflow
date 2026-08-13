@@ -11,6 +11,7 @@ const session = {
   accountId: 'acc_001',
   accessToken: 'opaque-token-value',
   expiresAt: now + 30_001,
+  username: 'timeflow_user',
 };
 
 describe('auth session record codec', () => {
@@ -33,7 +34,7 @@ describe('auth session record codec', () => {
     const record = encodeAuthSessionRecord({ ...session, accessToken: opaqueToken });
 
     expect(record).toBe(
-      JSON.stringify({ version: 1, session: { ...session, accessToken: opaqueToken } }),
+      JSON.stringify({ version: 2, session: { ...session, accessToken: opaqueToken } }),
     );
     expect(decodeAuthSessionRecord(record, now)?.accessToken).toBe(opaqueToken);
   });
@@ -47,11 +48,11 @@ describe('auth session record codec', () => {
 
     const record = encodeAuthSessionRecord(sessionWithUnexpectedFields);
     const decoded = decodeAuthSessionRecord(
-      JSON.stringify({ version: 1, session: sessionWithUnexpectedFields }),
+      JSON.stringify({ version: 2, session: sessionWithUnexpectedFields }),
       now,
     );
 
-    expect(JSON.parse(record)).toEqual({ version: 1, session });
+    expect(JSON.parse(record)).toEqual({ version: 2, session });
     expect(record).not.toContain(sensitiveSentinel);
     expect(decoded).toEqual(session);
   });
@@ -60,15 +61,24 @@ describe('auth session record codec', () => {
     ['invalid JSON', '{'],
     ['null', 'null'],
     ['an array', '[]'],
-    ['an unknown version', JSON.stringify({ version: 2, session })],
-    ['a missing session', JSON.stringify({ version: 1 })],
+    ['a v1 record without username migration', JSON.stringify({ version: 1, session })],
+    ['an unknown version', JSON.stringify({ version: 3, session })],
+    ['a missing session', JSON.stringify({ version: 2 })],
     [
       'a whitespace-only token',
-      JSON.stringify({ version: 1, session: { ...session, accessToken: '   ' } }),
+      JSON.stringify({ version: 2, session: { ...session, accessToken: '   ' } }),
     ],
     [
       'an infinite expiry',
-      JSON.stringify({ version: 1, session: { ...session, expiresAt: Infinity } }),
+      JSON.stringify({ version: 2, session: { ...session, expiresAt: Infinity } }),
+    ],
+    [
+      'a missing username',
+      JSON.stringify({ version: 2, session: { ...session, username: undefined } }),
+    ],
+    [
+      'a whitespace-only username',
+      JSON.stringify({ version: 2, session: { ...session, username: '   ' } }),
     ],
   ])('returns undefined for %s', (_description, record) => {
     expect(decodeAuthSessionRecord(record, now)).toBeUndefined();
@@ -77,13 +87,13 @@ describe('auth session record codec', () => {
   it('treats the expiry-skew boundary as invalid while accepting the next millisecond', () => {
     expect(
       decodeAuthSessionRecord(
-        JSON.stringify({ version: 1, session: { ...session, expiresAt: now + 30_000 } }),
+        JSON.stringify({ version: 2, session: { ...session, expiresAt: now + 30_000 } }),
         now,
       ),
     ).toBeUndefined();
     expect(
       decodeAuthSessionRecord(
-        JSON.stringify({ version: 1, session: { ...session, expiresAt: now + 30_001 } }),
+        JSON.stringify({ version: 2, session: { ...session, expiresAt: now + 30_001 } }),
         now,
       ),
     ).toEqual({ ...session, expiresAt: now + 30_001 });
@@ -96,12 +106,12 @@ describe('auth session record codec', () => {
     try {
       // eslint-disable-next-line no-extend-native -- 受控原型污染回归测试；finally 会恢复并隔离全局状态。
       Object.defineProperties(Object.prototype, {
-        version: { configurable: true, value: 1 },
+        version: { configurable: true, value: 2 },
         session: { configurable: true, value: session },
       });
 
       expect(decodeAuthSessionRecord('{}', now)).toBeUndefined();
-      expect(decodeAuthSessionRecord(JSON.stringify({ version: 1 }), now)).toBeUndefined();
+      expect(decodeAuthSessionRecord(JSON.stringify({ version: 2 }), now)).toBeUndefined();
       expect(decodeAuthSessionRecord(JSON.stringify({ session }), now)).toBeUndefined();
     } finally {
       restoreObjectPrototypeProperty('version', versionDescriptor);
@@ -113,10 +123,20 @@ describe('auth session record codec', () => {
     const rawToken = 'secret-token-must-not-appear';
 
     expect(() =>
-      encodeAuthSessionRecord({ accountId: 'acc_001', accessToken: rawToken, expiresAt: Infinity }),
+      encodeAuthSessionRecord({
+        accountId: 'acc_001',
+        accessToken: rawToken,
+        expiresAt: Infinity,
+        username: 'timeflow_user',
+      }),
     ).toThrow('Invalid authentication session record');
     expect(() =>
-      encodeAuthSessionRecord({ accountId: 'acc_001', accessToken: rawToken, expiresAt: Infinity }),
+      encodeAuthSessionRecord({
+        accountId: 'acc_001',
+        accessToken: rawToken,
+        expiresAt: Infinity,
+        username: 'timeflow_user',
+      }),
     ).not.toThrow(rawToken);
   });
 });

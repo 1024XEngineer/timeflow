@@ -102,10 +102,6 @@ export function createProtectedApiClient(options: CreateApiClientOptions): ApiRe
     request<T>(path, { ...init, auth: 'protected' });
 }
 
-/** 兼容默认公开请求；业务调用应在 app 组合处取得受保护 client。 */
-export const publicApiFetch = createPublicApiClient();
-export const apiFetch = publicApiFetch;
-
 async function getProtectedToken(coordinator: AuthInvalidationPort | undefined): Promise<string> {
   if (!coordinator || coordinator.isInvalidating()) {
     throw new ApiUnauthenticatedError();

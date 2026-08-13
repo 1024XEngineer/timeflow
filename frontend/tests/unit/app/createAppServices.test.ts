@@ -1,7 +1,7 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
 import { createAppServices } from '../../../src/app/composition/createAppServices';
-import { FakeAuthSessionStore } from '../../../src/features/auth/testing/FakeAuthSessionStore';
+import { FakeAuthSessionStore } from '../../fakes/FakeAuthSessionStore';
 
 describe('createAppServices', () => {
   it('exposes authenticated transports and registers production account cleaners', async () => {

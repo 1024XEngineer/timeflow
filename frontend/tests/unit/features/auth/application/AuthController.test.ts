@@ -2,7 +2,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 
 import { AuthController } from '../../../../../src/features/auth/application/AuthController';
 import { AuthSessionCleanupRequiredError } from '../../../../../src/features/auth/application/interfaces';
-import { FakeAuthSessionStore } from '../../../../../src/features/auth/testing/FakeAuthSessionStore';
+import { FakeAuthSessionStore } from '../../../../fakes/FakeAuthSessionStore';
 
 const credentials = { password: 'password123', username: 'timeflow_user' };
 const response = { access_token: 'opaque-token', account_id: 'acc_001', expires_in: 3600 };
@@ -11,7 +11,12 @@ describe('AuthController', () => {
   it.each([
     [
       'restores a valid record',
-      { accountId: 'acc_001', accessToken: 'token', expiresAt: 200_000 },
+      {
+        accountId: 'acc_001',
+        accessToken: 'token',
+        expiresAt: 200_000,
+        username: 'timeflow_user',
+      },
       undefined,
       'authenticated',
     ],
@@ -30,7 +35,12 @@ describe('AuthController', () => {
     ],
     [
       'cleans up an obviously expired record',
-      { accountId: 'acc_001', accessToken: 'token', expiresAt: 130_000 },
+      {
+        accountId: 'acc_001',
+        accessToken: 'token',
+        expiresAt: 130_000,
+        username: 'timeflow_user',
+      },
       undefined,
       'unauthenticated',
     ],
@@ -74,7 +84,7 @@ describe('AuthController', () => {
 
     await controller.authenticate(credentials);
 
-    expect(store.session).toMatchObject({ accountId: 'acc_001' });
+    expect(store.session).toMatchObject({ accountId: 'acc_001', username: 'timeflow_user' });
     expect(controller.getState().status).toBe('authenticated');
     expect(controller.getAccessToken()).toBe('opaque-token');
   });
@@ -109,7 +119,12 @@ describe('AuthController', () => {
 
   it('blocks a new session write until an old deferred clear has finished', async () => {
     const store = new FakeAuthSessionStore();
-    store.session = { accountId: 'old', accessToken: 'old-token', expiresAt: 200_000 };
+    store.session = {
+      accountId: 'old',
+      accessToken: 'old-token',
+      expiresAt: 200_000,
+      username: 'old_user',
+    };
     const deferred = createDeferred<void>();
     store.beforeClear = () => deferred.promise;
     const controller = new AuthController({
@@ -119,7 +134,7 @@ describe('AuthController', () => {
     });
     await controller.initialize();
 
-    const signingOut = controller.signOut();
+    const signingOut = controller.invalidate('revoked');
     await Promise.resolve();
     const authenticating = controller.authenticate(credentials);
     await Promise.resolve();
