@@ -183,7 +183,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         return;
       }
 
-      await this.hydrateNativeDispositions();
+      await this.hydrateNativeDispositions(generation);
       if (!this.isLive(generation)) {
         await this.stopInternal();
         return;
@@ -728,20 +728,24 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     });
   }
 
-  private async hydrateNativeDispositions(): Promise<void> {
+  private async hydrateNativeDispositions(generation: number): Promise<void> {
     const rows = await this.dependencies.alarms.consumeNativeDispositions?.();
     if (rows == null || rows.length === 0) return;
 
     for (const row of rows) {
+      if (!this.isLive(generation)) return;
       if (row.state === 'confirmed') {
-        await this.confirm(row.schedule_id, row.updated_at);
+        await this.confirmInternal(row.schedule_id, row.updated_at, generation);
         continue;
       }
       if (row.state === 'snoozed') {
-        await this.snooze({
-          schedule_id: row.schedule_id,
-          snooze_minutes: DEFAULT_SNOOZE_MINUTES,
-        });
+        await this.snoozeInternal(
+          {
+            schedule_id: row.schedule_id,
+            snooze_minutes: DEFAULT_SNOOZE_MINUTES,
+          },
+          generation,
+        );
         continue;
       }
       await this.acknowledgeNativeFire(row.schedule_id, row.updated_at);

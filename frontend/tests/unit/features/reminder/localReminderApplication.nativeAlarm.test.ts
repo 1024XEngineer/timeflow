@@ -3,6 +3,7 @@ import { waitFor } from '@testing-library/react-native';
 
 import { LocalReminderApplication } from '../../../../src/features/reminder/application/LocalReminderApplication';
 import type {
+  AlarmNativeDisposition,
   AlarmNativeEvent,
   AlarmScheduleReceipt,
   AlarmScheduleRequest,
@@ -86,6 +87,7 @@ class RecordingPresenter {
 class FakeAlarms implements AlarmSchedulerPort {
   listener: ((event: AlarmNativeEvent) => void) | null = null;
   stopCount = 0;
+  dispositions: AlarmNativeDisposition[] = [];
 
   async schedule(request: AlarmScheduleRequest): Promise<AlarmScheduleReceipt> {
     return {
@@ -117,7 +119,9 @@ class FakeAlarms implements AlarmSchedulerPort {
   }
 
   async consumeNativeDispositions() {
-    return [];
+    const rows = this.dispositions;
+    this.dispositions = [];
+    return rows;
   }
 }
 
@@ -174,6 +178,49 @@ describe('LocalReminderApplication native alarm events', () => {
 
     await app.handleTime({ observed_at: FUTURE });
     expect(presenter.shown).toEqual([]);
+    await app.stop();
+  });
+
+  it('hydrates a confirmed native disposition without deadlocking start', async () => {
+    const schedules = new InMemoryLocalScheduleReader();
+    schedules.upsert(SCHEDULE);
+    const alarms = new FakeAlarms();
+    alarms.dispositions = [
+      {
+        schedule_id: SCHEDULE.id,
+        alarm_id: 'alarm-schedule-time',
+        state: 'confirmed',
+        updated_at: NOW,
+      },
+    ];
+    const presenter = new RecordingPresenter();
+    const app = new LocalReminderApplication(ports(schedules, alarms, presenter));
+
+    await expect(app.start()).resolves.toBeUndefined();
+    const runtime = await app.dependencies.state.read(SCHEDULE.id);
+    expect(runtime?.reminder_disposition_state).toBe('confirmed');
+    await app.stop();
+  });
+
+  it('hydrates a snoozed native disposition without deadlocking start', async () => {
+    const schedules = new InMemoryLocalScheduleReader();
+    schedules.upsert(SCHEDULE);
+    const alarms = new FakeAlarms();
+    alarms.dispositions = [
+      {
+        schedule_id: SCHEDULE.id,
+        alarm_id: 'alarm-schedule-time',
+        state: 'snoozed',
+        updated_at: NOW,
+      },
+    ];
+    const presenter = new RecordingPresenter();
+    const app = new LocalReminderApplication(ports(schedules, alarms, presenter));
+
+    await expect(app.start()).resolves.toBeUndefined();
+    const runtime = await app.dependencies.state.read(SCHEDULE.id);
+    expect(runtime?.reminder_disposition_state).toBe('snoozed');
+    expect(runtime?.snoozed_until).toEqual(expect.any(String));
     await app.stop();
   });
 });
