@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 
 import pytest
@@ -218,6 +219,46 @@ def test_query_update_and_delete_arguments_map_to_business_contracts() -> None:
     )
 
 
+def test_update_maps_every_editable_field_without_dropping_explicit_nulls() -> None:
+    command = map_update_schedule_command(
+        {
+            "schedule_id": "schedule-1",
+            "expected_revision": 0,
+            "changes": {
+                "title": "新标题",
+                "is_all_day": True,
+                "start_time": "2026-08-12T00:00:00Z",
+                "end_time": None,
+                "timezone": "UTC",
+                "recurrence_rule": None,
+                "location_name": None,
+                "latitude": 31,
+                "longitude": 121.5,
+                "reminder_type": "at_time",
+                "reminder_trigger_at": "2026-08-11T23:45:00+00:00",
+                "reminder_offset_minutes": 0,
+                "reminder_strength": "high",
+            },
+        }
+    )
+
+    assert command.changes == {
+        "title": "新标题",
+        "is_all_day": True,
+        "start_time": datetime(2026, 8, 12, tzinfo=UTC),
+        "end_time": None,
+        "timezone": "UTC",
+        "recurrence_rule": None,
+        "location_name": None,
+        "latitude": 31.0,
+        "longitude": 121.5,
+        "reminder_type": ReminderType.AT_TIME,
+        "reminder_trigger_at": datetime(2026, 8, 11, 23, 45, tzinfo=UTC),
+        "reminder_offset_minutes": 0,
+        "reminder_strength": ReminderStrength.HIGH,
+    }
+
+
 @pytest.mark.parametrize(
     "arguments",
     [
@@ -229,6 +270,77 @@ def test_query_update_and_delete_arguments_map_to_business_contracts() -> None:
 def test_mapping_rejects_unsafe_or_invalid_arguments(arguments: dict[str, object]) -> None:
     with pytest.raises(ScheduleToolInputError):
         map_create_schedule_command(arguments)
+
+
+@pytest.mark.parametrize(
+    ("mapper", "arguments", "message"),
+    [
+        (map_create_schedule_command, {**create_arguments(), "title": " "}, "title"),
+        (map_create_schedule_command, {**create_arguments(), "is_all_day": 0}, "is_all_day"),
+        (
+            map_create_schedule_command,
+            {**create_arguments(), "recurrence_rule": 1},
+            "recurrence_rule",
+        ),
+        (
+            map_create_schedule_command,
+            {**create_arguments(), "reminder_offset_minutes": -1},
+            "reminder_offset_minutes",
+        ),
+        (
+            map_create_schedule_command,
+            {**create_arguments(), "reminder_offset_minutes": True},
+            "reminder_offset_minutes",
+        ),
+        (map_create_schedule_command, {**create_arguments(), "latitude": True}, "latitude"),
+        (map_create_schedule_command, {**create_arguments(), "start_time": 1}, "start_time"),
+        (
+            map_create_schedule_command,
+            {**create_arguments(), "start_time": "not-a-datetime"},
+            "start_time",
+        ),
+        (map_create_schedule_command, {**create_arguments(), "schedule_type": 1}, "schedule_type"),
+        (
+            map_create_schedule_command,
+            {**create_arguments(), "schedule_type": "invented"},
+            "schedule_type",
+        ),
+        (map_create_schedule_command, {**create_arguments(), "reminder_type": 1}, "reminder_type"),
+        (
+            map_create_schedule_command,
+            {**create_arguments(), "reminder_type": "invented"},
+            "reminder_type",
+        ),
+        (map_find_schedules_query, {"include_deleted": 0}, "include_deleted"),
+        (
+            map_delete_schedule_command,
+            {"schedule_id": "schedule-1", "expected_revision": True, "schedule_kind": "once"},
+            "expected_revision",
+        ),
+        (
+            map_update_schedule_command,
+            {"schedule_id": "schedule-1", "expected_revision": 1, "changes": []},
+            "changes",
+        ),
+        (
+            map_update_schedule_command,
+            {"schedule_id": "schedule-1", "expected_revision": 1, "changes": {}},
+            "changes",
+        ),
+        (
+            map_update_schedule_command,
+            {"schedule_id": "schedule-1", "expected_revision": 1, "changes": {"id": "x"}},
+            "Unexpected fields",
+        ),
+    ],
+)
+def test_mapping_rejects_each_invalid_primitive_at_the_boundary(
+    mapper: Callable[[Mapping[str, object]], object],
+    arguments: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ScheduleToolInputError, match=message):
+        mapper(arguments)
 
 
 def test_recurring_delete_requires_scope_and_once_rejects_it() -> None:
@@ -266,6 +378,53 @@ async def test_registry_calls_service_with_injected_account_and_serializes_snaps
     assert result["result"]["schedules"][0]["id"] == "schedule-1"
     assert result["result"]["schedules"][0]["schedule_type"] == "time"
     assert result["result"]["schedules"][0]["start_time"] == "2026-08-12T07:00:00+00:00"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "expected_operation", "command_type"),
+    [
+        ("schedule_query", {"title": "项目"}, "query", FindSchedulesQuery),
+        (
+            "schedule_update",
+            {"schedule_id": "schedule-1", "expected_revision": 1, "changes": {"title": "新"}},
+            "update",
+            UpdateScheduleCommand,
+        ),
+        (
+            "schedule_delete",
+            {"schedule_id": "schedule-1", "expected_revision": 1, "schedule_kind": "once"},
+            "delete_once",
+            DeleteOnceScheduleCommand,
+        ),
+        (
+            "schedule_delete",
+            {
+                "schedule_id": "schedule-1",
+                "expected_revision": 1,
+                "schedule_kind": "recurring",
+                "scope": "entire_series",
+            },
+            "delete_recurring",
+            DeleteRecurringScheduleCommand,
+        ),
+    ],
+)
+async def test_registry_dispatches_each_schedule_tool_to_its_business_operation(
+    tool_name: str,
+    arguments: dict[str, object],
+    expected_operation: str,
+    command_type: type[object],
+) -> None:
+    service = FakeScheduleService()
+    tool = build_agent_tool_registry(service, "account-1").get(tool_name)
+
+    result = json.loads(await tool.execute(arguments))
+
+    operation, account_id, command = service.calls[0]
+    assert (operation, account_id) == (expected_operation, "account-1")
+    assert isinstance(command, command_type)
+    assert result["status"] == "ok"
 
 
 @pytest.mark.asyncio
@@ -307,6 +466,75 @@ async def test_location_search_remains_truthful_placeholder() -> None:
     assert service.calls == []
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {},
+        {"query": "万达", "city": "上海"},
+        {"query": "万达", "nearby_latitude": "31"},
+        {"query": "万达", "nearby_longitude": 181},
+    ],
+)
+async def test_location_search_validates_its_placeholder_contract(
+    arguments: dict[str, object],
+) -> None:
+    tool = build_agent_tool_registry(FakeScheduleService(), "account-1").get("location_search")
+
+    with pytest.raises(ScheduleToolInputError):
+        await tool.execute(arguments)
+
+
 def test_account_id_must_come_from_authenticated_context() -> None:
     with pytest.raises(ValueError, match="account_id"):
         build_agent_tool_registry(FakeScheduleService(), "")
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "expected_call"),
+    [
+        ("schedule_query", {"title": "项目同步"}, "query"),
+        (
+            "schedule_update",
+            {"schedule_id": "schedule-1", "expected_revision": 1, "changes": {"title": "改过的"}},
+            "update",
+        ),
+        (
+            "schedule_delete",
+            {"schedule_id": "schedule-1", "expected_revision": 1, "schedule_kind": "once"},
+            "delete_once",
+        ),
+        (
+            "schedule_delete",
+            {
+                "schedule_id": "schedule-1",
+                "expected_revision": 1,
+                "schedule_kind": "recurring",
+                "scope": "entire_series",
+            },
+            "delete_recurring",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_each_tool_reaches_the_service_call_that_matches_it(
+    tool_name: str, arguments: dict[str, object], expected_call: str
+) -> None:
+    service = FakeScheduleService()
+    tool = build_agent_tool_registry(service, "account-1").get(tool_name)
+
+    result = json.loads(await tool.execute(arguments))
+
+    assert [call for call, _, _ in service.calls] == [expected_call]
+    assert result["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_a_tool_whose_arguments_do_not_map_reports_the_reason() -> None:
+    service = FakeScheduleService()
+    tool = build_agent_tool_registry(service, "account-1").get("schedule_update")
+
+    with pytest.raises(ScheduleToolInputError):
+        await tool.execute({"schedule_id": "schedule-1", "expected_revision": 1})
+
+    assert service.calls == []

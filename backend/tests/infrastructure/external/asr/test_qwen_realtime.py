@@ -178,6 +178,38 @@ def test_parse_provider_errors() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("message", "error"),
+    [
+        ({}, "type"),
+        (
+            {"type": "conversation.item.input_audio_transcription.text", "text": 1, "stash": ""},
+            "text",
+        ),
+        ({"type": "error", "error": "quota"}, "error object"),
+    ],
+)
+def test_parse_rejects_malformed_provider_event_shapes(
+    message: dict[str, object],
+    error: str,
+) -> None:
+    with pytest.raises(AsrProtocolError, match=error):
+        parse_server_event(message)
+
+
+def test_blank_completed_transcripts_and_unknown_events_are_ignored() -> None:
+    assert (
+        parse_server_event(
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "transcript": "  ",
+            }
+        )
+        is None
+    )
+    assert parse_server_event({"type": "provider.lifecycle.added"}) is None
+
+
 @pytest.mark.asyncio
 async def test_stream_sends_audio_yields_events_and_closes(settings: Settings) -> None:
     websocket = FakeWebSocket(
@@ -288,6 +320,133 @@ async def test_protocol_and_configuration_failures_close_connection(settings: Se
     provider = QwenRealtimeAsr(missing_key, connector=FakeConnector(FakeWebSocket([])))
     with pytest.raises(AsrConnectionError, match="API key"):
         _ = [event async for event in provider.stream(audio_chunks())]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [
+        ("aliyun_asr_ws_url", "URL"),
+        ("aliyun_asr_model", "model"),
+    ],
+)
+async def test_other_missing_connection_settings_fail_before_connect(
+    settings: Settings,
+    field: str,
+    message: str,
+) -> None:
+    connector = FakeConnector(FakeWebSocket([]))
+    provider = QwenRealtimeAsr(replace(settings, **{field: ""}), connector=connector)
+
+    with pytest.raises(AsrConnectionError, match=message):
+        _ = [event async for event in provider.stream(audio_chunks())]
+    assert connector.url == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        (TimeoutError(), "Timed out connecting"),
+        (ConnectionResetError(), "Failed to connect"),
+        (AsrProtocolError("upstream protocol"), "upstream protocol"),
+    ],
+)
+async def test_connect_failures_are_classified_without_leaking_provider_details(
+    settings: Settings,
+    failure: BaseException,
+    message: str,
+) -> None:
+    async def failing_connector(
+        url: str,
+        headers: Mapping[str, str],
+        timeout: float,
+    ) -> FakeWebSocket:
+        del url, headers, timeout
+        raise failure
+
+    provider = QwenRealtimeAsr(settings, connector=failing_connector)
+
+    with pytest.raises(
+        AsrConnectionError if not isinstance(failure, AsrProtocolError) else AsrProtocolError,
+        match=message,
+    ):
+        _ = [event async for event in provider.stream(audio_chunks())]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("first_frame", "message"),
+    [
+        (server_event("session.finished"), "session.finished"),
+        (server_event("provider.lifecycle.added"), "unknown"),
+        (
+            server_event(
+                "conversation.item.input_audio_transcription.completed",
+                transcript="too early",
+            ),
+            "TranscriptCompleted",
+        ),
+    ],
+)
+async def test_setup_requires_the_expected_control_event(
+    settings: Settings,
+    first_frame: str,
+    message: str,
+) -> None:
+    websocket = FakeWebSocket([first_frame])
+    provider = QwenRealtimeAsr(settings, connector=FakeConnector(websocket))
+
+    with pytest.raises(AsrProtocolError, match=message):
+        _ = [event async for event in provider.stream(audio_chunks())]
+    assert websocket.closed is True
+
+
+@pytest.mark.asyncio
+async def test_setup_and_finish_waits_have_distinct_timeout_errors(settings: Settings) -> None:
+    setup_socket = FakeWebSocket([])
+    setup_provider = QwenRealtimeAsr(
+        replace(settings, aliyun_asr_connect_timeout_seconds=0.001),
+        connector=FakeConnector(setup_socket),
+    )
+    with pytest.raises(AsrConnectionError, match="session.created"):
+        _ = [event async for event in setup_provider.stream(audio_chunks())]
+
+    finish_socket = FakeWebSocket(
+        [server_event("session.created"), server_event("session.updated")]
+    )
+    finish_provider = QwenRealtimeAsr(
+        replace(settings, aliyun_asr_finish_timeout_seconds=0.001),
+        connector=FakeConnector(finish_socket),
+    )
+    with pytest.raises(AsrConnectionError, match="session.finished"):
+        _ = [event async for event in finish_provider.stream(audio_chunks())]
+
+    assert setup_socket.closed is True
+    assert finish_socket.closed is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("frame", "message"),
+    [
+        ("not-json", "invalid JSON"),
+        ("[]", "JSON object"),
+    ],
+)
+async def test_stream_rejects_malformed_text_frames_after_setup(
+    settings: Settings,
+    frame: str,
+    message: str,
+) -> None:
+    websocket = FakeWebSocket(
+        [server_event("session.created"), server_event("session.updated"), frame]
+    )
+    provider = QwenRealtimeAsr(settings, connector=FakeConnector(websocket))
+
+    with pytest.raises(AsrProtocolError, match=message):
+        _ = [event async for event in provider.stream(audio_chunks(b"audio"))]
+    assert websocket.closed is True
 
 
 @pytest.mark.asyncio

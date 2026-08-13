@@ -29,16 +29,22 @@ export async function nativeScheduleAlarm(
   title: string,
 ): Promise<string | null> {
   if (!isTimeflowAlarmAvailable() || NativeAlarm == null) return null;
-  const result = await NativeAlarm.schedule(triggerAtMillis, title);
-  return result.alarmId;
+  try {
+    const result = await NativeAlarm.schedule(triggerAtMillis, title);
+    const alarmId = result?.alarmId;
+    if (alarmId == null || alarmId.length === 0) return null;
+    return alarmId;
+  } catch {
+    return null;
+  }
 }
 
-export async function nativeCancelAlarm(alarmId: string | null | undefined): Promise<void> {
-  if (!isTimeflowAlarmAvailable() || NativeAlarm == null || !alarmId) return;
+export async function nativeCancelAlarm(alarmId: string | null | undefined): Promise<boolean> {
+  if (!isTimeflowAlarmAvailable() || NativeAlarm == null || !alarmId) return false;
   try {
-    await NativeAlarm.cancel(alarmId);
+    return Boolean(await NativeAlarm.cancel(alarmId));
   } catch {
-    // Best-effort cancel.
+    return false;
   }
 }
 

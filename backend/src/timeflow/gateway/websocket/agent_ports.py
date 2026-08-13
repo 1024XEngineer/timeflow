@@ -8,6 +8,11 @@ class StreamIdentity(Protocol):
     """Identifiers of the audio stream a result belongs to."""
 
     @property
+    def account_id(self) -> str:
+        """Account that owns this stream."""
+        ...
+
+    @property
     def session_id(self) -> str:
         """Session the stream belongs to."""
         ...
@@ -114,8 +119,13 @@ class CommandOutcome(Protocol):
         ...
 
     @property
-    def schedule(self) -> dict[str, Any]:
-        """Persisted schedule snapshot the command produced."""
+    def schedule(self) -> dict[str, Any] | None:
+        """Persisted schedule snapshot a mutation produced, when there is one."""
+        ...
+
+    @property
+    def schedules(self) -> list[dict[str, Any]] | None:
+        """Matches a query found, when the command was a query."""
         ...
 
 

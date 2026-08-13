@@ -1,5 +1,6 @@
 """Strict RRULE and timezone-aware recurrence behavior tests."""
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
@@ -15,8 +16,10 @@ from timeflow.business.calendar import (
 )
 from timeflow.business.calendar.recurrence import (
     InvalidRecurrenceRuleError,
+    InvalidTimezoneKeyError,
     first_active_occurrence_on_or_after_local_date,
     first_occurrence_in_window,
+    get_schedule_timezone,
     normalize_recurrence_rule,
     parse_recurrence_rule,
     truncate_rule_before_occurrence,
@@ -225,3 +228,75 @@ def test_occurrence_window_skips_overridden_starts_without_replaying_history() -
     )
 
     assert occurrence == datetime(2026, 8, 24, 2, tzinfo=UTC)
+
+
+def test_invalid_timezone_keys_are_normalized_to_the_calendar_error() -> None:
+    with pytest.raises(InvalidTimezoneKeyError):
+        get_schedule_timezone("../America/New_York")
+
+
+def test_recurrence_helpers_return_none_for_non_recurring_snapshots() -> None:
+    schedule = _recurring_schedule(
+        timezone="UTC",
+        start_time=datetime(2026, 8, 3, tzinfo=UTC),
+    )
+    ordinary = replace(
+        schedule,
+        schedule_kind=ScheduleKind.ONCE,
+        recurrence_rule=None,
+    )
+
+    assert (
+        first_active_occurrence_on_or_after_local_date(
+            ordinary,
+            now=datetime(2026, 8, 3, tzinfo=UTC),
+            overrides=(),
+        )
+        is None
+    )
+    assert (
+        first_occurrence_in_window(
+            ordinary,
+            starts_at_or_after=datetime(2026, 8, 3, tzinfo=UTC),
+            starts_before=datetime(2026, 8, 4, tzinfo=UTC),
+            excluded_occurrence_starts=frozenset(),
+        )
+        is None
+    )
+    assert truncate_rule_before_occurrence(ordinary, datetime(2026, 8, 3, tzinfo=UTC)) is None
+
+
+def test_window_without_either_boundary_has_no_finite_occurrence_selection() -> None:
+    schedule = _recurring_schedule(
+        timezone="UTC",
+        start_time=datetime(2026, 8, 3, tzinfo=UTC),
+    )
+
+    assert (
+        first_occurrence_in_window(
+            schedule,
+            starts_at_or_after=None,
+            starts_before=None,
+            excluded_occurrence_starts=frozenset(),
+        )
+        is None
+    )
+
+
+def test_upper_only_window_returns_none_when_every_prior_occurrence_is_overridden() -> None:
+    start = datetime(2026, 8, 3, tzinfo=UTC)
+    schedule = _recurring_schedule(
+        timezone="UTC",
+        start_time=start,
+        recurrence_rule="FREQ=DAILY;COUNT=2",
+    )
+
+    assert (
+        first_occurrence_in_window(
+            schedule,
+            starts_at_or_after=None,
+            starts_before=datetime(2026, 8, 5, tzinfo=UTC),
+            excluded_occurrence_starts=frozenset({start, datetime(2026, 8, 4, tzinfo=UTC)}),
+        )
+        is None
+    )

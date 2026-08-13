@@ -23,11 +23,12 @@ class VoiceAsrCompleted(BaseModel):
 
 
 class VoiceCommandResultPayload(BaseModel):
-    """The command that was carried out and the schedule it produced."""
+    """The command that was carried out and the schedule(s) it produced."""
 
     operation: str
     status: str
-    schedule: dict[str, Any]
+    schedule: dict[str, Any] | None = None
+    schedules: list[dict[str, Any]] | None = None
 
 
 class VoiceCommandResult(BaseModel):
