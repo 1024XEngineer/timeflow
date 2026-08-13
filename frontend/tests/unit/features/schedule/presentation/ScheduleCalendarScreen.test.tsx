@@ -63,9 +63,9 @@ describe('ScheduleCalendarScreen location schedules', () => {
 
     expect(screen.getByText('地点日程')).toBeTruthy();
     expect(screen.getAllByText('公司')).toHaveLength(2);
-    expect(screen.getByText('Asia/Shanghai')).toBeTruthy();
-    expect(screen.getByText('arrive_location')).toBeTruthy();
-    expect(screen.getByText('high')).toBeTruthy();
+    expect(screen.getByText('时区 · Asia/Shanghai')).toBeTruthy();
+    expect(screen.getByText('到达地点时')).toBeTruthy();
+    expect(screen.getByText('提醒强度 · 强提醒')).toBeTruthy();
     expect(screen.queryByText('编辑')).toBeNull();
     expect(screen.queryByText('删除')).toBeNull();
   });
