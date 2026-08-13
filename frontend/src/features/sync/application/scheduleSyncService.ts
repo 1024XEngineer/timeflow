@@ -404,6 +404,9 @@ function isValidSchedule(schedule: ScheduleSnapshot): boolean {
   if (schedule.reminder_trigger_at !== null && reminderTrigger === null) {
     return false;
   }
+  if (schedule.end_time !== null && end === null) {
+    return false;
+  }
   if (
     schedule.schedule_kind === 'recurring' &&
     start !== null &&
