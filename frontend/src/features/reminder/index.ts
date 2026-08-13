@@ -62,12 +62,14 @@ export type {
   TimeListenerPort,
   VibrationPort,
 } from './application';
+export { LocalReminderApplication } from './application';
 export {
   MockLocalScheduleReader,
   MockReminderApplication,
   MockReminderDispositionSync,
   MockReminderStateStore,
   MOCK_REMINDER_SCHEDULES,
+  MemoryReminderStateStore,
 } from './data/local';
 export {
   AlertReminderPresenter,

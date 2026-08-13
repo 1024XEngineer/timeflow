@@ -10,7 +10,7 @@ class Base(DeclarativeBase):
 
 def build_engine(database_url: str) -> Engine:
     """Create a database engine without opening a connection eagerly."""
-    return create_engine(database_url, pool_pre_ping=True)
+    return create_engine(database_url, pool_pre_ping=True, hide_parameters=True)
 
 
 def build_session_factory(engine: Engine) -> sessionmaker[Session]:
