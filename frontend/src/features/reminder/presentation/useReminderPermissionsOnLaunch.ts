@@ -46,18 +46,32 @@ export function useReminderPermissionsOnLaunch(device: DeviceCapabilityPort | nu
   useEffect(() => {
     if (Platform.OS !== 'android' || device == null) return;
 
+    let cancelled = false;
+    const timeouts = new Set<ReturnType<typeof setTimeout>>();
+
+    const schedule = (fn: () => void, ms: number) => {
+      const id = setTimeout(() => {
+        timeouts.delete(id);
+        if (cancelled) return;
+        fn();
+      }, ms);
+      timeouts.add(id);
+    };
+
     const runPrompt = () => {
+      if (cancelled) return;
       void promptNext().catch(() => {
         busyRef.current = false;
       });
     };
 
     const promptNext = async () => {
-      if (busyRef.current) return;
+      if (cancelled || busyRef.current) return;
       busyRef.current = true;
 
       try {
         const status = await device.getStatus();
+        if (cancelled) return;
         if (!status.supported) return;
 
         const missing = PERMISSION_ORDER.find((permission) => {
@@ -74,39 +88,57 @@ export function useReminderPermissionsOnLaunch(device: DeviceCapabilityPort | nu
 
         if (missing === 'notifications') {
           const granted = await device.requestPermission('notifications');
+          if (cancelled) return;
           if (!granted) skippedRef.current.add('notifications');
           busyRef.current = false;
-          setTimeout(runPrompt, 350);
+          schedule(runPrompt, 350);
           return;
         }
 
         const shouldAuthorize = await confirmAsync(prompt.title, prompt.message);
+        if (cancelled) return;
         if (!shouldAuthorize) {
           skippedRef.current.add(missing);
         } else {
-          awaitingReturnRef.current = true;
-          await device.openSettings(missing);
+          let opened = false;
+          try {
+            opened = await device.openSettings(missing);
+          } catch {
+            opened = false;
+          }
+          if (cancelled) return;
+          if (opened) {
+            awaitingReturnRef.current = true;
+          } else {
+            skippedRef.current.add(missing);
+          }
         }
       } finally {
         busyRef.current = false;
       }
 
-      if (!awaitingReturnRef.current) {
-        setTimeout(runPrompt, 200);
+      if (!cancelled && !awaitingReturnRef.current) {
+        schedule(runPrompt, 200);
       }
     };
 
     const onAppStateChange = (state: AppStateStatus) => {
+      if (cancelled) return;
       if (state !== 'active') return;
       if (!awaitingReturnRef.current) return;
       awaitingReturnRef.current = false;
-      setTimeout(runPrompt, 300);
+      schedule(runPrompt, 300);
     };
 
-    const timer = setTimeout(runPrompt, 600);
+    schedule(runPrompt, 600);
     const subscription = AppState.addEventListener('change', onAppStateChange);
     return () => {
-      clearTimeout(timer);
+      cancelled = true;
+      awaitingReturnRef.current = false;
+      for (const id of timeouts) {
+        clearTimeout(id);
+      }
+      timeouts.clear();
       subscription.remove();
     };
   }, [device]);

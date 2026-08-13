@@ -169,6 +169,68 @@ describe('useReminderPermissionsOnLaunch', () => {
     expect(device.openSettings).not.toHaveBeenCalled();
   });
 
+  it('skips and continues when openSettings returns false', async () => {
+    jest.useFakeTimers();
+    const device = createDevice({
+      platform: 'android',
+      supported: true,
+      permissions: { ...deniedPermissions(), notifications: true },
+    });
+    device.openSettings = jest.fn(async () => false);
+    renderHook(() => useReminderPermissionsOnLaunch(device));
+    await flush(600);
+    await press('去授权');
+    expect(device.openSettings).toHaveBeenCalledWith('exact_alarm');
+    await flush(200);
+    expect(Alert.alert).toHaveBeenCalledWith(
+      '需要悬浮窗权限',
+      expect.any(String),
+      expect.any(Array),
+    );
+  });
+
+  it('skips and continues when openSettings throws', async () => {
+    jest.useFakeTimers();
+    const device = createDevice({
+      platform: 'android',
+      supported: true,
+      permissions: { ...deniedPermissions(), notifications: true },
+    });
+    device.openSettings = jest.fn(async () => {
+      throw new Error('settings unavailable');
+    });
+    renderHook(() => useReminderPermissionsOnLaunch(device));
+    await flush(600);
+    await press('去授权');
+    await flush(200);
+    expect(Alert.alert).toHaveBeenCalledWith(
+      '需要悬浮窗权限',
+      expect.any(String),
+      expect.any(Array),
+    );
+  });
+
+  it('does not run delayed prompts after unmount', async () => {
+    jest.useFakeTimers();
+    const device = createDevice();
+    const { unmount } = renderHook(() => useReminderPermissionsOnLaunch(device));
+    unmount();
+    await flush(1_000);
+    expect(device.getStatus).not.toHaveBeenCalled();
+  });
+
+  it('cancels pending follow-up prompts on unmount', async () => {
+    jest.useFakeTimers();
+    const device = createDevice();
+    const { unmount } = renderHook(() => useReminderPermissionsOnLaunch(device));
+    await flush(600);
+    expect(device.getStatus).toHaveBeenCalledTimes(1);
+    unmount();
+    await flush(1_000);
+    expect(device.getStatus).toHaveBeenCalledTimes(1);
+    expect(Alert.alert).not.toHaveBeenCalled();
+  });
+
   it('does not prompt when every permission is already granted', async () => {
     jest.useFakeTimers();
     const device = createDevice({
