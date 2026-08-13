@@ -29,6 +29,11 @@
       ],
       "package": "com.anonymous.timeflow"
     },
-    "plugins": ["expo-sqlite", "expo-location", "@irvingouj/expo-audio-stream"]
+    "plugins": [
+      "expo-sqlite",
+      "expo-location",
+      "@irvingouj/expo-audio-stream",
+      "./plugins/withTimeflowAlarm"
+    ]
   }
 }

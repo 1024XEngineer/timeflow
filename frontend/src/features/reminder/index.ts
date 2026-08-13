@@ -21,6 +21,8 @@ export type {
 } from './domain';
 export { DEFAULT_SNOOZE_MINUTES } from './domain';
 export type {
+  AlarmNativeDisposition,
+  AlarmNativeEvent,
   AlarmScheduleReceipt,
   AlarmScheduleRequest,
   AlarmSchedulerPort,

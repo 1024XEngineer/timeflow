@@ -1,4 +1,6 @@
 import type {
+  AlarmNativeDisposition,
+  AlarmNativeEvent,
   AlarmScheduleReceipt,
   AlarmScheduleRequest,
   AlarmSchedulerPort,
@@ -7,10 +9,14 @@ import {
   isTimeflowAlarmAvailable,
   nativeAreAlarmPermissionsGranted,
   nativeCancelAlarm,
+  nativeCancelAllAlarms,
+  nativeConsumeAlarmDispositions,
   nativeScheduleAlarm,
+  nativeStopAlarmRinging,
+  subscribeNativeAlarmEvents,
 } from './native/TimeflowAlarmBridge';
 
-/** Android TimeflowAlarm 适配器；无法挂上时返回 scheduled: false。 */
+/** Android TimeflowAlarm 适配器；无法挂上时返回 scheduled=false。 */
 export class NativeAlarmScheduler implements AlarmSchedulerPort {
   async schedule(request: AlarmScheduleRequest): Promise<AlarmScheduleReceipt> {
     if (!isTimeflowAlarmAvailable()) {
@@ -28,7 +34,11 @@ export class NativeAlarmScheduler implements AlarmSchedulerPort {
         return unscheduled(request.schedule_id);
       }
 
-      const alarmId = await nativeScheduleAlarm(triggerAtMillis, request.title);
+      const alarmId = await nativeScheduleAlarm(
+        triggerAtMillis,
+        request.title,
+        request.schedule_id,
+      );
       if (alarmId == null || alarmId.length === 0) {
         return unscheduled(request.schedule_id);
       }
@@ -47,18 +57,59 @@ export class NativeAlarmScheduler implements AlarmSchedulerPort {
     if (alarmId == null || alarmId.length === 0) {
       return { cancelled: false };
     }
-    const cancelled = await nativeCancelAlarm(alarmId);
-    return { cancelled };
+    await nativeCancelAlarm(alarmId);
+    return { cancelled: true };
   }
 
   async rebuild(
     requests: readonly AlarmScheduleRequest[],
   ): Promise<readonly AlarmScheduleReceipt[]> {
+    // 冷启动 registrations 为空时也要清掉 SharedPreferences 里的孤儿闹钟。
+    await nativeCancelAllAlarms();
     const receipts: AlarmScheduleReceipt[] = [];
     for (const request of requests) {
       receipts.push(await this.schedule(request));
     }
     return receipts;
+  }
+
+  async stopRinging(): Promise<void> {
+    await nativeStopAlarmRinging();
+  }
+
+  subscribe(listener: (event: AlarmNativeEvent) => void): () => void {
+    return subscribeNativeAlarmEvents((payload) => {
+      listener({
+        type: payload.type,
+        schedule_id: payload.scheduleId,
+        alarm_id: payload.alarmId,
+        title: payload.title,
+        at: new Date(payload.atMillis || Date.now()).toISOString(),
+      });
+    });
+  }
+
+  async consumeNativeDispositions(): Promise<readonly AlarmNativeDisposition[]> {
+    const rows = await nativeConsumeAlarmDispositions();
+    return rows
+      .map((row) => {
+        const state =
+          row.state === 'confirmed'
+            ? 'confirmed'
+            : row.state === 'pending'
+              ? 'pending'
+              : row.state === 'snoozed'
+                ? 'snoozed'
+                : null;
+        if (state == null || !row.scheduleId) return null;
+        return {
+          schedule_id: row.scheduleId,
+          alarm_id: row.alarmId ?? '',
+          state,
+          updated_at: new Date(row.updatedAtMillis || Date.now()).toISOString(),
+        } satisfies AlarmNativeDisposition;
+      })
+      .filter((row): row is AlarmNativeDisposition => row != null);
   }
 }
 

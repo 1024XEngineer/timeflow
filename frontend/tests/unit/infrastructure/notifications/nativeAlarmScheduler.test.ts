@@ -15,18 +15,32 @@ jest.mock('react-native', () => {
   RN.NativeModules.TimeflowAlarm = {
     schedule: jest.fn(),
     cancel: jest.fn(),
+    cancelAll: jest.fn(),
+    stopRinging: jest.fn(),
+    consumeNativeDispositions: jest.fn(),
     getPermissionStatus: jest.fn(),
     openPermissionSettings: jest.fn(),
     requestNotificationPermission: jest.fn(),
+    addListener: jest.fn(),
+    removeListeners: jest.fn(),
   };
   return RN;
 });
 
 type NativeAlarmMock = {
   schedule: jest.MockedFunction<
-    (triggerAtMillis: number, title?: string | null) => Promise<{ alarmId: string }>
+    (
+      triggerAtMillis: number,
+      title?: string | null,
+      scheduleId?: string | null,
+    ) => Promise<{ alarmId: string; scheduleId?: string }>
   >;
   cancel: jest.MockedFunction<(alarmId: string) => Promise<boolean>>;
+  cancelAll: jest.MockedFunction<() => Promise<number>>;
+  stopRinging: jest.MockedFunction<() => Promise<boolean>>;
+  consumeNativeDispositions: jest.MockedFunction<
+    () => Promise<{ scheduleId: string; alarmId: string; state: string; updatedAtMillis: number }[]>
+  >;
   getPermissionStatus: jest.MockedFunction<
     () => Promise<{
       exactAlarm: boolean;
@@ -80,10 +94,16 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
     Platform.OS = 'android';
     native.schedule.mockReset();
     native.cancel.mockReset();
+    native.cancelAll.mockReset();
+    native.stopRinging.mockReset();
+    native.consumeNativeDispositions.mockReset();
     native.getPermissionStatus.mockReset();
     grantPermissions();
-    native.schedule.mockResolvedValue({ alarmId: 'alarm-1' });
+    native.schedule.mockResolvedValue({ alarmId: 'alarm-1', scheduleId: 'schedule-1' });
     native.cancel.mockResolvedValue(true);
+    native.cancelAll.mockResolvedValue(0);
+    native.stopRinging.mockResolvedValue(true);
+    native.consumeNativeDispositions.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -173,7 +193,7 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
       schedule_id: 'schedule-1',
       scheduled: true,
     });
-    expect(native.schedule).toHaveBeenCalledWith(Date.parse(FUTURE), '晨会');
+    expect(native.schedule).toHaveBeenCalledWith(Date.parse(FUTURE), '晨会', 'schedule-1');
   });
 
   it('maps a native schedule rejection to unscheduled', async () => {
@@ -208,12 +228,12 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
     expect(native.schedule).not.toHaveBeenCalled();
   });
 
-  it('forwards cancel true and false from the native module', async () => {
+  it('treats native cancel as cancelled: true even when the bridge swallows errors', async () => {
     const scheduler = new NativeAlarmScheduler();
     native.cancel.mockResolvedValueOnce(true);
     await expect(scheduler.cancel('alarm-1')).resolves.toEqual({ cancelled: true });
-    native.cancel.mockResolvedValueOnce(false);
-    await expect(scheduler.cancel('alarm-1')).resolves.toEqual({ cancelled: false });
+    native.cancel.mockRejectedValueOnce(new Error('cancel failed'));
+    await expect(scheduler.cancel('alarm-1')).resolves.toEqual({ cancelled: true });
     expect(native.cancel).toHaveBeenCalledTimes(2);
   });
 
@@ -224,34 +244,59 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
     expect(native.cancel).not.toHaveBeenCalled();
   });
 
-  it('maps a native cancel rejection to cancelled: false', async () => {
+  it('swallows native cancel failures at the bridge', async () => {
     native.cancel.mockRejectedValue(new Error('cancel failed'));
-    const scheduler = new NativeAlarmScheduler();
-    await expect(scheduler.cancel('alarm-1')).resolves.toEqual({ cancelled: false });
-    await expect(nativeCancelAlarm('alarm-1')).resolves.toBe(false);
+    await expect(nativeCancelAlarm('alarm-1')).resolves.toBeUndefined();
   });
 
   it('rebuilds mixed requests in order', async () => {
-    native.schedule.mockResolvedValueOnce({ alarmId: 'alarm-ok' }).mockResolvedValueOnce({
-      alarmId: 'alarm-later',
-    });
+    native.schedule
+      .mockResolvedValueOnce({ alarmId: 'alarm-ok', scheduleId: 'ok' })
+      .mockResolvedValueOnce({
+        alarmId: 'alarm-later',
+        scheduleId: 'later',
+      });
     const scheduler = new NativeAlarmScheduler();
     const receipts = await scheduler.rebuild([
       request({ schedule_id: 'ok' }),
       request({ schedule_id: 'expired', trigger_at: PAST }),
       request({ schedule_id: 'later', trigger_at: '2026-08-13T10:00:00.000Z', title: '午会' }),
     ]);
+    expect(native.cancelAll).toHaveBeenCalledTimes(1);
     expect(receipts).toEqual([
       { alarm_id: 'alarm-ok', schedule_id: 'ok', scheduled: true },
       { alarm_id: '', schedule_id: 'expired', scheduled: false },
       { alarm_id: 'alarm-later', schedule_id: 'later', scheduled: true },
     ]);
     expect(native.schedule).toHaveBeenCalledTimes(2);
-    expect(native.schedule).toHaveBeenNthCalledWith(1, Date.parse(FUTURE), '晨会');
+    expect(native.schedule).toHaveBeenNthCalledWith(1, Date.parse(FUTURE), '晨会', 'ok');
     expect(native.schedule).toHaveBeenNthCalledWith(
       2,
       Date.parse('2026-08-13T10:00:00.000Z'),
       '午会',
+      'later',
     );
+  });
+
+  it('forwards stopRinging and native dispositions', async () => {
+    native.consumeNativeDispositions.mockResolvedValue([
+      {
+        scheduleId: 's1',
+        alarmId: 'a1',
+        state: 'confirmed',
+        updatedAtMillis: Date.parse(NOW),
+      },
+    ]);
+    const scheduler = new NativeAlarmScheduler();
+    await scheduler.stopRinging();
+    expect(native.stopRinging).toHaveBeenCalledTimes(1);
+    await expect(scheduler.consumeNativeDispositions()).resolves.toEqual([
+      {
+        schedule_id: 's1',
+        alarm_id: 'a1',
+        state: 'confirmed',
+        updated_at: NOW,
+      },
+    ]);
   });
 });
