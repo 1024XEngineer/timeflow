@@ -1,15 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { AssistantConversationService } from '../features/assistant/application/AssistantConversationService';
+import { ExpoAudioCapture } from '../features/assistant/data/audio/ExpoAudioCapture';
+import { ExpoAudioPlayback } from '../features/assistant/data/audio/ExpoAudioPlayback';
+import { LocalScheduleWriter } from '../features/assistant/data/local/LocalScheduleWriter';
+import { WebSocketVoiceTransport } from '../features/assistant/data/websocket/WebSocketVoiceTransport';
 import type { AuthController } from '../features/auth/application';
 import { useAuth } from '../features/auth/presentation/AuthProvider';
 import { SqliteScheduleClientService } from '../features/schedule/application';
 import { ScheduleLocalRepository } from '../features/schedule/data';
-import { ScheduleCalendarScreen } from '../features/schedule/presentation/ScheduleCalendarScreen';
 import { openTimeflowDatabase } from '../infrastructure/database';
+import { ExpoLocationProvider } from '../infrastructure/location/ExpoLocationProvider';
+import { HomeScreen } from '../screens/HomeScreen';
 import { LoginScreen } from '../screens/LoginScreen';
 import { colors, spacing } from '../shared/ui/theme';
 import { AppProviders } from './AppProviders';
+import { AUTH_WEB_SOCKET_URL } from './authRuntime';
 import { createAppServices, type AppServices } from './composition/createAppServices';
 
 export function AppRoot({
@@ -27,12 +34,12 @@ export function AppRoot({
       invalidationCoordinator={authController ? undefined : services.auth.invalidationCoordinator}
       services={services}
     >
-      <AuthRoute />
+      <AuthRoute authController={controller} />
     </AppProviders>
   );
 }
 
-function AuthRoute() {
+function AuthRoute({ authController }: { readonly authController: AuthController }) {
   const { retryInitialization, viewState } = useAuth();
 
   if (viewState.status === 'loading') {
@@ -62,6 +69,7 @@ function AuthRoute() {
   return (
     <AuthenticatedScheduleRoute
       accountId={viewState.accountId}
+      authController={authController}
       key={viewState.accountId}
       username={viewState.username}
     />
@@ -70,8 +78,8 @@ function AuthRoute() {
 
 type ScheduleLoadState =
   | {
+      readonly repository: ScheduleLocalRepository;
       readonly retryToken: number;
-      readonly service: SqliteScheduleClientService;
       readonly status: 'ready';
     }
   | {
@@ -81,15 +89,19 @@ type ScheduleLoadState =
 
 function AuthenticatedScheduleRoute({
   accountId,
+  authController,
   username,
 }: {
   readonly accountId: string;
+  readonly authController: AuthController;
   readonly username: string;
 }) {
   const { signOut } = useAuth();
   const [loadState, setLoadState] = useState<ScheduleLoadState>();
   const [retryToken, setRetryToken] = useState(0);
   const [isSigningOut, setIsSigningOut] = useState(false);
+  // 登录流程目前不带 device_id；先按会话生成一个稳定 id，持久化设备标识不在本轮范围。
+  const [deviceId] = useState(() => `device-${Math.random().toString(36).slice(2)}`);
 
   useEffect(() => {
     let active = true;
@@ -97,8 +109,8 @@ function AuthenticatedScheduleRoute({
       .then((database) => {
         if (active) {
           setLoadState({
+            repository: new ScheduleLocalRepository(database),
             retryToken,
-            service: new SqliteScheduleClientService(new ScheduleLocalRepository(database)),
             status: 'ready',
           });
         }
@@ -125,6 +137,36 @@ function AuthenticatedScheduleRoute({
   }, [isSigningOut, signOut]);
   const currentLoadState = loadState?.retryToken === retryToken ? loadState : undefined;
 
+  const scheduleService = useMemo(
+    () =>
+      currentLoadState?.status === 'ready'
+        ? new SqliteScheduleClientService(currentLoadState.repository)
+        : undefined,
+    [currentLoadState],
+  );
+
+  // getAccessToken() 是 AuthController 特意留的口子：展示层的 AuthViewState 不带
+  // Token，但语音这条独立 WS 连接需要自己认证，只能从控制器直接取，不走 context。
+  const assistantApplication = useMemo(() => {
+    if (currentLoadState?.status !== 'ready') {
+      return null;
+    }
+    const accessToken = authController.getAccessToken();
+    if (!accessToken) {
+      return null;
+    }
+    return new AssistantConversationService(
+      { accessToken, accountId, deviceId, wsUrl: AUTH_WEB_SOCKET_URL },
+      {
+        capture: new ExpoAudioCapture(),
+        localScheduleWriter: new LocalScheduleWriter(currentLoadState.repository),
+        location: new ExpoLocationProvider(),
+        playback: new ExpoAudioPlayback(),
+        transport: new WebSocketVoiceTransport(),
+      },
+    );
+  }, [currentLoadState, authController, accountId, deviceId]);
+
   return (
     <View style={styles.authenticatedRoute}>
       <View style={styles.accountBar}>
@@ -145,10 +187,11 @@ function AuthenticatedScheduleRoute({
         </Pressable>
       </View>
       <View style={styles.authenticatedContent}>
-        {currentLoadState?.status === 'ready' ? (
-          <ScheduleCalendarScreen
+        {currentLoadState?.status === 'ready' && scheduleService && assistantApplication ? (
+          <HomeScreen
             accountId={accountId}
-            service={currentLoadState.service}
+            application={assistantApplication}
+            scheduleService={scheduleService}
             timezone={Intl.DateTimeFormat().resolvedOptions().timeZone}
           />
         ) : (
@@ -170,15 +213,6 @@ function AuthenticatedScheduleRoute({
 
 const styles = StyleSheet.create({
   account: { color: colors.mutedText, fontSize: 16, marginTop: spacing.sm },
-  authenticatedScreen: {
-    alignItems: 'center',
-    backgroundColor: colors.background,
-    flex: 1,
-    justifyContent: 'center',
-    padding: spacing.xl,
-  },
-  authenticatedContent: { flex: 1 },
-  authenticatedRoute: { backgroundColor: colors.background, flex: 1 },
   accountBar: {
     alignItems: 'center',
     backgroundColor: colors.surface,
@@ -191,7 +225,15 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   accountIdentity: { color: colors.mutedText, flex: 1, fontSize: 14 },
-  title: { color: colors.text, fontSize: 22, fontWeight: '700' },
+  authenticatedContent: { flex: 1 },
+  authenticatedRoute: { backgroundColor: colors.background, flex: 1 },
+  authenticatedScreen: {
+    alignItems: 'center',
+    backgroundColor: colors.background,
+    flex: 1,
+    justifyContent: 'center',
+    padding: spacing.xl,
+  },
   retry: {
     backgroundColor: colors.text,
     borderRadius: 8,
@@ -209,4 +251,5 @@ const styles = StyleSheet.create({
   },
   signOutButtonPressed: { opacity: 0.7 },
   signOutText: { color: colors.text, fontSize: 14, fontWeight: '600' },
+  title: { color: colors.text, fontSize: 22, fontWeight: '700' },
 });

@@ -7,7 +7,12 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "需要麦克风权限来录制语音指令",
+        "NSLocationWhenInUseUsageDescription": "需要定位权限来关联语音指令发生的地点"
+      },
+      "bundleIdentifier": "com.anonymous.timeflow"
     },
     "android": {
       "adaptiveIcon": {
@@ -16,8 +21,14 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "RECORD_AUDIO",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
+      "package": "com.anonymous.timeflow"
     },
-    "plugins": ["expo-sqlite"]
+    "plugins": ["expo-sqlite", "expo-location", "@irvingouj/expo-audio-stream"]
   }
 }
