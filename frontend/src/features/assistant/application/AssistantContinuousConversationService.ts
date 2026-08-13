@@ -64,6 +64,23 @@ export class AssistantContinuousConversationService implements AssistantApplicat
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   /** true 期间麦克风回调采到的帧不再往 WS 发；连接和录音本身不受影响。 */
   private muted = false;
+  /** endTurn() 执行期间为 true：期间到达的服务端消息一律丢弃，防止挂断过程中
+   * 半路杀出的下一轮 tts/reply 消息把已经开始归位的状态又改回去。也防止
+   * endTurn() 被并发调用第二次（比如 voice.session.end 和用户点"结束对话"
+   * 前后脚都到）。 */
+  private endTurnInFlight = false;
+  /** startTurn() 执行期间为 true：UI 上的 phase==='idle' 判断读的是上一次渲染
+   * 的闭包，快速双击可能在第一次调用还没跑到 setState('connecting') 前就
+   * 发出第二次调用。没有这道门槛，第二次会覆盖 this.connection 和
+   * streamStartedWaiter，导致第一次的连接监听器永久泄漏，且两次调用互相
+   * 抢 streamStartedWaiter 可能让其中一次永远卡住不再 resolve。 */
+  private startTurnInFlight = false;
+  /** 串起 startStream/pushChunk/endStream/stop 全部对原生播放模块的调用，保证
+   * 严格按到达顺序执行——原生流式播放器要求顺序写入，并发调用容易乱序或被
+   * 拒绝，且错误会被吞掉，界面上完全看不出来。只串 pushChunk 不够：
+   * startStream() 内部有一个没人等的 await（配置原生播放器），如果紧跟着的
+   * 第一块音频不排在它后面，可能在原生侧还没配置完时就到达。 */
+  private playbackChain: Promise<void> = Promise.resolve();
   private readonly unsubscribeAppState: () => void;
 
   constructor(
@@ -100,73 +117,103 @@ export class AssistantContinuousConversationService implements AssistantApplicat
 
   /** 打开连续会话：建连、开一次流、开始持续推流麦克风。 */
   async startTurn(): Promise<void> {
-    this.replyText = null;
-    this.soundLevel = null;
-    this.setState({ phase: 'connecting' });
-    await this.connect();
-    const connection = this.requireConnection();
-
-    // 权限必须在 voice.stream.start 之前拿到并检查结果：这条消息一旦发出并被
-    // 服务端确认，服务端就认为这个 session 有一条活跃的流；如果权限在那之后才
-    // 被发现拒绝，我们没有办法清理（没收到 voice.stream.started 就没有
-    // stream_id，发不了 voice.stream.end），这条 session 就再也开不了新流了。
-    const permissionGranted = await this.deps.capture.requestPermission();
-    if (!permissionGranted) {
-      this.setState({ message: '没有麦克风权限', phase: 'error' });
-      throw new Error('麦克风权限被拒绝');
+    if (this.startTurnInFlight) {
+      return;
     }
+    this.startTurnInFlight = true;
+    try {
+      this.replyText = null;
+      this.soundLevel = null;
+      // 上一通电话可能是在暂停期间被空闲超时兜底挂断的，muted 只在用户手动
+      // togglePause() 里恢复；不在这里清一次，新开的电话会继承上一通的静音,
+      // UI 显示 listening 但麦克风帧全被吞掉。
+      this.muted = false;
+      this.setState({ phase: 'connecting' });
+      await this.connect();
+      const connection = this.requireConnection();
 
-    const started = new Promise<string>((resolve, reject) => {
-      this.streamStartedWaiter = resolve;
-      this.streamStartRejecter = reject;
-    });
-    connection.send({
-      payload: {
-        audio_format: AUDIO_FORMAT,
-        channels: CHANNELS,
-        conversation_id: this.conversationId ?? undefined,
-        sample_rate_hz: SAMPLE_RATE_HZ,
-      },
-      type: 'voice.stream.start',
-    });
-    const conversationId = await started;
-
-    await this.deps.capture.start((chunk, soundLevel) => {
-      // capture.stop() 不保证之后不会再有一次迟到的回调（原生侧缓冲区排空的
-      // 时序不受这边控制）；streamId 在 endTurn() 里和发 voice.stream.end 同一
-      // 拍清空，迟到的音频块必须在这里挡住，否则服务端会因为收到不属于任何
-      // 活跃流的音频帧而报错。暂停期间录音本身不停（恢复更快），只是采到的
-      // 帧不再往外发。
-      if (this.streamId === null || this.muted) {
-        return;
+      // 权限必须在 voice.stream.start 之前拿到并检查结果：这条消息一旦发出并被
+      // 服务端确认，服务端就认为这个 session 有一条活跃的流；如果权限在那之后才
+      // 被发现拒绝，我们没有办法清理（没收到 voice.stream.started 就没有
+      // stream_id，发不了 voice.stream.end），这条 session 就再也开不了新流了。
+      const permissionGranted = await this.deps.capture.requestPermission();
+      if (!permissionGranted) {
+        this.setState({ message: '没有麦克风权限', phase: 'error' });
+        throw new Error('麦克风权限被拒绝');
       }
-      connection.sendAudioFrame(chunk);
-      this.soundLevel = soundLevel;
-      this.notifyListeners();
-    });
-    this.setState({ conversationId, phase: 'listening' });
-    this.armIdleTimer();
+
+      const started = new Promise<string>((resolve, reject) => {
+        this.streamStartedWaiter = resolve;
+        this.streamStartRejecter = reject;
+      });
+      connection.send({
+        payload: {
+          audio_format: AUDIO_FORMAT,
+          channels: CHANNELS,
+          conversation_id: this.conversationId ?? undefined,
+          sample_rate_hz: SAMPLE_RATE_HZ,
+        },
+        type: 'voice.stream.start',
+      });
+      const conversationId = await started;
+
+      await this.deps.capture.start((chunk, soundLevel) => {
+        // capture.stop() 不保证之后不会再有一次迟到的回调（原生侧缓冲区排空的
+        // 时序不受这边控制）；streamId 在 endTurn() 里和发 voice.stream.end 同一
+        // 拍清空，迟到的音频块必须在这里挡住，否则服务端会因为收到不属于任何
+        // 活跃流的音频帧而报错。暂停期间录音本身不停（恢复更快），只是采到的
+        // 帧不再往外发。
+        if (this.streamId === null || this.muted) {
+          return;
+        }
+        connection.sendAudioFrame(chunk);
+        this.soundLevel = soundLevel;
+        this.notifyListeners();
+      });
+      this.setState({ conversationId, phase: 'listening' });
+      this.armIdleTimer();
+    } finally {
+      this.startTurnInFlight = false;
+    }
   }
 
   /** 关闭连续会话：关麦、结束流、断开连接。 */
   async endTurn(): Promise<void> {
+    // 挂断可能同时从两个地方触发（用户点"结束对话" vs 服务端 voice.session.end），
+    // 也可能在它还没跑完时被同一个来源再触发一次——不加门槛会重复关连接、
+    // 重复发 voice.stream.end。
+    if (this.endTurnInFlight) {
+      return;
+    }
+    this.endTurnInFlight = true;
     this.clearIdleTimer();
     this.endingCall = true;
-    await this.deps.capture.stop();
+    try {
+      await this.deps.capture.stop();
+    } catch {
+      // 原生停止失败也不能让挂断卡在半路——跟 dispose() 的兜底思路一致，
+      // 后面几步（发 stream.end、关连接、状态归位）必须照常走完。
+    }
     this.soundLevel = null;
     const connection = this.connection;
-    if (connection !== null && this.streamId !== null) {
-      connection.send({
-        payload: { stream_id: this.streamId },
-        type: 'voice.stream.end',
-      });
+    try {
+      if (connection !== null && this.streamId !== null) {
+        connection.send({
+          payload: { stream_id: this.streamId },
+          type: 'voice.stream.end',
+        });
+      }
+      this.unsubscribeConnection?.();
+      connection?.close();
+    } catch {
+      // 收尾步骤失败也不能拦住下面的状态归位。
+    } finally {
       this.streamId = null;
+      this.unsubscribeConnection = null;
+      this.connection = null;
+      this.setState({ phase: 'idle' });
+      this.endTurnInFlight = false;
     }
-    this.unsubscribeConnection?.();
-    this.unsubscribeConnection = null;
-    connection?.close();
-    this.connection = null;
-    this.setState({ phase: 'idle' });
   }
 
   async dismissReply(): Promise<void> {
@@ -249,6 +296,12 @@ export class AssistantContinuousConversationService implements AssistantApplicat
   }
 
   private handleMessage(message: AssistantServerMessage): void {
+    // 挂断已经在路上：这之后到达的任何消息（典型场景是工具调用触发的下一轮
+    // 回复消息，抢在 endTurn() 跑完前到达）都不该再改状态,不然会把已经开始
+    // 归位的状态又改回"通话中"。
+    if (this.endTurnInFlight) {
+      return;
+    }
     if (isTransportError(message)) {
       this.setState({ message: message.error.message, phase: 'error' });
       this.rejectPendingStreamStart(new Error(message.error.message));
@@ -294,16 +347,16 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       case 'voice.tts.start':
         this.currentAudioId = message.audio_id;
         this.setState({ conversationId: message.conversation_id, phase: 'speaking' });
-        this.deps.playback
-          .startStream({
+        this.chainPlayback(() =>
+          this.deps.playback.startStream({
             encoding: 'pcm_s16le',
             sampleRateHz: message.payload.sample_rate_hz,
-          })
-          .catch(() => {});
+          }),
+        );
         return;
       case 'voice.tts.end':
         this.currentAudioId = null;
-        this.deps.playback.endStream().catch(() => {});
+        this.chainPlayback(() => this.deps.playback.endStream());
         this.setState({ conversationId: message.conversation_id, phase: 'listening' });
         // 播报完成后给一个全新的窗口，对应"播报完成后进入短暂等待"——不用单独
         // 再搞一个计时器，这次重置就当作那个等待。
@@ -313,7 +366,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         // 用户开口打断了正在播的回复：立刻丢掉播放端缓冲里还没放出来的音频，
         // 而不是等 voice.tts.end（后面仍会补发，但语义已经不是"正常说完"）。
         this.currentAudioId = null;
-        void this.deps.playback.stop().catch(() => {});
+        this.chainPlayback(() => this.deps.playback.stop());
         this.setState({ conversationId: message.conversation_id, phase: 'interrupted' });
         return;
       case 'voice.session.end':
@@ -348,10 +401,22 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     if (this.currentAudioId === null) {
       return;
     }
-    this.deps.playback.pushChunk(chunk).catch(() => {});
+    this.chainPlayback(() => this.deps.playback.pushChunk(chunk));
+  }
+
+  /** 把一次对原生播放模块的调用接到 playbackChain 末尾，保证上一次真正执行完
+   * (不管成功与否)才轮到这一次。 */
+  private chainPlayback(run: () => Promise<void>): void {
+    this.playbackChain = this.playbackChain.then(run).catch(() => {});
   }
 
   private handleClose(event: { code: number; reason: string }): void {
+    // 必须先解绑再置空：endTurn() 也会解绑同一份订阅,但它是在 await
+    // capture.stop() 之后才读 this.unsubscribeConnection 的——如果真实断线
+    // 恰好在那段 await 期间发生,这里要是只置空不调用,三个监听器就会永远
+    // 留在共享的 AuthenticatedWebSocketClient 上（这个服务实例本身跨每通
+    // 电话复用,泄漏的监听器会让下一通电话的每条消息都被处理两次）。
+    this.unsubscribeConnection?.();
     this.connection = null;
     this.unsubscribeConnection = null;
     // endTurn() 自己发起的关闭也会触发这个回调（WebSocket close 事件对主动关闭
