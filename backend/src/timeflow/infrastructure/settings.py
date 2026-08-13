@@ -28,6 +28,7 @@ class Settings:
     ws_audio_queue_max_chunks: int
     ws_max_audio_duration_ms: int
     cors_allowed_origins: tuple[str, ...] = ()
+    ws_max_continuous_audio_duration_ms: int = 1_800_000
     jwt_secret: str = field(default="", repr=False)
     jwt_issuer: str = JWT_ISSUER
     jwt_audience: str = JWT_AUDIENCE
@@ -61,6 +62,11 @@ class Settings:
     tencent_map_api_key: str = ""
     tencent_map_base_url: str = "https://apis.map.qq.com"
     tencent_map_timeout_seconds: float = 5.0
+    # What continuous mode uses server-side; push-to-talk never touches this. Client
+    # picks push_to_talk vs continuous -- which vendor VAD backs continuous is ours to tune.
+    aliyun_audio_turn_detection: str = "smart_turn"
+    aliyun_audio_vad_threshold: float = 0.5
+    aliyun_audio_vad_silence_duration_ms: int = 800
     # "1" = the end-to-end realtime model; "2" = the LLM+ASR+TTS conversation pipeline.
     voice_agent_mode: str = "1"
 
@@ -95,6 +101,15 @@ class Settings:
         aliyun_tts_task_timeout_seconds = float(
             environ.get("TIMEFLOW_ALIYUN_TTS_TASK_TIMEOUT_SECONDS", "30.0")
         )
+        aliyun_audio_turn_detection = environ.get(
+            "TIMEFLOW_ALIYUN_AUDIO_TURN_DETECTION", "smart_turn"
+        )
+        aliyun_audio_vad_threshold = float(
+            environ.get("TIMEFLOW_ALIYUN_AUDIO_VAD_THRESHOLD", "0.5")
+        )
+        aliyun_audio_vad_silence_duration_ms = int(
+            environ.get("TIMEFLOW_ALIYUN_AUDIO_VAD_SILENCE_DURATION_MS", "800")
+        )
 
         if not -1.0 <= aliyun_asr_vad_threshold <= 1.0:
             raise ValueError("TIMEFLOW_ALIYUN_ASR_VAD_THRESHOLD must be between -1 and 1")
@@ -115,6 +130,16 @@ class Settings:
         if not math.isfinite(tencent_map_timeout_seconds) or tencent_map_timeout_seconds <= 0:
             raise ValueError("TIMEFLOW_TENCENT_MAP_TIMEOUT_SECONDS must be greater than zero")
         _validate_tencent_map_base_url(tencent_map_base_url)
+        if aliyun_audio_turn_detection not in ("smart_turn", "server_vad"):
+            raise ValueError(
+                "TIMEFLOW_ALIYUN_AUDIO_TURN_DETECTION must be 'smart_turn' or 'server_vad'"
+            )
+        if not -1.0 <= aliyun_audio_vad_threshold <= 1.0:
+            raise ValueError("TIMEFLOW_ALIYUN_AUDIO_VAD_THRESHOLD must be between -1 and 1")
+        if not 200 <= aliyun_audio_vad_silence_duration_ms <= 6000:
+            raise ValueError(
+                "TIMEFLOW_ALIYUN_AUDIO_VAD_SILENCE_DURATION_MS must be between 200 and 6000"
+            )
 
         return cls(
             app_name=environ.get("TIMEFLOW_APP_NAME", "TimeFlow API"),
@@ -135,6 +160,9 @@ class Settings:
             ),
             cors_allowed_origins=_parse_cors_allowed_origins(
                 environ.get("TIMEFLOW_CORS_ALLOWED_ORIGINS", "")
+            ),
+            ws_max_continuous_audio_duration_ms=int(
+                environ.get("TIMEFLOW_WS_MAX_CONTINUOUS_AUDIO_DURATION_MS", "1800000")
             ),
             jwt_secret=environ.get("TIMEFLOW_JWT_SECRET", ""),
             jwt_issuer=environ.get("TIMEFLOW_JWT_ISSUER", JWT_ISSUER),
@@ -175,6 +203,9 @@ class Settings:
             tencent_map_api_key=environ.get("TIMEFLOW_TENCENT_MAP_KEY", "").strip(),
             tencent_map_base_url=tencent_map_base_url,
             tencent_map_timeout_seconds=tencent_map_timeout_seconds,
+            aliyun_audio_turn_detection=aliyun_audio_turn_detection,
+            aliyun_audio_vad_threshold=aliyun_audio_vad_threshold,
+            aliyun_audio_vad_silence_duration_ms=aliyun_audio_vad_silence_duration_ms,
             voice_agent_mode=voice_agent_mode,
         )
 

@@ -79,6 +79,36 @@ def test_valid_hello_opens_a_session() -> None:
     assert reply["payload"]["server_time"].endswith("+00:00")
 
 
+def test_voice_mode_defaults_to_push_to_talk_when_absent() -> None:
+    """A client that never sends voice_mode gets the safe, current-behavior default."""
+    handshake = SessionHandshake(_TOKENS, session_id_factory=lambda: "ws_session_test")
+
+    result = handshake.perform(VALID_HELLO)
+
+    assert result.session is not None
+    assert result.session.voice_mode == "push_to_talk"
+
+
+def test_a_requested_voice_mode_is_honored_when_recognized() -> None:
+    handshake = SessionHandshake(_TOKENS, session_id_factory=lambda: "ws_session_test")
+    hello = {**VALID_HELLO, "payload": {**VALID_HELLO["payload"], "voice_mode": "continuous"}}
+
+    result = handshake.perform(hello)
+
+    assert result.session is not None
+    assert result.session.voice_mode == "continuous"
+
+
+def test_an_unrecognized_voice_mode_falls_back_to_push_to_talk() -> None:
+    handshake = SessionHandshake(_TOKENS, session_id_factory=lambda: "ws_session_test")
+    hello = {**VALID_HELLO, "payload": {**VALID_HELLO["payload"], "voice_mode": "telepathy"}}
+
+    result = handshake.perform(hello)
+
+    assert result.session is not None
+    assert result.session.voice_mode == "push_to_talk"
+
+
 def test_rejected_token_returns_unauthenticated() -> None:
     """A token the verifier rejects yields session.error with UNAUTHENTICATED."""
     client = TestClient(_build_app())
