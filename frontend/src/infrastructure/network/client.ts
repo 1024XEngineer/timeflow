@@ -65,7 +65,10 @@ export function createApiClient(options: CreateApiClientOptions = {}): ApiReques
     }
 
     const { auth: _auth, ...requestInit } = init;
-    const response = await fetchImplementation(`${API_BASE_URL}${path}`, { ...requestInit, headers });
+    const response = await fetchImplementation(`${API_BASE_URL}${path}`, {
+      ...requestInit,
+      headers,
+    });
 
     if (!response.ok) {
       const body = await readJson(response);
@@ -95,7 +98,8 @@ export function createPublicApiClient(options: CreateApiClientOptions = {}): Api
 /** 受保护入口统一走 Token 读取和严格 401 失效分类。 */
 export function createProtectedApiClient(options: CreateApiClientOptions): ApiRequest {
   const request = createApiClient(options);
-  return <T>(path: string, init?: ApiRequestInit) => request<T>(path, { ...init, auth: 'protected' });
+  return <T>(path: string, init?: ApiRequestInit) =>
+    request<T>(path, { ...init, auth: 'protected' });
 }
 
 /** 兼容默认公开请求；业务调用应在 app 组合处取得受保护 client。 */

@@ -1,9 +1,5 @@
 import { AppRuntime } from '../orchestration/AppRuntime';
-import {
-  createAuthRuntime,
-  type AuthRuntime,
-  type CreateAuthRuntimeOptions,
-} from '../authRuntime';
+import { createAuthRuntime, type AuthRuntime, type CreateAuthRuntimeOptions } from '../authRuntime';
 import type {
   ReminderApplicationDependencies,
   ReminderApplicationPort,

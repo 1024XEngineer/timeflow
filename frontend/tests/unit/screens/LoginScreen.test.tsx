@@ -8,8 +8,16 @@ import { FakeAuthSessionStore } from '../../../src/features/auth/testing/FakeAut
 import { LoginScreen } from '../../../src/screens/LoginScreen';
 
 function renderLogin(authAccess: AuthAccess) {
-  const controller = new AuthController({ authAccess, now: () => 100_000, store: new FakeAuthSessionStore() });
-  render(<AuthProvider controller={controller}><LoginScreen /></AuthProvider>);
+  const controller = new AuthController({
+    authAccess,
+    now: () => 100_000,
+    store: new FakeAuthSessionStore(),
+  });
+  render(
+    <AuthProvider controller={controller}>
+      <LoginScreen />
+    </AuthProvider>,
+  );
   return controller;
 }
 
@@ -20,7 +28,11 @@ function fillValidForm() {
 
 describe('LoginScreen', () => {
   it('validates empty fields without authenticating', async () => {
-    const controller = renderLogin(async () => ({ access_token: 'opaque-token', account_id: 'acc_001', expires_in: 3600 }));
+    const controller = renderLogin(async () => ({
+      access_token: 'opaque-token',
+      account_id: 'acc_001',
+      expires_in: 3600,
+    }));
 
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: '继续' }));
@@ -52,7 +64,9 @@ describe('LoginScreen', () => {
     [new AuthAccessError('network'), '无法连接服务器，请检查网络后重试'],
     [new AuthAccessError('timeout'), '请求超时，请稍后重试'],
   ])('shows the safe error for %p', async (error, message) => {
-    renderLogin(async () => { throw error; });
+    renderLogin(async () => {
+      throw error;
+    });
     fillValidForm();
 
     await act(async () => {

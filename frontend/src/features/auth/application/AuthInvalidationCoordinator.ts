@@ -85,10 +85,7 @@ export class AuthInvalidationCoordinator {
     try {
       await operation();
     } catch {
-      recordAuthCleanupFailure(
-        this.options.diagnostics ?? NOOP_AUTH_DIAGNOSTICS,
-        component,
-      );
+      recordAuthCleanupFailure(this.options.diagnostics ?? NOOP_AUTH_DIAGNOSTICS, component);
     }
   }
 

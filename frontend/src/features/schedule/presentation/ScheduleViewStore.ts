@@ -1,7 +1,4 @@
-import type {
-  GetSchedulesByDayQuery,
-  ScheduleOccurrenceView,
-} from '../application';
+import type { GetSchedulesByDayQuery, ScheduleOccurrenceView } from '../application';
 
 export interface ScheduleViewSnapshot {
   readonly accountId: string | null;
@@ -26,10 +23,7 @@ export class ScheduleViewStore {
     return this.snapshot;
   }
 
-  replace(
-    query: GetSchedulesByDayQuery,
-    occurrences: readonly ScheduleOccurrenceView[],
-  ): void {
+  replace(query: GetSchedulesByDayQuery, occurrences: readonly ScheduleOccurrenceView[]): void {
     this.snapshot = {
       accountId: query.accountId,
       occurrences: [...occurrences],

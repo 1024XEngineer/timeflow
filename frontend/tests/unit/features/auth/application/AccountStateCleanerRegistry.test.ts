@@ -31,9 +31,7 @@ describe('AccountStateCleanerRegistry', () => {
     await registry.clearAll();
 
     expect(order).toEqual(['schedule-view', 'reminder-runtime']);
-    expect(events).toEqual([
-      { component: 'schedule-view', event: 'auth.cleanup.failed' },
-    ]);
+    expect(events).toEqual([{ component: 'schedule-view', event: 'auth.cleanup.failed' }]);
     expect(events[0]).not.toHaveProperty('error');
   });
 

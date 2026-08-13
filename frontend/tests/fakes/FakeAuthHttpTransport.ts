@@ -22,10 +22,7 @@ export class FakeAuthHttpTransport {
   readonly requests: FakeAuthHttpRequest[] = [];
   private readonly outcomes: FakeAuthHttpOutcome[] = [];
 
-  readonly fetch = (async (
-    input: RequestInfo | URL,
-    init: RequestInit = {},
-  ): Promise<Response> => {
+  readonly fetch = (async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
     this.requests.push({ headers: new Headers(init.headers), init, url: String(input) });
     const outcome = this.outcomes.shift();
     if (!outcome) {

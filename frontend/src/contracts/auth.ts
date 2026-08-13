@@ -86,7 +86,9 @@ export function parseAuthErrorEnvelope(value: unknown): AuthErrorEnvelope | unde
 }
 
 /** 只有明确的访问凭据失效码可以驱动本地会话清理。 */
-export function isAuthAccessErrorCode(value: unknown): value is typeof AUTH_REQUIRED | typeof AUTH_INVALID_TOKEN {
+export function isAuthAccessErrorCode(
+  value: unknown,
+): value is typeof AUTH_REQUIRED | typeof AUTH_INVALID_TOKEN {
   return value === AUTH_REQUIRED || value === AUTH_INVALID_TOKEN;
 }
 

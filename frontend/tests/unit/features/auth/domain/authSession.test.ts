@@ -48,7 +48,10 @@ describe('isAuthSession', () => {
     [{ accountId: 'acc_001', accessToken: '', expiresAt: 1 }, false],
     [{ accountId: 'acc_001', accessToken: '   ', expiresAt: 1 }, false],
     [{ accountId: 'acc_001', accessToken: 'token', expiresAt: Infinity }, false],
-    [Object.assign([] as unknown[], { accountId: 'acc_001', accessToken: 'token', expiresAt: 1 }), false],
+    [
+      Object.assign([] as unknown[], { accountId: 'acc_001', accessToken: 'token', expiresAt: 1 }),
+      false,
+    ],
   ])('validates session fields for %p', (session, expected) => {
     expect(isAuthSession(session)).toBe(expected);
   });

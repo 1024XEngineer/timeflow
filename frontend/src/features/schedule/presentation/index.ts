@@ -1,4 +1,1 @@
-export {
-  ScheduleViewStore,
-  type ScheduleViewSnapshot,
-} from './ScheduleViewStore';
+export { ScheduleViewStore, type ScheduleViewSnapshot } from './ScheduleViewStore';

@@ -134,10 +134,7 @@ describe('isAuthAccessResponse', () => {
 
   it('requires every response field to be an own property', () => {
     const accountIdDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, 'account_id');
-    const accessTokenDescriptor = Object.getOwnPropertyDescriptor(
-      Object.prototype,
-      'access_token',
-    );
+    const accessTokenDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, 'access_token');
     const expiresInDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, 'expires_in');
 
     try {
@@ -148,18 +145,24 @@ describe('isAuthAccessResponse', () => {
         expires_in: { configurable: true, value: response.expires_in },
       });
 
-      expect(isAuthAccessResponse({
-        access_token: response.access_token,
-        expires_in: response.expires_in,
-      })).toBe(false);
-      expect(isAuthAccessResponse({
-        account_id: response.account_id,
-        expires_in: response.expires_in,
-      })).toBe(false);
-      expect(isAuthAccessResponse({
-        account_id: response.account_id,
-        access_token: response.access_token,
-      })).toBe(false);
+      expect(
+        isAuthAccessResponse({
+          access_token: response.access_token,
+          expires_in: response.expires_in,
+        }),
+      ).toBe(false);
+      expect(
+        isAuthAccessResponse({
+          account_id: response.account_id,
+          expires_in: response.expires_in,
+        }),
+      ).toBe(false);
+      expect(
+        isAuthAccessResponse({
+          account_id: response.account_id,
+          access_token: response.access_token,
+        }),
+      ).toBe(false);
     } finally {
       restoreObjectPrototypeProperty('account_id', accountIdDescriptor);
       restoreObjectPrototypeProperty('access_token', accessTokenDescriptor);

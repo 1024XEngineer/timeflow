@@ -8,10 +8,22 @@ import {
 
 describe('parseAuthErrorEnvelope', () => {
   it.each([
-    ['accepts the frozen nested envelope', { error: { code: 'AUTH_INVALID_CREDENTIALS', message: 'Invalid credentials' } }, true],
-    ['rejects the legacy top-level code', { code: 'AUTH_INVALID_CREDENTIALS', message: 'Invalid credentials' }, false],
+    [
+      'accepts the frozen nested envelope',
+      { error: { code: 'AUTH_INVALID_CREDENTIALS', message: 'Invalid credentials' } },
+      true,
+    ],
+    [
+      'rejects the legacy top-level code',
+      { code: 'AUTH_INVALID_CREDENTIALS', message: 'Invalid credentials' },
+      false,
+    ],
     ['rejects an unknown code', { error: { code: 'AUTH_UNKNOWN', message: 'Unknown' } }, false],
-    ['rejects inherited required fields', Object.create({ error: { code: 'AUTH_REQUIRED', message: 'Authentication required' } }), false],
+    [
+      'rejects inherited required fields',
+      Object.create({ error: { code: 'AUTH_REQUIRED', message: 'Authentication required' } }),
+      false,
+    ],
     ['rejects incomplete nested values', { error: { code: 'AUTH_REQUIRED' } }, false],
     ['rejects arrays', [], false],
   ])('%s', (_name, body, accepted) => {

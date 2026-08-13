@@ -138,7 +138,9 @@ describe('SecureAuthSessionStore', () => {
         const storedSession: Record<string, unknown> = { ...session };
         delete storedSession[missingField];
         const client = createClient();
-        client.getItemAsync.mockResolvedValue(JSON.stringify({ version: 1, session: storedSession }));
+        client.getItemAsync.mockResolvedValue(
+          JSON.stringify({ version: 1, session: storedSession }),
+        );
         const store = new SecureAuthSessionStore(client, () => now);
 
         await expect(store.read()).resolves.toBeUndefined();

@@ -52,7 +52,10 @@ describe('AuthSessionDeletionRetrier', () => {
     await Promise.resolve();
     second.resolve();
     await secondClear;
-    const authenticating = controller.authenticate({ password: 'password123', username: 'timeflow_user' });
+    const authenticating = controller.authenticate({
+      password: 'password123',
+      username: 'timeflow_user',
+    });
 
     await flushMicrotasks();
     expect(writeStarted).toBe(false);
@@ -73,9 +76,7 @@ describe('AuthSessionDeletionRetrier', () => {
 
     await retrier.clearOrRetry();
 
-    expect(events).toEqual([
-      { component: 'session-store', event: 'auth.cleanup.failed' },
-    ]);
+    expect(events).toEqual([{ component: 'session-store', event: 'auth.cleanup.failed' }]);
     expect(events[0]).not.toHaveProperty('error');
     store.clearError = undefined;
     jest.advanceTimersByTime(1_000);

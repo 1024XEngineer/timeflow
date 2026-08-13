@@ -23,7 +23,11 @@ describe('useAuthAccessForm', () => {
 
 function createController() {
   return new AuthController({
-    authAccess: async () => ({ access_token: 'opaque-token', account_id: 'acc_001', expires_in: 3600 }),
+    authAccess: async () => ({
+      access_token: 'opaque-token',
+      account_id: 'acc_001',
+      expires_in: 3600,
+    }),
     now: () => 100_000,
     store: new FakeAuthSessionStore(),
   });

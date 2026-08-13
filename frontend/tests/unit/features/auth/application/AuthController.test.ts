@@ -9,11 +9,31 @@ const response = { access_token: 'opaque-token', account_id: 'acc_001', expires_
 
 describe('AuthController', () => {
   it.each([
-    ['restores a valid record', { accountId: 'acc_001', accessToken: 'token', expiresAt: 200_000 }, undefined, 'authenticated'],
+    [
+      'restores a valid record',
+      { accountId: 'acc_001', accessToken: 'token', expiresAt: 200_000 },
+      undefined,
+      'authenticated',
+    ],
     ['becomes unauthenticated without a record', undefined, undefined, 'unauthenticated'],
-    ['keeps loading with a retry error after a normal read failure', undefined, new Error('storage unavailable'), 'loading'],
-    ['cleans up a required record failure', undefined, new AuthSessionCleanupRequiredError(), 'unauthenticated'],
-    ['cleans up an obviously expired record', { accountId: 'acc_001', accessToken: 'token', expiresAt: 130_000 }, undefined, 'unauthenticated'],
+    [
+      'keeps loading with a retry error after a normal read failure',
+      undefined,
+      new Error('storage unavailable'),
+      'loading',
+    ],
+    [
+      'cleans up a required record failure',
+      undefined,
+      new AuthSessionCleanupRequiredError(),
+      'unauthenticated',
+    ],
+    [
+      'cleans up an obviously expired record',
+      { accountId: 'acc_001', accessToken: 'token', expiresAt: 130_000 },
+      undefined,
+      'unauthenticated',
+    ],
   ])('%s', async (_name, session, readError, status) => {
     const store = new FakeAuthSessionStore();
     let cleared = false;
@@ -24,7 +44,11 @@ describe('AuthController', () => {
     };
     store.session = session;
     store.readError = readError;
-    const controller = new AuthController({ authAccess: async () => response, now: () => 100_000, store });
+    const controller = new AuthController({
+      authAccess: async () => response,
+      now: () => 100_000,
+      store,
+    });
 
     await controller.initialize();
 
@@ -42,7 +66,11 @@ describe('AuthController', () => {
 
   it('publishes authentication only after persisting the session', async () => {
     const store = new FakeAuthSessionStore();
-    const controller = new AuthController({ authAccess: async () => response, now: () => 100_000, store });
+    const controller = new AuthController({
+      authAccess: async () => response,
+      now: () => 100_000,
+      store,
+    });
 
     await controller.authenticate(credentials);
 
@@ -64,7 +92,11 @@ describe('AuthController', () => {
       clearScheduled = true;
       await clear();
     };
-    const controller = new AuthController({ authAccess: async () => response, now: () => 100_000, store });
+    const controller = new AuthController({
+      authAccess: async () => response,
+      now: () => 100_000,
+      store,
+    });
 
     await expect(controller.authenticate(credentials)).rejects.toMatchObject({
       message: 'Authentication session could not be saved',
@@ -80,7 +112,11 @@ describe('AuthController', () => {
     store.session = { accountId: 'old', accessToken: 'old-token', expiresAt: 200_000 };
     const deferred = createDeferred<void>();
     store.beforeClear = () => deferred.promise;
-    const controller = new AuthController({ authAccess: async () => response, now: () => 100_000, store });
+    const controller = new AuthController({
+      authAccess: async () => response,
+      now: () => 100_000,
+      store,
+    });
     await controller.initialize();
 
     const signingOut = controller.signOut();

@@ -30,9 +30,9 @@ describe('authentication closure', () => {
     await harness.runtime.controller.authenticate({ ...credentials, username: 'existing_user' });
 
     expect(harness.transport.requests).toHaveLength(2);
-    expect(harness.transport.requests.every((request) => request.url.endsWith('/auth/access'))).toBe(
-      true,
-    );
+    expect(
+      harness.transport.requests.every((request) => request.url.endsWith('/auth/access')),
+    ).toBe(true);
     expect(
       harness.transport.requests.every((request) => !request.headers.has('Authorization')),
     ).toBe(true);
@@ -73,9 +73,7 @@ describe('authentication closure', () => {
     expect(protectedRequest?.headers.get('X-Trace-Id')).toBe('trace_001');
     expect(hello.payload.access_token).toBe('opaque-token');
     expect(hello.payload.device_id).toBe('device_001');
-    expect(harness.socketFactory).toHaveBeenCalledWith(
-      'ws://localhost/ws?device_id=device_001',
-    );
+    expect(harness.socketFactory).toHaveBeenCalledWith('ws://localhost/ws?device_id=device_001');
   });
 
   it('deduplicates concurrent HTTP 401 and WebSocket unauthenticated cleanup', async () => {
@@ -95,9 +93,7 @@ describe('authentication closure', () => {
     const httpRequest = harness.runtime.protectedClient('/schedules');
     await flushMicrotasks();
 
-    socket.receive(
-      JSON.stringify({ ...wsSessionUnauthenticated, request_id: hello.request_id }),
-    );
+    socket.receive(JSON.stringify({ ...wsSessionUnauthenticated, request_id: hello.request_id }));
     deferredHttp.resolve(401, httpInvalidToken);
     await flushMicrotasks();
 

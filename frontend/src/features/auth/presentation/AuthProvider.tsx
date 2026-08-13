@@ -47,7 +47,8 @@ export function AuthProvider({
   const value = useMemo<AuthContextValue>(
     () => ({
       authenticate: (credentials) => controller.authenticate(credentials),
-      invalidate: (reason) => invalidationCoordinator?.invalidate(reason) ?? controller.invalidate(reason),
+      invalidate: (reason) =>
+        invalidationCoordinator?.invalidate(reason) ?? controller.invalidate(reason),
       retryInitialization: () => controller.retryInitialization(),
       signOut: () => invalidationCoordinator?.invalidate('revoked') ?? controller.signOut(),
       viewState,
