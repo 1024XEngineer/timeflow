@@ -20,3 +20,18 @@ export type {
   ReminderType,
 } from './reminder';
 export { DEFAULT_SNOOZE_MINUTES } from './reminder';
+export type { GeofenceTransition, GeofenceWatchMode } from './geofence';
+export {
+  distanceMeters,
+  evaluateGeofence,
+  resolveGeofenceCenter,
+  resolveWatchMode,
+} from './geofence';
+export {
+  isSnoozeActive,
+  isSnoozeExpired,
+  isTimeWindowReached,
+  resolveEffectiveTriggerAt,
+  resolveSnoozeUntil,
+  resolveTimeTriggerAt,
+} from './timeWindow';

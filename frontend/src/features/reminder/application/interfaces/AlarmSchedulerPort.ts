@@ -8,6 +8,8 @@ export type AlarmScheduleRequest = {
 export type AlarmScheduleReceipt = {
   alarm_id: string;
   schedule_id: string;
+  /** false 表示未真正挂上系统闹钟，应用层不得当作成功注册。 */
+  scheduled: boolean;
 };
 
 /** 原生闹钟映射边界；触发时间的选择留在应用层或领域层。 */

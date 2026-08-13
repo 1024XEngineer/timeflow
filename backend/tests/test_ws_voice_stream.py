@@ -4,6 +4,7 @@ import threading
 from collections.abc import AsyncIterator
 from typing import Any
 
+from auth_test_support import build_test_token_service
 from fastapi import FastAPI, WebSocket
 from fastapi.testclient import TestClient
 
@@ -16,12 +17,15 @@ from timeflow.gateway.websocket.handlers.session import SessionHandshake
 from timeflow.gateway.websocket.handlers.voice_stream import VoiceStreamHandlers
 from timeflow.gateway.websocket.ports import AudioSink, StreamContext
 from timeflow.gateway.websocket.router import MessageRouter
-from timeflow.infrastructure.security.token_verifier import FakeTokenVerifier
 
+_TOKENS = build_test_token_service()
 VALID_HELLO: dict[str, Any] = {
     "type": "session.hello",
     "request_id": "req_001",
-    "payload": {"access_token": "token-abc", "device_id": "device_001"},
+    "payload": {
+        "access_token": _TOKENS.issue("acc_test").access_token,
+        "device_id": "device_001",
+    },
 }
 START: dict[str, Any] = {
     "type": "voice.stream.start",
@@ -72,7 +76,7 @@ def _build_app(
 ) -> FastAPI:
     """Build an app wiring the transport to the given sink."""
     application = FastAPI()
-    handshake = SessionHandshake(FakeTokenVerifier(), session_id_factory=lambda: "ws_session_test")
+    handshake = SessionHandshake(_TOKENS, session_id_factory=lambda: "ws_session_test")
     connections = ConnectionManager()
     limiter = UnauthenticatedConnectionLimiter(100)
     voice_streams = VoiceStreamHandlers(
@@ -418,7 +422,7 @@ def test_an_audio_error_names_the_conversation_it_belongs_to() -> None:
     sink = CapturingSink()
     client = TestClient(_build_app(sink))
 
-    with client.websocket_connect("/ws") as websocket:
+    with client.websocket_connect("/ws?device_id=device_001") as websocket:
         websocket.send_json(VALID_HELLO)
         websocket.receive_json()
         websocket.send_json(START)
@@ -436,7 +440,7 @@ def test_an_error_with_no_conversation_omits_the_field() -> None:
     sink = CapturingSink()
     client = TestClient(_build_app(sink))
 
-    with client.websocket_connect("/ws") as websocket:
+    with client.websocket_connect("/ws?device_id=device_001") as websocket:
         websocket.send_json(VALID_HELLO)
         websocket.receive_json()
 
@@ -452,7 +456,7 @@ def test_a_rejected_second_start_names_the_conversation_holding_the_stream() -> 
     sink = CapturingSink()
     client = TestClient(_build_app(sink))
 
-    with client.websocket_connect("/ws") as websocket:
+    with client.websocket_connect("/ws?device_id=device_001") as websocket:
         websocket.send_json(VALID_HELLO)
         websocket.receive_json()
         websocket.send_json(START)

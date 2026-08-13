@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
+from auth_test_support import build_test_token_service
 from fastapi import FastAPI, WebSocket
 from fastapi.testclient import TestClient
 
@@ -20,17 +21,20 @@ from timeflow.gateway.websocket.handlers.message_ack import handle_message_ack
 from timeflow.gateway.websocket.handlers.session import SessionHandshake
 from timeflow.gateway.websocket.handlers.voice_stream import VoiceStreamHandlers
 from timeflow.gateway.websocket.router import MessageRouter
-from timeflow.infrastructure.security.token_verifier import FakeTokenVerifier
 from timeflow.intelligence.fake_agent import (
     FAKE_REPLY_STEPS,
     FAKE_TRANSCRIPT,
     FakeAgent,
 )
 
+_TOKENS = build_test_token_service()
 VALID_HELLO: dict[str, Any] = {
     "type": "session.hello",
     "request_id": "req_session_001",
-    "payload": {"access_token": "token-abc", "device_id": "device_001"},
+    "payload": {
+        "access_token": _TOKENS.issue("acc_test").access_token,
+        "device_id": "device_001",
+    },
 }
 START: dict[str, Any] = {
     "type": "voice.stream.start",
@@ -84,7 +88,7 @@ def _build_app(agent: Agent | None = None, *, max_audio_duration_ms: int = 120_0
     """Build an app wiring the transport to an agent, with fixed identifiers."""
     application = FastAPI()
     connections = ConnectionManager()
-    handshake = SessionHandshake(FakeTokenVerifier(), session_id_factory=lambda: "ws_session_test")
+    handshake = SessionHandshake(_TOKENS, session_id_factory=lambda: "ws_session_test")
     limiter = UnauthenticatedConnectionLimiter(100)
     voice_streams = VoiceStreamHandlers(
         AgentAudioSink(

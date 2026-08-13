@@ -87,9 +87,10 @@ class WebSocketResultSink:
                 operation=result.operation,
                 status=result.status,
                 schedule=result.schedule,
+                schedules=result.schedules,
             ),
         )
-        await self._send(stream.session_id, message.type, message.model_dump())
+        await self._send(stream.session_id, message.type, message.model_dump(exclude_none=True))
 
     async def deliver_question(
         self, question: DialogueQuestionInfo, stream: StreamIdentity
