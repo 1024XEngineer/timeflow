@@ -34,36 +34,6 @@ export function AppRoot({
 
 function AuthRoute() {
   const { retryInitialization, viewState } = useAuth();
-  const accountId = viewState.status === 'authenticated' ? viewState.accountId : undefined;
-  const [scheduleService, setScheduleService] = useState<SqliteScheduleClientService>();
-  const [databaseError, setDatabaseError] = useState<string | null>(null);
-  const [databaseRetryToken, setDatabaseRetryToken] = useState(0);
-
-  useEffect(() => {
-    setScheduleService(undefined);
-    setDatabaseError(null);
-    if (!accountId) return;
-
-    let active = true;
-    openTimeflowDatabase()
-      .then((database) => {
-        if (active) {
-          setScheduleService(
-            new SqliteScheduleClientService(new ScheduleLocalRepository(database)),
-          );
-        }
-      })
-      .catch(() => {
-        if (active) setDatabaseError('本地日程存储初始化失败');
-      });
-    return () => {
-      active = false;
-    };
-  }, [accountId, databaseRetryToken]);
-
-  const retryDatabase = useCallback(() => {
-    setDatabaseRetryToken((value) => value + 1);
-  }, []);
 
   if (viewState.status === 'loading') {
     return (
@@ -89,17 +59,62 @@ function AuthRoute() {
     return <LoginScreen />;
   }
 
-  return scheduleService ? (
+  return <AuthenticatedScheduleRoute accountId={viewState.accountId} key={viewState.accountId} />;
+}
+
+type ScheduleLoadState =
+  | {
+      readonly retryToken: number;
+      readonly service: SqliteScheduleClientService;
+      readonly status: 'ready';
+    }
+  | {
+      readonly retryToken: number;
+      readonly status: 'error';
+    };
+
+function AuthenticatedScheduleRoute({ accountId }: { readonly accountId: string }) {
+  const [loadState, setLoadState] = useState<ScheduleLoadState>();
+  const [retryToken, setRetryToken] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    openTimeflowDatabase()
+      .then((database) => {
+        if (active) {
+          setLoadState({
+            retryToken,
+            service: new SqliteScheduleClientService(new ScheduleLocalRepository(database)),
+            status: 'ready',
+          });
+        }
+      })
+      .catch(() => {
+        if (active) setLoadState({ retryToken, status: 'error' });
+      });
+    return () => {
+      active = false;
+    };
+  }, [retryToken]);
+
+  const retryDatabase = useCallback(() => {
+    setRetryToken((value) => value + 1);
+  }, []);
+  const currentLoadState = loadState?.retryToken === retryToken ? loadState : undefined;
+
+  return currentLoadState?.status === 'ready' ? (
     <ScheduleCalendarScreen
-      accountId={viewState.accountId}
-      service={scheduleService}
+      accountId={accountId}
+      service={currentLoadState.service}
       timezone={Intl.DateTimeFormat().resolvedOptions().timeZone}
     />
   ) : (
     <View style={styles.authenticatedScreen}>
-      <Text style={styles.title}>{databaseError ?? '正在准备日程'}</Text>
-      <Text style={styles.account}>账号：{viewState.accountId}</Text>
-      {databaseError ? (
+      <Text style={styles.title}>
+        {currentLoadState?.status === 'error' ? '本地日程存储初始化失败' : '正在准备日程'}
+      </Text>
+      <Text style={styles.account}>账号：{accountId}</Text>
+      {currentLoadState?.status === 'error' ? (
         <Pressable accessibilityRole="button" onPress={retryDatabase} style={styles.retry}>
           <Text style={styles.retryText}>重试</Text>
         </Pressable>
