@@ -79,4 +79,4 @@ export {
   MemoryReminderStateStore,
   NoopPopup,
 } from './data/local';
-export { MockReminderPresenter } from './presentation';
+export { MockReminderPresenter, useReminderPermissionsOnLaunch } from './presentation';

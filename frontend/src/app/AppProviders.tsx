@@ -3,6 +3,7 @@ import { AppState } from 'react-native';
 
 import type { AuthController, AuthInvalidationCoordinator } from '../features/auth/application';
 import { AuthProvider, useAuth } from '../features/auth/presentation/AuthProvider';
+import { useReminderPermissionsOnLaunch } from '../features/reminder';
 import { AppServicesProvider } from './composition/AppServicesProvider';
 import type { AppServices } from './composition/createAppServices';
 
@@ -17,6 +18,7 @@ export function AppProviders({
   invalidationCoordinator?: AuthInvalidationCoordinator;
   services: AppServices;
 }>) {
+  useReminderPermissionsOnLaunch(services.reminderPorts.device);
   return (
     <AuthProvider controller={authController} invalidationCoordinator={invalidationCoordinator}>
       <AppServicesProvider services={services}>
