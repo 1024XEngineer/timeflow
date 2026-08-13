@@ -168,6 +168,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
     connection.send({
       payload: {
         access_token: this.options.accessToken,
+        coordinate_system: sample ? 'WGS84' : undefined,
         device_id: this.options.deviceId,
         latitude: sample?.latitude,
         longitude: sample?.longitude,

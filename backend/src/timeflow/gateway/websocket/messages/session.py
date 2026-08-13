@@ -14,6 +14,7 @@ class SessionHelloPayload(BaseModel):
     timezone: str | None = None
     latitude: float | None = None
     longitude: float | None = None
+    coordinate_system: Literal["WGS84"] | None = None
 
 
 class SessionHello(BaseModel):

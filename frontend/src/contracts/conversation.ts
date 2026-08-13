@@ -18,6 +18,8 @@ export interface SessionHelloPayload {
   timezone?: string;
   latitude?: number;
   longitude?: number;
+  /** 标注 latitude/longitude 的坐标系；设备定位给的是原始值，不做转换。 */
+  coordinate_system?: 'WGS84';
 }
 export type SessionHelloMessage = OutgoingEnvelope<'session.hello', SessionHelloPayload>;
 
