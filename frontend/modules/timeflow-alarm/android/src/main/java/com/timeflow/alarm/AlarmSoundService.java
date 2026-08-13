@@ -184,7 +184,9 @@ public final class AlarmSoundService extends Service {
 
     private int backgroundActivityStartMode() {
         if (Build.VERSION.SDK_INT >= 36) {
-            return ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS;
+            // ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS (API 36, value 3).
+            // Named constant is absent from compileSdk 35 android.jar.
+            return 3;
         }
         return ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED;
     }
