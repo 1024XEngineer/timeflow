@@ -10,18 +10,18 @@ import {
   MockReminderDispositionSync,
   MockReminderStateStore,
 } from '../../features/reminder/data/local';
-import { ExpoAudioPlayback } from '../../infrastructure/audio';
+import { MockAudioPlayback } from '../../infrastructure/audio';
 import { MockLocationMonitor } from '../../infrastructure/location';
 import {
   MockPopup,
   MockReminderRecovery,
   MockReminderDelivery,
   MockSystemNotification,
+  MockVibration,
   NativeAlarmScheduler,
   NativeDeviceCapability,
-  ReactNativeVibration,
 } from '../../infrastructure/notifications';
-import { IntervalTimeListener } from '../../shared/time';
+import { MockTimeListener } from '../../shared/time';
 import { MockReminderPresenter } from '../../features/reminder/presentation';
 import { ScheduleViewStore } from '../../features/schedule/presentation';
 
@@ -44,16 +44,16 @@ export function createAppServices(options: CreateAppServicesOptions = {}): AppSe
   const auth = createAuthRuntime(options.auth);
   const reminderPorts: ReminderApplicationDependencies = {
     schedules: new MockLocalScheduleReader(),
-    time: new IntervalTimeListener(),
+    time: new MockTimeListener(),
     location: new MockLocationMonitor(),
     alarms: new NativeAlarmScheduler(),
     delivery: new MockReminderDelivery(),
-    audio: new ExpoAudioPlayback(),
+    audio: new MockAudioPlayback(),
     device: new NativeDeviceCapability(),
     presenter: new MockReminderPresenter(),
     systemNotification: new MockSystemNotification(),
     popup: new MockPopup(),
-    vibration: new ReactNativeVibration(),
+    vibration: new MockVibration(),
     recovery: new MockReminderRecovery(),
     state: new MockReminderStateStore(),
     dispositionSync: new MockReminderDispositionSync(),
