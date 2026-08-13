@@ -65,6 +65,25 @@ describe('NativeDeviceCapability', () => {
     });
   });
 
+  it('reports unsupported when the native status read rejects', async () => {
+    getStatus.mockRejectedValue(new Error('bridge unavailable'));
+    const device = new NativeDeviceCapability();
+    await expect(device.getStatus()).resolves.toMatchObject({
+      platform: 'android',
+      supported: false,
+      background_execution: false,
+      permissions: {
+        notifications: false,
+        exact_alarm: false,
+        overlay: false,
+        full_screen: false,
+        battery_optimization: false,
+        location_foreground: false,
+        location_background: false,
+      },
+    });
+  });
+
   it('maps native permission flags onto the device port', async () => {
     getStatus.mockResolvedValue({
       exactAlarm: true,
