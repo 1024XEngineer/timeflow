@@ -31,7 +31,9 @@ export function isAuthAccessResponse(value: unknown): value is AuthAccessRespons
     hasOwnProperty(value, 'expires_in') &&
     isNonBlankString(value.account_id) &&
     isNonBlankString(value.access_token) &&
-    value.expires_in === 3600
+    typeof value.expires_in === 'number' &&
+    Number.isFinite(value.expires_in) &&
+    value.expires_in > 0
   );
 }
 

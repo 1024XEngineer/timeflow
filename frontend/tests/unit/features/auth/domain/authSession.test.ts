@@ -16,11 +16,17 @@ const response: AuthAccessResponse = {
 };
 
 describe('createAuthSession', () => {
-  it('calculates its expiry from the fixed TTL', () => {
-    expect(createAuthSession(response, '  timeflow_user  ', 1_000_000)).toEqual({
+  it.each([
+    [60, 1_060_000],
+    [3600, 4_600_000],
+    [7200, 8_200_000],
+  ])('calculates its expiry from the %i-second response TTL', (expiresIn, expiresAt) => {
+    expect(
+      createAuthSession({ ...response, expires_in: expiresIn }, '  timeflow_user  ', 1_000_000),
+    ).toEqual({
       accountId: 'acc_001',
       accessToken: '  opaque access token  ',
-      expiresAt: 4_600_000,
+      expiresAt,
       username: 'timeflow_user',
     });
   });
@@ -36,14 +42,14 @@ describe('createAuthSession', () => {
 
     expect(() =>
       createAuthSession(
-        { account_id: 'acc_001', access_token: rawToken, expires_in: 3599 },
+        { account_id: 'acc_001', access_token: rawToken, expires_in: 0 },
         'timeflow_user',
         0,
       ),
     ).toThrow('Invalid authentication access response');
     expect(() =>
       createAuthSession(
-        { account_id: 'acc_001', access_token: rawToken, expires_in: 3599 },
+        { account_id: 'acc_001', access_token: rawToken, expires_in: 0 },
         'timeflow_user',
         0,
       ),

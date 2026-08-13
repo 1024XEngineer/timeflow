@@ -1,6 +1,6 @@
 import { isAuthAccessResponse } from '../../../contracts/auth';
 
-const AUTH_SESSION_TTL_MS = 3_600_000;
+const MILLISECONDS_PER_SECOND = 1000;
 const EXPIRY_SKEW_MS = 30_000;
 const INVALID_AUTH_ACCESS_RESPONSE_MESSAGE = 'Invalid authentication access response';
 
@@ -24,7 +24,7 @@ export type AuthViewState =
   | { status: 'unauthenticated' }
   | { status: 'authenticated'; accountId: string; username: string };
 
-/** 将服务端认证响应收敛为带固定生命周期的领域会话。 */
+/** 将服务端认证响应收敛为与服务端有效期一致的领域会话。 */
 export function createAuthSession(response: unknown, username: unknown, now: number): AuthSession {
   if (!isAuthAccessResponse(response) || !isNonBlankString(username)) {
     throw new Error(INVALID_AUTH_ACCESS_RESPONSE_MESSAGE);
@@ -33,7 +33,7 @@ export function createAuthSession(response: unknown, username: unknown, now: num
   return {
     accountId: response.account_id,
     accessToken: response.access_token,
-    expiresAt: now + AUTH_SESSION_TTL_MS,
+    expiresAt: now + response.expires_in * MILLISECONDS_PER_SECOND,
     username: username.trim(),
   };
 }
