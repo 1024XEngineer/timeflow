@@ -165,6 +165,14 @@ function AuthenticatedScheduleRoute({
     );
   }, [currentLoadState, accountId, webSocketClient]);
 
+  // assistantApplication 换了新实例（重试数据库、账号变化）或这个路由整体卸载
+  // （比如登出）时，把旧实例上挂在共享连接上的监听器摘掉，不然会一直攒着。
+  useEffect(() => {
+    return () => {
+      assistantApplication?.dispose();
+    };
+  }, [assistantApplication]);
+
   return (
     <View style={styles.authenticatedRoute}>
       <View style={styles.accountBar}>
