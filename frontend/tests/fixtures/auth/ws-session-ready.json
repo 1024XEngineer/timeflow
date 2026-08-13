@@ -1,0 +1,9 @@
+{
+  "type": "session.ready",
+  "request_id": "session-hello-1",
+  "ok": true,
+  "payload": {
+    "session_id": "ws_session_001",
+    "server_time": "2026-08-06T03:00:00+00:00"
+  }
+}
