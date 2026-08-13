@@ -80,7 +80,7 @@ class ToolCallingSession:
     async def finish_input(self) -> None:
         """Accept the end of the user's turn."""
 
-    async def send_tool_result(self, call_id: str, output: str) -> None:
+    async def send_tool_result(self, call_id: str, output: str, *, respond: bool = True) -> None:
         """Record what the tool answered, which is what the model would read."""
         self.tool_results.append((call_id, output))
 

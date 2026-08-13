@@ -4,6 +4,8 @@ import asyncio
 import base64
 import json
 import logging
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -17,6 +19,8 @@ CONTINUOUS = "continuous"
 # The model accepts 16 kHz mono PCM in and emits 24 kHz mono PCM out.
 INPUT_SAMPLE_RATE_HZ = 16_000
 OUTPUT_SAMPLE_RATE_HZ = 24_000
+# 16-bit mono at the output rate: bytes of PCM per second of actual playback time.
+_OUTPUT_BYTES_PER_SECOND = OUTPUT_SAMPLE_RATE_HZ * 2
 
 
 class Transport(Protocol):
@@ -115,11 +119,19 @@ class QwenAudioSession:
     replies, each bounded by the vendor's own turn_detection rather than our finish_input.
     """
 
-    def __init__(self, transport: Transport, config: QwenAudioConfig, voice_mode: str) -> None:
+    def __init__(
+        self,
+        transport: Transport,
+        config: QwenAudioConfig,
+        voice_mode: str,
+        *,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
         """Store the open transport, the config it was opened with, and its voice mode."""
         self._transport = transport
         self._config = config
         self._voice_mode = voice_mode
+        self._clock = clock or time.monotonic
         # A tool call makes one turn into two (or more) vendor responses -- the one that
         # ran the tool, then whatever response.create it triggered actually carries the
         # reply. Both pump loops use this to wait for the last one before settling.
@@ -128,6 +140,13 @@ class QwenAudioSession:
         # response.done (or a cancellation). cancel_response() reads this to know
         # whether there is anything to tell the vendor to abandon.
         self._responding = False
+        # Bytes of this reply's audio sent to the client so far, and the clock reading
+        # past which its playback is assumed to have finished. The vendor generates audio
+        # faster than it plays back, so response.done -- and _responding turning False --
+        # only means the bytes were all sent, not that the phone is done sounding them
+        # out. A barge-in landing in that gap is still a real barge-in.
+        self._reply_bytes = 0
+        self._playable_until = 0.0
 
     async def configure(self, instructions: str, tools: list[dict[str, Any]]) -> None:
         """Set the session up before any audio; turn_detection only takes effect here."""
@@ -165,11 +184,15 @@ class QwenAudioSession:
         await self._send({"type": "response.create"})
         self._open_responses += 1
 
-    async def send_tool_result(self, call_id: str, output: str) -> None:
+    async def send_tool_result(self, call_id: str, output: str, *, respond: bool = True) -> None:
         """Write a tool's output back and let the model continue from it.
 
-        response.create here is required in every mode -- the vendor's own turn_detection
-        only starts a turn from the user's audio, never from a tool result on its own.
+        The output is written back either way, so the vendor's conversation history stays
+        complete for later turns. Asking for a reply is separate: response.create is
+        required in every mode when one is wanted -- the vendor's own turn_detection only
+        starts a turn from the user's audio, never from a tool result on its own -- but a
+        tool that ends the conversation has nothing to follow up, and asking anyway just
+        buys a second goodbye on top of the one the model already spoke.
         """
         await self._send(
             {
@@ -177,6 +200,8 @@ class QwenAudioSession:
                 "item": {"type": "function_call_output", "call_id": call_id, "output": output},
             }
         )
+        if not respond:
+            return
         await self._send({"type": "response.create"})
         self._open_responses += 1
 
@@ -271,14 +296,17 @@ class QwenAudioSession:
             kind = event.get("type")
 
             if kind == "input_audio_buffer.speech_started":
-                if self._responding and not suppressed:
+                # A real barge-in even once generation has finished: the phone can still
+                # be sounding out audio that was already fully sent (see _playable_until).
+                if not suppressed and (self._responding or self._clock() < self._playable_until):
                     suppressed = True
-                    await self._send({"type": "response.cancel"})
+                    await self.cancel_response()
                     await observer.interrupted()
             elif kind == "response.created":
                 self._responding = True
                 suppressed = False
                 spoken = ""
+                self._reply_bytes = 0
             elif kind == "conversation.item.input_audio_transcription.completed":
                 await observer.heard(str(event.get("transcript", "")))
             elif kind == "response.audio_transcript.delta" and not suppressed:
@@ -292,6 +320,7 @@ class QwenAudioSession:
             elif kind == "response.audio.delta" and not suppressed:
                 decoded = _decode_audio(event.get("delta"))
                 if decoded:
+                    self._reply_bytes += len(decoded)
                     await observer.audio(decoded)
             elif kind == "response.function_call_arguments.done":
                 requested = _tool_request(event)
@@ -310,6 +339,10 @@ class QwenAudioSession:
                     self._open_responses -= 1
                     continue
                 self._responding = False
+                # The bytes just sent still take this long to actually play out on the
+                # phone; a barge-in landing before then is still cancelling something
+                # audible, even though generation itself has already finished.
+                self._playable_until = self._clock() + self._reply_bytes / _OUTPUT_BYTES_PER_SECOND
                 await observer.turn_completed()
             elif kind == "error":
                 await observer.failed(_error_message(event))

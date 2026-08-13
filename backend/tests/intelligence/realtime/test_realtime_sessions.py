@@ -81,6 +81,7 @@ class ScriptedSession:
         self.finished = False
         self.closed = False
         self.tool_results: list[tuple[str, str]] = []
+        self.responds_asked: list[bool] = []
         self.cancel_response_calls = 0
 
     async def send_audio(self, chunk: bytes) -> None:
@@ -89,8 +90,9 @@ class ScriptedSession:
     async def finish_input(self) -> None:
         self.finished = True
 
-    async def send_tool_result(self, call_id: str, output: str) -> None:
+    async def send_tool_result(self, call_id: str, output: str, *, respond: bool = True) -> None:
         self.tool_results.append((call_id, output))
+        self.responds_asked.append(respond)
 
     async def cancel_response(self) -> None:
         self.cancel_response_calls += 1
@@ -387,6 +389,37 @@ def test_ending_the_conversation_tells_the_client_after_any_farewell_audio() -> 
         kinds = sink.kinds()
         assert kinds[-1] == "session_end"
         assert kinds.index("audio_end") < kinds.index("session_end")
+        # No follow-up reply is asked for: the farewell above is the whole goodbye.
+        assert factory.opened[0].responds_asked == [False]
+
+    asyncio.run(scenario())
+
+
+def test_an_ordinary_tool_call_still_asks_the_model_to_carry_on() -> None:
+    """Only a conversation-ending tool skips the follow-up; the rest still need one.
+
+    The vendor's turn detection only starts a turn from the user's audio, so without this
+    request a tool result would reach the model with nothing prompting it to speak.
+    """
+
+    async def scenario() -> None:
+        tools = StubToolBox(
+            ToolResult(
+                output=json.dumps({"status": "applied"}),
+                outcome={"operation": "create_schedule", "status": "applied", "schedule": {}},
+            )
+        )
+        factory = CountingFactory(
+            [("tool_requested", ("call_1", "schedule_create", {"title": "开会"}))]
+        )
+
+        await RealtimeAgent(
+            factory,
+            RecordingSink(),
+            tools_factory=lambda _account, _tz: tools,  # type: ignore[arg-type]
+        ).handle_audio(_chunks(b"a" * 3200), _Stream())
+
+        assert factory.opened[0].responds_asked == [True]
 
     asyncio.run(scenario())
 

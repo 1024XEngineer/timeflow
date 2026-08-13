@@ -55,8 +55,12 @@ class RealtimeSession(Protocol):
         """
         ...
 
-    async def send_tool_result(self, call_id: str, output: str) -> None:
-        """Return a tool's output and let the model continue from it."""
+    async def send_tool_result(self, call_id: str, output: str, *, respond: bool = True) -> None:
+        """Return a tool's output and let the model continue from it.
+
+        respond=False writes the output back without asking for a further reply, for a
+        tool whose whole point is that there is nothing left to say (end_conversation).
+        """
         ...
 
     async def cancel_response(self) -> None:

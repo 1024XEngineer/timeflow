@@ -347,6 +347,29 @@ def test_sending_a_tool_result_lets_the_model_continue() -> None:
     asyncio.run(scenario())
 
 
+def test_a_tool_result_that_wants_no_reply_asks_for_none() -> None:
+    """The output still lands in the conversation, but no further reply is requested.
+
+    end_conversation's whole point is that there is nothing left to say -- the model spoke
+    its goodbye in the response that called the tool. Asking anyway buys a second goodbye,
+    which the vendor may start by cutting the first one short.
+    """
+
+    async def scenario() -> None:
+        """Send a tool result that ends the conversation and read back what was sent."""
+        transport = FakeTransport()
+        session = QwenAudioSession(transport, CONFIG, CONTINUOUS)
+
+        await session.send_tool_result("call_1", '{"status":"ok"}', respond=False)
+
+        assert transport.types() == ["conversation.item.create"]
+        # Written back regardless: the vendor's history has to stay complete for the
+        # replies that follow on a session this one gets reused for.
+        assert transport.sent[0]["item"]["call_id"] == "call_1"
+
+    asyncio.run(scenario())
+
+
 def test_first_response_done_does_not_end_a_tool_extended_turn() -> None:
     async def scenario() -> None:
         transport = FakeTransport(
@@ -915,6 +938,71 @@ def test_continuous_pump_cancels_and_reports_an_interruption() -> None:
             ("failed", "stream ended"),
         ]
         assert transport.types() == ["response.cancel"]
+
+    asyncio.run(scenario())
+
+
+def test_speech_started_still_cancels_after_generation_finishes_if_playback_is_not_done() -> None:
+    """A barge-in landing after response.done still cancels, if the reply's own audio
+    would still be playing on the phone.
+
+    Found on a real device: the vendor generates audio faster than real time, so
+    response.done only means the bytes were all sent -- not that the phone has finished
+    sounding them out. The next turn's reply text was already on screen while the
+    previous reply's audio was still audibly playing, because the old gate closed the
+    moment generation ended rather than when playback would realistically be done.
+    """
+
+    async def scenario() -> None:
+        # Two clock reads happen: once when response.done estimates how long this
+        # reply's audio takes to finish playing, once when speech_started checks
+        # against that estimate. 0.1s later is well inside the ~0.5s the 24000 bytes
+        # below (24kHz, 16-bit mono) would take to actually play.
+        clock_reads = iter([0.0, 0.1])
+        transport = FakeTransport(
+            _event("response.created"),
+            _event("response.audio.delta", delta=base64.b64encode(b"a" * 24000).decode()),
+            _event("response.done"),
+            _event("input_audio_buffer.speech_started"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS, clock=lambda: next(clock_reads)).pump(
+            observer
+        )
+
+        assert observer.kinds() == ["audio", "turn_completed", "interrupted", "failed"]
+        # Nothing was still generating, so there is nothing to tell the vendor to
+        # abandon -- only the observer needs to hear about the barge-in.
+        assert transport.types() == []
+
+    asyncio.run(scenario())
+
+
+def test_speech_started_does_not_cancel_once_the_reply_would_be_done_playing() -> None:
+    """A barge-in arriving well after the reply's audio would have finished playing is
+    not treated as a cancellation -- there is nothing left for it to interrupt.
+    """
+
+    async def scenario() -> None:
+        # 10s later is far past the ~0.5s the 24000 bytes below would take to play.
+        clock_reads = iter([0.0, 10.0])
+        transport = FakeTransport(
+            _event("response.created"),
+            _event("response.audio.delta", delta=base64.b64encode(b"a" * 24000).decode()),
+            _event("response.done"),
+            _event("input_audio_buffer.speech_started"),
+            _event("conversation.item.input_audio_transcription.completed", transcript="你好"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS, clock=lambda: next(clock_reads)).pump(
+            observer
+        )
+
+        assert observer.kinds() == ["audio", "turn_completed", "heard", "failed"]
 
     asyncio.run(scenario())
 

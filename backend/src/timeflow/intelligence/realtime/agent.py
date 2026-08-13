@@ -135,37 +135,43 @@ class RealtimeAgent:
                 message_id_factory=self._message_id_factory,
                 question_id_factory=self._question_id_factory,
             )
+            # Feeding starts before listening, matching the real causal order: the model
+            # cannot transcribe audio it has not been sent, so a transcript's reported
+            # duration is counted against the audio that actually produced it. Nothing is
+            # missed by reading a moment later -- frames that arrive first are buffered.
+            forwarding = asyncio.create_task(self._forward_audio(chunks, held.session, turn))
             pumping = asyncio.create_task(held.session.pump(turn))
             reusable = False
             try:
-                async for chunk in chunks:
-                    await held.session.send_audio(chunk)
-                    turn.note_input_chunk(len(chunk))
-                await held.session.finish_input()
-                if held.voice_mode == "push_to_talk":
-                    await pumping
-                else:
-                    # The vendor decides when each reply starts and ends, so pump() never
-                    # returns on its own; once the microphone closes there is nothing
-                    # further for it to report, so it is stopped here instead of awaited.
-                    # cancel_response() must run first: if the vendor is still mid-reply,
-                    # cancelling the pump without telling it stops us from reading, but
-                    # the vendor keeps generating into the same socket -- since this
-                    # session gets reused, those frames would otherwise bleed into the
-                    # next turn's pump instead of being discarded with this one.
-                    await held.session.cancel_response()
-                    pumping.cancel()
-                    with contextlib.suppress(BaseException):
+                # Both sides are watched, because either can end the turn. In continuous
+                # mode the microphone stays open until the user hangs up, so a pump that
+                # exited early -- a vendor error ends it -- would otherwise go unnoticed
+                # and leave this waiting on a client that is itself waiting to be told the
+                # session is over.
+                await asyncio.wait({forwarding, pumping}, return_when=asyncio.FIRST_COMPLETED)
+                if forwarding.done():
+                    # Re-raised rather than swallowed: a broken input stream is the
+                    # caller's to hear about.
+                    await forwarding
+                    if held.voice_mode == "push_to_talk":
                         await pumping
+                    elif not pumping.done():
+                        # The vendor decides when each reply starts and ends, so pump()
+                        # never returns on its own; once the microphone closes there is
+                        # nothing further for it to report. Telling the vendor to stop
+                        # first matters: cancelling the pump alone stops us from reading
+                        # while it keeps generating into the same socket, and since this
+                        # session gets reused those frames would bleed into the next turn.
+                        await held.session.cancel_response()
                 reusable = turn.failure is None
-            except BaseException:
-                # Cancelled on every exit, not just the caller's: an orphaned pump sits
-                # in recv().
-                pumping.cancel()
-                with contextlib.suppress(BaseException):
-                    await pumping
-                raise
             finally:
+                # Cancelled on every exit, not just the caller's: an orphaned pump sits in
+                # recv(), and an orphaned forwarder sits on the client's stream.
+                forwarding.cancel()
+                pumping.cancel()
+                for task in (forwarding, pumping):
+                    with contextlib.suppress(BaseException):
+                        await task
                 await turn.close()
                 # Kept only after a turn it survived. A failure, an exception, or a client
                 # that hung up mid-turn leaves state nobody has reasoned about, and
@@ -174,6 +180,15 @@ class RealtimeAgent:
                     held.turns += 1
                 else:
                     await self._discard(key)
+
+    async def _forward_audio(
+        self, chunks: AsyncIterator[bytes], session: RealtimeSession, turn: "_Turn"
+    ) -> None:
+        """Feed the client's audio to the model until the stream ends."""
+        async for chunk in chunks:
+            await session.send_audio(chunk)
+            turn.note_input_chunk(len(chunk))
+        await session.finish_input()
 
     async def _session_for(
         self, key: tuple[str, str], timezone: str, voice_mode: str
@@ -368,7 +383,12 @@ class _Turn:
             await self._ask(result.question)
         if result.ends_conversation:
             self._ends_conversation = True
-        await self._session.send_tool_result(call_id, result.output)
+        # A tool that ends the conversation gets no follow-up reply: the model said its
+        # goodbye in the response that called the tool, and asking for another one only
+        # produces a second one -- which the vendor may start by cutting the first short.
+        await self._session.send_tool_result(
+            call_id, result.output, respond=not result.ends_conversation
+        )
 
     async def _ask(self, question: dict[str, Any]) -> None:
         """Push a question and mark the reply as one, so the audio says which it is."""
@@ -396,6 +416,12 @@ class _Turn:
         """Record that the session could not continue."""
         self.failure = message
         logger.warning("realtime session failed", extra={"reason": message})
+        # Continuous mode holds a full-screen call open until it is told the session
+        # ended, and a failure ends it as surely as end_conversation does. Saying nothing
+        # would leave that call up around a microphone nobody is reading any more.
+        # Push-to-talk needs no such message: its stream ends on its own either way.
+        if self._stream.voice_mode != "push_to_talk":
+            self._ends_conversation = True
 
     async def close(self) -> None:
         """Settle whatever reply is in flight; a no-op if the last one already was."""
@@ -419,6 +445,15 @@ class _Turn:
                 )
             await self._audio.put(None)
             await self._speaking
+        elif canceled:
+            # This reply's bytes were already all sent -- self._speaking settled on its
+            # own before the barge-in arrived -- but the model generates audio faster
+            # than it plays back, so the phone can still be sounding it out. The session
+            # only calls interrupted() this late when its own playable-until estimate
+            # says that's still plausible, so the client is told to stop regardless of
+            # what this turn still has queued locally. audio_id is empty because there
+            # is no reply left here to name; the client's handler does not read it.
+            await self._result_sink.deliver_canceled(AudioCanceled(audio_id=""), self._stream)
         self._spoken = ""
         self._reply_id = None
         self._audio_id = None

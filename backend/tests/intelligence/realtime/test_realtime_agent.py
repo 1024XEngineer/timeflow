@@ -82,6 +82,7 @@ class ScriptedSession:
         self.finished = False
         self.closed = False
         self.tool_results: list[tuple[str, str]] = []
+        self.responds_asked: list[bool] = []
         self.cancel_response_calls = 0
 
     async def send_audio(self, chunk: bytes) -> None:
@@ -92,9 +93,10 @@ class ScriptedSession:
         """Record that the input was closed."""
         self.finished = True
 
-    async def send_tool_result(self, call_id: str, output: str) -> None:
-        """Record a tool result written back."""
+    async def send_tool_result(self, call_id: str, output: str, *, respond: bool = True) -> None:
+        """Record a tool result written back, and whether a reply was asked for."""
         self.tool_results.append((call_id, output))
+        self.responds_asked.append(respond)
 
     async def cancel_response(self) -> None:
         """Record that the in-flight reply was told to stop."""
@@ -426,6 +428,124 @@ def test_a_failure_while_sending_audio_does_not_leave_the_pump_running() -> None
 
         assert session.pump_cancelled is True
         assert session.closed is True
+
+    asyncio.run(scenario())
+
+
+async def _open_mic() -> AsyncIterator[bytes]:
+    """Hold the microphone open forever, as a continuous-mode client does.
+
+    A scripted continuous-mode pump finishes by exhausting its script rather than by a
+    real vendor ending the stream, so the microphone must be the one left open here --
+    otherwise closing it first races the pump to decide the turn's outcome, and the pump
+    can get cancelled mid-script before its later steps run.
+    """
+    yield b"a"
+    await asyncio.Event().wait()
+
+
+def test_a_barge_in_while_speaking_tells_the_client_which_audio_to_stop() -> None:
+    """interrupted() while a reply's audio is still queued here names that reply."""
+
+    async def scenario() -> None:
+        sink = RecordingSink()
+        session = ScriptedSession([("spoke", ("好",)), ("audio", (b"pcm",)), ("interrupted", ())])
+
+        await RealtimeAgent(ScriptedFactory(session), sink).handle_audio(
+            _open_mic(), _Stream(voice_mode="continuous")
+        )
+
+        (canceled,) = [payload for kind, payload in sink.calls if kind == "canceled"]
+        assert canceled.audio_id != ""
+
+    asyncio.run(scenario())
+
+
+def test_a_barge_in_after_the_reply_already_finished_sending_still_tells_the_client() -> None:
+    """interrupted() with nothing left tracked here still reaches the client.
+
+    Found on a real device: the realtime model generates audio faster than it plays
+    back, so a reply can finish sending -- turn_completed() already settled it -- while
+    the phone is still sounding it out. The session only calls interrupted() this late
+    when its own playable-until estimate says that is still plausible, so the client
+    must still be told to stop even though this turn's own bookkeeping has nothing left
+    to name; there is no reply id left here to attach to it, hence the empty audio_id.
+    """
+
+    async def scenario() -> None:
+        sink = RecordingSink()
+        session = ScriptedSession(
+            [
+                ("spoke", ("好",)),
+                ("audio", (b"pcm",)),
+                ("turn_completed", ()),
+                ("interrupted", ()),
+            ]
+        )
+
+        await RealtimeAgent(ScriptedFactory(session), sink).handle_audio(
+            _open_mic(), _Stream(voice_mode="continuous")
+        )
+
+        (canceled,) = [payload for kind, payload in sink.calls if kind == "canceled"]
+        assert canceled.audio_id == ""
+
+    asyncio.run(scenario())
+
+
+def test_a_continuous_pump_that_fails_does_not_wait_on_a_microphone_nobody_reads() -> None:
+    """A vendor failure ends the turn even though the client's microphone stays open.
+
+    Found on a real device: the pump returns on a vendor error, but in continuous mode the
+    client holds its microphone open until it is told to hang up -- so waiting on the audio
+    stream deadlocks the two sides against each other. The call UI stayed up and speaking
+    to it did nothing, because nothing was reading the vendor any more. The failure has to
+    reach the client as a session end, which is what its call UI already listens for.
+    """
+
+    class FailingPumpSession(ScriptedSession):
+        """A session whose pump reports one failure and returns."""
+
+        async def pump(self, observer: Any) -> None:
+            """Fail the way a vendor error event does."""
+            await observer.failed("realtime session reported an error")
+
+    async def never_ending_chunks() -> AsyncIterator[bytes]:
+        """Hold the microphone open forever, as a continuous-mode client does."""
+        yield b"a"
+        await asyncio.Event().wait()
+        yield b"unreachable"
+
+    async def scenario() -> None:
+        """Run a continuous turn whose pump dies while the microphone is still open."""
+        sink = RecordingSink()
+
+        async with asyncio.timeout(2):
+            await RealtimeAgent(ScriptedFactory(FailingPumpSession([])), sink).handle_audio(
+                never_ending_chunks(), _Stream(voice_mode="continuous")
+            )
+
+        assert sink.kinds() == ["session_end"]
+
+    asyncio.run(scenario())
+
+
+def test_a_push_to_talk_failure_does_not_tell_the_client_to_hang_up() -> None:
+    """Push-to-talk has no call to end, so a failure sends no session_end.
+
+    Its stream finishes on its own either way; a hang-up message would be about a
+    full-screen call that only continuous mode ever puts on screen.
+    """
+
+    async def scenario() -> None:
+        """Run a push-to-talk turn whose session fails."""
+        sink = RecordingSink()
+
+        await RealtimeAgent(
+            ScriptedFactory(ScriptedSession([("failed", ("quota exceeded",))])), sink
+        ).handle_audio(_chunks(b"a"), _Stream())
+
+        assert "session_end" not in sink.kinds()
 
     asyncio.run(scenario())
 
