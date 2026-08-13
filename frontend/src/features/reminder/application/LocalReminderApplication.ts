@@ -173,26 +173,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     for (const raw of schedules) {
       const schedule = await this.withStoredRuntime(raw);
       if (schedule.schedule_type !== 'location') continue;
-      if (!(await this.canDeliver(schedule, sample.observed_at))) continue;
-
-      const mode = resolveWatchMode(schedule);
-      const transition = evaluateGeofence(schedule, sample, mode);
-      if (transition === 'armed') {
-        await this.patchRuntime(schedule.id, {
-          ...schedule.runtime,
-          geofence_armed: true,
-        });
-        continue;
-      }
-      if (transition === 'triggered') {
-        // 先消耗边沿（disarm），再送达；失败也不恢复 armed，避免圈内连响。
-        await this.patchRuntime(schedule.id, {
-          ...schedule.runtime,
-          geofence_armed: false,
-        });
-        const reason = toLocationReason(schedule);
-        await this.deliver(this.buildTrigger(schedule, reason, sample.observed_at));
-      }
+      await this.applyLocationSample(schedule, sample);
     }
   }
 
@@ -279,6 +260,11 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         };
       } catch (error) {
         await this.patchRuntime(schedule.id, rollbackRuntime);
+        try {
+          await this.teardownDelivery(schedule.id);
+        } catch {
+          // 尽力拆掉已启动通道，仍抛出原始送达错误。
+        }
         throw error;
       }
     } finally {
@@ -483,7 +469,39 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   }
 
   private async handleLocationMonitorEvent(event: LocationMonitorEvent): Promise<void> {
-    await this.handleLocation(event.sample);
+    const raw =
+      (await this.dependencies.schedules.getReminderSchedule(event.schedule_id)) ??
+      this.registrations.get(event.schedule_id)?.schedule;
+    if (raw == null) return;
+    const schedule = await this.withStoredRuntime(raw);
+    if (schedule.schedule_type !== 'location') return;
+    await this.applyLocationSample(schedule, event.sample);
+  }
+
+  private async applyLocationSample(
+    schedule: LocalReminderSchedule,
+    sample: LocationSample,
+  ): Promise<void> {
+    if (!(await this.canDeliver(schedule, sample.observed_at))) return;
+
+    const mode = resolveWatchMode(schedule);
+    const transition = evaluateGeofence(schedule, sample, mode);
+    if (transition === 'armed') {
+      await this.patchRuntime(schedule.id, {
+        ...schedule.runtime,
+        geofence_armed: true,
+      });
+      return;
+    }
+    if (transition === 'triggered') {
+      // 先消耗边沿（disarm），再送达；失败也不恢复 armed，避免圈内连响。
+      await this.patchRuntime(schedule.id, {
+        ...schedule.runtime,
+        geofence_armed: false,
+      });
+      const reason = toLocationReason(schedule);
+      await this.deliver(this.buildTrigger(schedule, reason, sample.observed_at));
+    }
   }
 
   private isSchedulable(schedule: LocalReminderSchedule): boolean {
@@ -505,12 +523,21 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   }
 
   private async teardownDelivery(scheduleId: string): Promise<void> {
-    await this.dependencies.presenter.hide(scheduleId);
-    await this.dependencies.delivery.dismiss(scheduleId);
-    await this.dependencies.audio.stop(scheduleId);
-    await this.dependencies.vibration.stop();
-    await this.dependencies.popup.dismiss(`reminder-${scheduleId}`);
-    await this.dependencies.systemNotification.cancel(`reminder-${scheduleId}`);
+    const tasks = [
+      () => this.dependencies.presenter.hide(scheduleId),
+      () => this.dependencies.delivery.dismiss(scheduleId),
+      () => this.dependencies.audio.stop(scheduleId),
+      () => this.dependencies.vibration.stop(),
+      () => this.dependencies.popup.dismiss(`reminder-${scheduleId}`),
+      () => this.dependencies.systemNotification.cancel(`reminder-${scheduleId}`),
+    ];
+    for (const task of tasks) {
+      try {
+        await task();
+      } catch {
+        // 尽力拆掉已启动通道，单个失败不阻断其余通道。
+      }
+    }
   }
 
   private async watchLocationSchedule(
