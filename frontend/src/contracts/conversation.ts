@@ -120,6 +120,19 @@ export interface VoiceTtsEndMessage {
   audio_id: string;
 }
 
+/** 播报被用户打断时发出，voice.tts.end 仍会补发，不能只凭这条判断"正常说完"。 */
+export interface VoiceTtsCanceledMessage {
+  type: 'voice.tts.canceled';
+  conversation_id: string;
+  audio_id: string;
+}
+
+/** 模型识别到用户想结束对话（连续模式专属），任何告别语音发完之后才会发出。 */
+export interface VoiceSessionEndMessage {
+  type: 'voice.session.end';
+  conversation_id: string;
+}
+
 export type AssistantServerMessage =
   | VoiceStreamStartedMessage
   | VoiceAsrCompletedMessage
@@ -128,6 +141,8 @@ export type AssistantServerMessage =
   | VoiceDialogueReplyMessage
   | VoiceTtsStartMessage
   | VoiceTtsEndMessage
+  | VoiceTtsCanceledMessage
+  | VoiceSessionEndMessage
   | TransportErrorEnvelope;
 
 /** 窄化辅助：失败信封没有稳定的 `ok:false` 之外的判据，靠 `error` 字段是否存在区分。 */
