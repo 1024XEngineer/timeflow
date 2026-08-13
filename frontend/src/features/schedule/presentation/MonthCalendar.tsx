@@ -25,7 +25,7 @@ export function MonthCalendar({
   const selectedKey = dateKey(selectedDate);
   const todayKey = dateKey(today);
   return (
-    <View style={styles.container}>
+    <View style={styles.container} testID="month-calendar">
       <View style={styles.monthHeader}>
         <Pressable
           accessibilityLabel="上个月"
@@ -110,12 +110,14 @@ export function MonthCalendar({
 
 const styles = StyleSheet.create({
   container: {
+    alignSelf: 'center',
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderRadius: 20,
     borderWidth: 1,
-    marginHorizontal: spacing.md,
+    maxWidth: 520,
     padding: spacing.md,
+    width: '92%',
   },
   dateBubble: {
     alignItems: 'center',

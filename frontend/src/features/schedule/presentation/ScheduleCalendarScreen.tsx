@@ -46,16 +46,8 @@ export function ScheduleCalendarScreen({
       >
         <View style={styles.content}>
           <View style={styles.header}>
-            <View style={styles.pageIdentity}>
-              <Text style={styles.eyebrow}>我的日程</Text>
-              <Text style={styles.title}>{selectedLabel}</Text>
-            </View>
-            <View style={styles.accountChip}>
-              <Text style={styles.accountLabel}>账户</Text>
-              <Text numberOfLines={1} style={styles.account}>
-                {accountId}
-              </Text>
-            </View>
+            <Text style={styles.eyebrow}>我的日程</Text>
+            <Text style={styles.title}>{selectedLabel}</Text>
           </View>
 
           <MonthCalendar
@@ -144,19 +136,6 @@ export function ScheduleCalendarScreen({
 }
 
 const styles = StyleSheet.create({
-  account: { color: colors.mutedText, flexShrink: 1, fontSize: 12 },
-  accountChip: {
-    alignItems: 'center',
-    backgroundColor: colors.input,
-    borderRadius: 999,
-    flexDirection: 'row',
-    flexShrink: 1,
-    gap: 6,
-    maxWidth: '44%',
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-  },
-  accountLabel: { color: colors.text, fontSize: 11, fontWeight: '700' },
   agenda: { paddingHorizontal: spacing.md, paddingTop: spacing.xl },
   center: {
     alignItems: 'center',
@@ -192,11 +171,6 @@ const styles = StyleSheet.create({
   error: { color: colors.error, fontSize: 15, textAlign: 'center' },
   eyebrow: { color: colors.mutedText, fontSize: 13, fontWeight: '700' },
   header: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.md,
-    justifyContent: 'space-between',
     paddingBottom: spacing.lg,
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.xl,
@@ -207,7 +181,6 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
     paddingTop: spacing.lg,
   },
-  pageIdentity: { flexGrow: 1, minWidth: 190 },
   retry: {
     backgroundColor: colors.text,
     borderRadius: 12,
