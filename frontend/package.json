@@ -49,7 +49,7 @@
     "format:check": "prettier --check .",
     "test": "npm run test:vitest && npm run test:jest",
     "test:jest": "jest --runInBand",
-    "test:vitest": "vitest run tests --exclude tests/unit/** --exclude tests/integration/**/*.integration.test.ts",
+    "test:vitest": "vitest run tests --exclude \"tests/unit/**\" --exclude \"tests/integration/**/*.integration.test.ts\"",
     "typecheck": "tsc --noEmit",
     "check": "npm run lint && npm run format:check && npm run typecheck && npm run test",
     "verify:ci": "npm run check && expo export --platform android --output-dir dist"
