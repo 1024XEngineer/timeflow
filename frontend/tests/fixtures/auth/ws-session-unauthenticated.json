@@ -1,0 +1,10 @@
+{
+  "type": "session.error",
+  "request_id": "session-hello-1",
+  "ok": false,
+  "error": {
+    "code": "UNAUTHENTICATED",
+    "message": "Authentication required",
+    "retryable": false
+  }
+}

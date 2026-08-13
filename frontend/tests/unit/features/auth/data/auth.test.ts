@@ -1,8 +1,16 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
-import { AuthAccessError, type AuthAccessResponse } from '../contracts/auth';
-import { ApiError, ApiResponseError, type ApiRequest } from '../infrastructure/network/client';
-import { createAuthAccess } from './auth';
+import {
+  AuthAccessError,
+  isAuthAccessResponse,
+  type AuthAccessResponse,
+} from '../../../../../src/contracts/auth';
+import {
+  ApiError,
+  ApiResponseError,
+  type ApiRequest,
+} from '../../../../../src/infrastructure/network/client';
+import { createAuthAccess } from '../../../../../src/features/auth/data/auth';
 
 const credentials = { username: 'timeflow_user', password: 'password123' };
 const response: AuthAccessResponse = {
@@ -22,6 +30,7 @@ describe('createAuthAccess', () => {
     await expect(createAuthAccess(request)(credentials)).resolves.toEqual(response);
     expect(request).toHaveBeenCalledWith('/auth/access', {
       body: JSON.stringify(credentials),
+      auth: 'public',
       headers: { 'Content-Type': 'application/json' },
       method: 'POST',
       signal: expect.anything(),
@@ -30,7 +39,9 @@ describe('createAuthAccess', () => {
 
   it('exposes a documented business error code', async () => {
     const request = jest.fn(async () => {
-      throw new ApiError(401, { error: { code: 'AUTH_INVALID_CREDENTIALS' } });
+      throw new ApiError(401, {
+        error: { code: 'AUTH_INVALID_CREDENTIALS', message: 'Invalid credentials' },
+      });
     }) as unknown as ApiRequest;
 
     await expect(createAuthAccess(request)(credentials)).rejects.toEqual(
@@ -115,3 +126,74 @@ describe('createAuthAccess', () => {
     );
   });
 });
+
+describe('isAuthAccessResponse', () => {
+  it('accepts the fixed 3600-second token response', () => {
+    expect(isAuthAccessResponse(response)).toBe(true);
+  });
+
+  it('requires every response field to be an own property', () => {
+    const accountIdDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, 'account_id');
+    const accessTokenDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, 'access_token');
+    const expiresInDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, 'expires_in');
+
+    try {
+      // eslint-disable-next-line no-extend-native -- 受控原型污染回归测试；finally 会恢复并隔离全局状态。
+      Object.defineProperties(Object.prototype, {
+        account_id: { configurable: true, value: response.account_id },
+        access_token: { configurable: true, value: response.access_token },
+        expires_in: { configurable: true, value: response.expires_in },
+      });
+
+      expect(
+        isAuthAccessResponse({
+          access_token: response.access_token,
+          expires_in: response.expires_in,
+        }),
+      ).toBe(false);
+      expect(
+        isAuthAccessResponse({
+          account_id: response.account_id,
+          expires_in: response.expires_in,
+        }),
+      ).toBe(false);
+      expect(
+        isAuthAccessResponse({
+          account_id: response.account_id,
+          access_token: response.access_token,
+        }),
+      ).toBe(false);
+    } finally {
+      restoreObjectPrototypeProperty('account_id', accountIdDescriptor);
+      restoreObjectPrototypeProperty('access_token', accessTokenDescriptor);
+      restoreObjectPrototypeProperty('expires_in', expiresInDescriptor);
+    }
+  });
+
+  it.each([0, 3599, 3601, '3600', Infinity])('rejects expires_in %p', (expires_in) => {
+    expect(isAuthAccessResponse({ ...response, expires_in })).toBe(false);
+  });
+
+  it.each([
+    { ...response, account_id: '' },
+    { ...response, account_id: '   ' },
+    { ...response, access_token: '' },
+    { ...response, access_token: '   ' },
+    Object.assign([] as unknown[], response),
+  ])('rejects invalid response fields and shapes', (invalidResponse) => {
+    expect(isAuthAccessResponse(invalidResponse)).toBe(false);
+  });
+});
+
+function restoreObjectPrototypeProperty(
+  property: string,
+  descriptor: PropertyDescriptor | undefined,
+): void {
+  if (descriptor) {
+    // eslint-disable-next-line no-extend-native -- 恢复受控原型污染；try/finally 保证测试隔离。
+    Object.defineProperty(Object.prototype, property, descriptor);
+    return;
+  }
+
+  Reflect.deleteProperty(Object.prototype, property);
+}
