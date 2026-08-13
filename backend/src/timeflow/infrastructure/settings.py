@@ -1,5 +1,6 @@
 """Environment-backed application settings."""
 
+import math
 from dataclasses import dataclass, field
 from functools import lru_cache
 from os import environ
@@ -57,6 +58,9 @@ class Settings:
     aliyun_audio_model: str = "qwen-audio-3.0-realtime-plus"
     aliyun_audio_region: str = "cn-beijing"
     aliyun_audio_voice: str = "longanqian"
+    tencent_map_api_key: str = ""
+    tencent_map_base_url: str = "https://apis.map.qq.com"
+    tencent_map_timeout_seconds: float = 5.0
     # "1" = the end-to-end realtime model; "2" = the LLM+ASR+TTS conversation pipeline.
     voice_agent_mode: str = "1"
 
@@ -78,6 +82,12 @@ class Settings:
 
         openai_timeout_seconds = float(environ.get("TIMEFLOW_OPENAI_TIMEOUT_SECONDS", "30.0"))
         agent_max_tool_rounds = int(environ.get("TIMEFLOW_AGENT_MAX_TOOL_ROUNDS", "4"))
+        tencent_map_timeout_seconds = float(
+            environ.get("TIMEFLOW_TENCENT_MAP_TIMEOUT_SECONDS", "5.0")
+        )
+        tencent_map_base_url = environ.get(
+            "TIMEFLOW_TENCENT_MAP_BASE_URL", "https://apis.map.qq.com"
+        ).strip()
         voice_agent_mode = environ.get("TIMEFLOW_VOICE_AGENT_MODE", "1")
         aliyun_tts_connect_timeout_seconds = float(
             environ.get("TIMEFLOW_ALIYUN_TTS_CONNECT_TIMEOUT_SECONDS", "10.0")
@@ -102,6 +112,9 @@ class Settings:
             raise ValueError("TIMEFLOW_VOICE_AGENT_MODE must be '1' or '2'")
         if aliyun_tts_connect_timeout_seconds <= 0 or aliyun_tts_task_timeout_seconds <= 0:
             raise ValueError("TTS timeouts must be greater than zero")
+        if not math.isfinite(tencent_map_timeout_seconds) or tencent_map_timeout_seconds <= 0:
+            raise ValueError("TIMEFLOW_TENCENT_MAP_TIMEOUT_SECONDS must be greater than zero")
+        _validate_tencent_map_base_url(tencent_map_base_url)
 
         return cls(
             app_name=environ.get("TIMEFLOW_APP_NAME", "TimeFlow API"),
@@ -159,6 +172,9 @@ class Settings:
             ),
             aliyun_audio_region=environ.get("TIMEFLOW_ALIYUN_AUDIO_REGION", "cn-beijing"),
             aliyun_audio_voice=environ.get("TIMEFLOW_ALIYUN_AUDIO_VOICE", "longanqian"),
+            tencent_map_api_key=environ.get("TIMEFLOW_TENCENT_MAP_KEY", "").strip(),
+            tencent_map_base_url=tencent_map_base_url,
+            tencent_map_timeout_seconds=tencent_map_timeout_seconds,
             voice_agent_mode=voice_agent_mode,
         )
 
@@ -169,6 +185,23 @@ class Settings:
         that sets just these gets a working model rather than a puzzling half-configured one.
         """
         return bool(self.aliyun_audio_api_key and self.aliyun_audio_workspace_id)
+
+    def tencent_maps_is_configured(self) -> bool:
+        """Report whether the Tencent Maps adapter has a WebService credential."""
+        return bool(self.tencent_map_api_key)
+
+
+def _validate_tencent_map_base_url(value: str) -> None:
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("TIMEFLOW_TENCENT_MAP_BASE_URL must be a credential-free HTTPS URL")
 
 
 def _parse_cors_allowed_origins(raw_value: str) -> tuple[str, ...]:
