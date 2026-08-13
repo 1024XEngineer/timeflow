@@ -10,7 +10,7 @@ import {
   nativeScheduleAlarm,
 } from './native/TimeflowAlarmBridge';
 
-/** Android TimeflowAlarm 适配器；无法挂上时返回空 alarm_id。 */
+/** Android TimeflowAlarm 适配器；无法挂上时返回 scheduled=false。 */
 export class NativeAlarmScheduler implements AlarmSchedulerPort {
   async schedule(request: AlarmScheduleRequest): Promise<AlarmScheduleReceipt> {
     if (!isTimeflowAlarmAvailable()) {
@@ -35,6 +35,7 @@ export class NativeAlarmScheduler implements AlarmSchedulerPort {
     return {
       alarm_id: alarmId,
       schedule_id: request.schedule_id,
+      scheduled: true,
     };
   }
 
@@ -61,5 +62,6 @@ function unscheduled(scheduleId: string): AlarmScheduleReceipt {
   return {
     alarm_id: '',
     schedule_id: scheduleId,
+    scheduled: false,
   };
 }
