@@ -33,6 +33,34 @@ describe('auth WebSocket contract', () => {
     });
   });
 
+  it('labels the coordinate system only when a location is provided', () => {
+    expect(
+      createSessionHello({
+        accessToken: 'opaque-token',
+        deviceId: 'device_001',
+        location: { latitude: 39.9, longitude: 116.4 },
+        requestId: 'req_001',
+      }),
+    ).toEqual({
+      payload: {
+        access_token: 'opaque-token',
+        coordinate_system: 'WGS84',
+        device_id: 'device_001',
+        latitude: 39.9,
+        longitude: 116.4,
+      },
+      request_id: 'req_001',
+      type: 'session.hello',
+    });
+    expect(
+      createSessionHello({
+        accessToken: 'opaque-token',
+        deviceId: 'device_001',
+        requestId: 'req_001',
+      }).payload,
+    ).toEqual({ access_token: 'opaque-token', device_id: 'device_001' });
+  });
+
   it.each([
     { code: 'UNAUTHENTICATED', retryable: true },
     { code: 'MALFORMED_MESSAGE', retryable: false },

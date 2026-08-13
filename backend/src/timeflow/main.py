@@ -46,6 +46,10 @@ from timeflow.intelligence.realtime.agent import RealtimeAgent
 from timeflow.intelligence.realtime.instructions import build_instructions
 from timeflow.intelligence.realtime.schedule_tools import ToolBox
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 

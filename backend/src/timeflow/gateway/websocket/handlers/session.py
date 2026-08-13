@@ -94,6 +94,9 @@ class SessionHandshake:
             session_id=self._session_id_factory(),
             account_id=account_id,
             device_id=hello.payload.device_id,
+            latitude=hello.payload.latitude,
+            longitude=hello.payload.longitude,
+            coordinate_system=hello.payload.coordinate_system,
         )
         reply = SessionReady(
             request_id=hello.request_id,

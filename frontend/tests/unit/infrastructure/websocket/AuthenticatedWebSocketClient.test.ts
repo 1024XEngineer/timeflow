@@ -24,7 +24,11 @@ describe('AuthenticatedWebSocketClient', () => {
     socket.open();
 
     expect(JSON.parse(socket.sent[0] as string)).toEqual({
-      payload: { access_token: 'opaque-token', device_id: 'device_001' },
+      payload: {
+        access_token: 'opaque-token',
+        device_id: 'device_001',
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      },
       request_id: 'req_001',
       type: 'session.hello',
     });
@@ -33,6 +37,75 @@ describe('AuthenticatedWebSocketClient', () => {
 
     await expect(connection).resolves.toMatchObject({ type: 'session.ready' });
     expect(client.getState()).toBe('ready');
+  });
+
+  it('includes the location in session.hello only when connect() is given one', async () => {
+    const socket = new FakeWebSocket();
+    const client = createClient(socket);
+
+    const connection = client.connect({ latitude: 39.9, longitude: 116.4 });
+    await flushPromises();
+    socket.open();
+
+    expect(JSON.parse(socket.sent[0] as string)).toEqual({
+      payload: {
+        access_token: 'opaque-token',
+        coordinate_system: 'WGS84',
+        device_id: 'device_001',
+        latitude: 39.9,
+        longitude: 116.4,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      },
+      request_id: 'req_001',
+      type: 'session.hello',
+    });
+    socket.receive(JSON.stringify(ready('req_001')));
+    await connection;
+  });
+
+  it('notifies onClose when a ready connection drops, but not for a handshake failure', async () => {
+    const readySocket = new FakeWebSocket();
+    const readyClient = createClient(readySocket);
+    const onCloseAfterReady = jest.fn();
+    readyClient.onClose(onCloseAfterReady);
+    const readyConnection = readyClient.connect();
+    await flushPromises();
+    readySocket.open();
+    readySocket.receive(JSON.stringify(ready('req_001')));
+    await readyConnection;
+
+    readySocket.closeFromServer(1006);
+    expect(onCloseAfterReady).toHaveBeenCalledWith({ code: 1006, reason: '' });
+    expect(onCloseAfterReady).toHaveBeenCalledTimes(1);
+
+    const handshakeSocket = new FakeWebSocket();
+    const handshakeClient = createClient(handshakeSocket);
+    const onCloseDuringHandshake = jest.fn();
+    handshakeClient.onClose(onCloseDuringHandshake);
+    const handshakeConnection = handshakeClient.connect();
+    await flushPromises();
+    handshakeSocket.open();
+    handshakeSocket.closeFromServer(1006);
+
+    await expect(handshakeConnection).rejects.toBeInstanceOf(WebSocketConnectionError);
+    expect(onCloseDuringHandshake).not.toHaveBeenCalled();
+  });
+
+  it('stops notifying an onClose listener after it unsubscribes', async () => {
+    const socket = new FakeWebSocket();
+    const client = createClient(socket);
+    const listener = jest.fn();
+    const unsubscribe = client.onClose(listener);
+    const connection = client.connect();
+    await flushPromises();
+    socket.open();
+    socket.receive(JSON.stringify(ready('req_001')));
+    await connection;
+
+    unsubscribe();
+    socket.closeFromServer(1006);
+
+    expect(listener).not.toHaveBeenCalled();
   });
 
   it('reuses one connection promise and never creates a second socket', async () => {

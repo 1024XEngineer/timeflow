@@ -9,13 +9,16 @@
   "packageManager": "npm@10.8.2",
   "dependencies": {
     "@expo/metro-runtime": "~57.0.8",
+    "@irvingouj/expo-audio-stream": "3.1.0",
     "expo": "~57.0.7",
+    "expo-location": "~57.0.9",
     "expo-secure-store": "~57.0.1",
     "expo-sqlite": "~57.0.1",
     "expo-status-bar": "~57.0.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.0",
+    "react-native-svg": "15.15.4",
     "react-native-web": "^0.21.2",
     "rrule": "^2.8.1"
   },
@@ -29,6 +32,7 @@
     "eslint-config-prettier": "^10.1.8",
     "jest": "~29.7.0",
     "jest-expo": "57.0.2",
+    "patch-package": "^8.0.1",
     "prettier": "^3.9.5",
     "react-test-renderer": "19.2.3",
     "sql.js": "^1.14.1",
@@ -40,8 +44,8 @@
   },
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -53,6 +57,7 @@
     "test:vitest": "vitest run tests --exclude \"tests/unit/**\" --exclude \"tests/integration/**/*.integration.test.ts\"",
     "typecheck": "tsc --noEmit",
     "check": "npm run lint && npm run format:check && npm run typecheck && npm run test",
+    "postinstall": "patch-package",
     "verify:ci": "npm run check && expo export --platform android --output-dir dist"
   },
   "private": true,
@@ -65,6 +70,11 @@
     "testMatch": [
       "**/tests/unit/**/*.test.[jt]s?(x)",
       "**/tests/integration/**/*.integration.test.[jt]s?(x)"
+    ],
+    "transformIgnorePatterns": [
+      "/node_modules/(?!(.pnpm|react-native|@react-native|@react-native-community|expo|@expo|@expo-google-fonts|react-navigation|@react-navigation|@sentry/react-native|native-base|standard-navigation|@irvingouj))",
+      "/node_modules/react-native-reanimated/plugin/",
+      "/node_modules/@react-native/babel-preset/"
     ]
   }
 }

@@ -32,6 +32,8 @@ export function useScheduleCalendar(
   accountId: string,
   timezone: string,
   initialDate = new Date(),
+  /** 外部触发刷新用（比如语音写完一条日程）；变化时跟 retry() 走同一条重取路径。 */
+  refreshSignal = 0,
 ): ScheduleCalendarState {
   const [selectedDate, setSelectedDate] = useState(() => initialDate);
   const [visibleMonth, setVisibleMonth] = useState(() => startOfMonth(initialDate));
@@ -94,7 +96,7 @@ export function useScheduleCalendar(
     return () => {
       cancelled = true;
     };
-  }, [accountId, reloadToken, service, timezone, visibleMonth]);
+  }, [accountId, reloadToken, refreshSignal, service, timezone, visibleMonth]);
 
   useEffect(() => {
     let cancelled = false;
@@ -118,7 +120,7 @@ export function useScheduleCalendar(
     return () => {
       cancelled = true;
     };
-  }, [accountId, reloadToken, service]);
+  }, [accountId, reloadToken, refreshSignal, service]);
 
   const selectedOccurrences = useMemo(
     () => occurrencesByDate.get(dateKey(selectedDate)) ?? [],

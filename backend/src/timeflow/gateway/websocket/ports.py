@@ -2,7 +2,7 @@
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
 
 @dataclass(frozen=True, slots=True)
@@ -12,6 +12,10 @@ class SessionContext:
     session_id: str
     account_id: str
     device_id: str
+    # Accepted but not acted on yet -- no geocoding or geofencing consumes these.
+    latitude: float | None = None
+    longitude: float | None = None
+    coordinate_system: Literal["WGS84"] | None = None
 
 
 @dataclass(frozen=True, slots=True)
