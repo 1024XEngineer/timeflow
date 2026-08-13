@@ -12,6 +12,8 @@ class SessionHelloPayload(BaseModel):
     device_id: str
     app_version: str | None = None
     timezone: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
 
 
 class SessionHello(BaseModel):
