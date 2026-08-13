@@ -109,9 +109,12 @@ export class ExpoAudioPlayback implements AudioPlaybackPort {
 async function loadExpoAudio(): Promise<ExpoAudioModule | null> {
   try {
     // Optional peer dependency for environments that have not installed expo-audio yet.
-    const mod = await import('expo-audio');
-    if (typeof mod.createAudioPlayer !== 'function') return null;
-    return mod as unknown as ExpoAudioModule;
+    const mod = (await import('expo-audio')) as {
+      default?: ExpoAudioModule;
+    } & Partial<ExpoAudioModule>;
+    const resolved = mod.default ?? mod;
+    if (typeof resolved.createAudioPlayer !== 'function') return null;
+    return resolved as ExpoAudioModule;
   } catch {
     return null;
   }
