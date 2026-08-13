@@ -79,6 +79,7 @@ function createFakeConnection() {
 }
 
 function createDeps(overrides: {
+  applyCommandResult?: () => Promise<void>;
   connection?: VoiceTransportConnection;
   requestPermission?: () => Promise<boolean>;
   startCapture?: () => Promise<void>;
@@ -101,9 +102,22 @@ function createDeps(overrides: {
     getCurrentSample: jest.fn(async () => null),
   };
   const localScheduleWriter: LocalScheduleWriterPort = {
-    applyCommandResult: jest.fn(async () => undefined),
+    applyCommandResult: jest.fn(overrides.applyCommandResult ?? (async () => undefined)),
   };
   return { capture, localScheduleWriter, location, playback, transport };
+}
+
+async function completeStreamStart(
+  fake: ReturnType<typeof createFakeConnection>,
+  turn: Promise<void>,
+): Promise<void> {
+  await flushAsync();
+  fake.emitMessage({
+    ok: true,
+    payload: { conversation_id: 'conv_001', stream_id: 'stream_001' },
+    type: 'voice.stream.started',
+  } as AssistantServerMessage);
+  await turn;
 }
 
 describe('AssistantConversationService', () => {
@@ -189,6 +203,57 @@ describe('AssistantConversationService', () => {
       type: 'voice.stream.end',
     });
     expect(service.getState()).toEqual({ message: '录音启动失败', phase: 'error' });
+  });
+
+  it('sends message.ack only after the local write succeeds', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    const turn = service.startTurn();
+    await completeStreamStart(fake, turn);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_001',
+      payload: { operation: 'create_schedule', status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(fake.sent).toContainEqual({
+      message_id: 'msg_001',
+      status: 'applied',
+      type: 'message.ack',
+    });
+  });
+
+  it('withholds message.ack when the local write fails', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({
+      applyCommandResult: async () => {
+        throw new Error('disk full');
+      },
+      connection: fake.connection,
+    });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    const turn = service.startTurn();
+    await completeStreamStart(fake, turn);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_001',
+      payload: { operation: 'create_schedule', status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(fake.sent).not.toContainEqual(expect.objectContaining({ type: 'message.ack' }));
+    expect(service.getLastAppliedCommand()).toEqual({
+      operation: 'create_schedule',
+      schedule: undefined,
+      schedules: undefined,
+      status: 'applied',
+    });
   });
 
   it('dispose() unsubscribes every listener registered on the connection', async () => {

@@ -29,7 +29,7 @@ export class AuthenticatedVoiceTransport implements VoiceTransportPort {
 
     const unsubscribeMessages = this.client.subscribe((data) => {
       if (typeof data === 'string') {
-        const parsed = JSON.parse(data) as AssistantServerMessage;
+        const parsed = parseServerMessage(data);
         for (const handler of messageHandlers) {
           handler(parsed);
         }
@@ -57,4 +57,26 @@ export class AuthenticatedVoiceTransport implements VoiceTransportPort {
       sendAudioFrame: (chunk) => this.client.send(chunk),
     };
   }
+}
+
+/** 非法 JSON / 非对象帧不能抛出去击穿共享连接回调，转成传输错误信封走 isTransportError 分支。 */
+function parseServerMessage(data: string): AssistantServerMessage {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data);
+  } catch {
+    parsed = undefined;
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    return {
+      error: {
+        code: 'MALFORMED_MESSAGE',
+        message: 'Received a malformed voice frame',
+        retryable: false,
+      },
+      ok: false,
+      type: 'protocol.error',
+    };
+  }
+  return parsed as AssistantServerMessage;
 }

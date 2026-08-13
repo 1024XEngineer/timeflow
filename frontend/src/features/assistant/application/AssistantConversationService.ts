@@ -226,17 +226,8 @@ export class AssistantConversationService implements AssistantApplicationPort {
           schedules: message.payload.schedules,
           status: message.payload.status,
         };
-        // 写本地库是异步的，不等它：ack 和状态回到 idle 立刻做，避免这轮对话
-        // 因为一次 SQLite 写入卡住。lastAppliedCommand 在写库落定后才更新，
-        // 这样订阅方（比如日历的 refreshSignal）看到它变化时数据已经写完了。
-        void this.applyCommandResultLocally(command);
-        if (this.connection !== null) {
-          this.connection.send({
-            message_id: message.message_id,
-            status: 'applied',
-            type: 'message.ack',
-          });
-        }
+        // 状态立刻回到 idle，不等写库；message.ack 必须等写库成功才发（AGENTS.md §6）。
+        void this.applyCommandResultLocally(command, message.message_id);
         this.setState({ phase: 'idle' });
         return;
       }
@@ -271,11 +262,19 @@ export class AssistantConversationService implements AssistantApplicationPort {
     }
   }
 
-  private async applyCommandResultLocally(command: AppliedCommand): Promise<void> {
+  private async applyCommandResultLocally(
+    command: AppliedCommand,
+    messageId: string,
+  ): Promise<void> {
+    let writeSucceeded = true;
     try {
       await this.deps.localScheduleWriter.applyCommandResult(this.options.accountId, command);
     } catch {
-      // 写本地失败不影响这轮对话已经完成；不重试，下次操作会带着新数据重新覆盖。
+      writeSucceeded = false;
+      // 写失败不重试；不发 ack，避免向服务端谎报已落库。
+    }
+    if (writeSucceeded && this.connection !== null) {
+      this.connection.send({ message_id: messageId, status: 'applied', type: 'message.ack' });
     }
     this.lastAppliedCommand = command;
     this.notifyListeners();
