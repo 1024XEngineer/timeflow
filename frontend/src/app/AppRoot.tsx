@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { AssistantContinuousConversationService } from '../features/assistant/application/AssistantContinuousConversationService';
 import { AssistantConversationService } from '../features/assistant/application/AssistantConversationService';
+import type { AssistantApplicationDependencies } from '../features/assistant/application/interfaces/AssistantApplicationPort';
 import { ExpoAudioCapture } from '../features/assistant/data/audio/ExpoAudioCapture';
 import { ExpoAudioPlayback } from '../features/assistant/data/audio/ExpoAudioPlayback';
 import { AuthenticatedVoiceTransport } from '../features/assistant/data/websocket/AuthenticatedVoiceTransport';
@@ -10,6 +12,7 @@ import type { AuthController } from '../features/auth/application';
 import { useAuth } from '../features/auth/presentation/AuthProvider';
 import { SqliteScheduleClientService } from '../features/schedule/application';
 import { ScheduleLocalRepository } from '../features/schedule/data';
+import { RNAppStateProvider } from '../infrastructure/appState/RNAppStateProvider';
 import type { AuthenticatedWebSocketClient } from '../infrastructure/websocket';
 import { openTimeflowDatabase } from '../infrastructure/database';
 import { ExpoLocationProvider } from '../infrastructure/location/ExpoLocationProvider';
@@ -149,29 +152,61 @@ function AuthenticatedScheduleRoute({
 
   // 语音这条连接复用应用唯一的 AuthenticatedWebSocketClient——握手、鉴权失效、
   // 断线通知都由它统一处理，这里不再单独持有 access_token/device_id/wsUrl。
-  const assistantApplication = useMemo(() => {
+  // 按住说话和免提通话共用同一批 capture/playback/location/appState 端口
+  // （只有 transport 不同：各自绑定不同 voiceMode，连的还是同一条共享连接），
+  // 两者不能同时抢麦克风，这个互斥在展示层（AssistantVoiceOverlay）按对方的
+  // 状态置灰控件来保证，这里不做限制。
+  const assistantDependencies = useMemo((): Omit<
+    AssistantApplicationDependencies,
+    'transport'
+  > | null => {
     if (currentLoadState?.status !== 'ready') {
+      return null;
+    }
+    return {
+      appState: new RNAppStateProvider(),
+      capture: new ExpoAudioCapture(),
+      localScheduleWriter: new LocalScheduleWriter(currentLoadState.repository),
+      location: new ExpoLocationProvider(),
+      playback: new ExpoAudioPlayback(),
+    };
+  }, [currentLoadState]);
+
+  const pushToTalkApplication = useMemo(() => {
+    if (assistantDependencies === null) {
       return null;
     }
     return new AssistantConversationService(
       { accountId },
+      { ...assistantDependencies, transport: new AuthenticatedVoiceTransport(webSocketClient) },
+    );
+  }, [assistantDependencies, accountId, webSocketClient]);
+
+  const continuousApplication = useMemo(() => {
+    if (assistantDependencies === null) {
+      return null;
+    }
+    return new AssistantContinuousConversationService(
+      { accountId },
       {
-        capture: new ExpoAudioCapture(),
-        localScheduleWriter: new LocalScheduleWriter(currentLoadState.repository),
-        location: new ExpoLocationProvider(),
-        playback: new ExpoAudioPlayback(),
-        transport: new AuthenticatedVoiceTransport(webSocketClient),
+        ...assistantDependencies,
+        transport: new AuthenticatedVoiceTransport(webSocketClient, 'continuous'),
       },
     );
-  }, [currentLoadState, accountId, webSocketClient]);
+  }, [assistantDependencies, accountId, webSocketClient]);
 
-  // assistantApplication 换了新实例（重试数据库、账号变化）或这个路由整体卸载
-  // （比如登出）时，把旧实例上挂在共享连接上的监听器摘掉，不然会一直攒着。
+  // 换了新实例（重试数据库、账号变化）或这个路由整体卸载（比如登出）时，把旧
+  // 实例上挂在共享连接上的监听器摘掉，不然会一直攒着。
   useEffect(() => {
     return () => {
-      assistantApplication?.dispose();
+      pushToTalkApplication?.dispose();
     };
-  }, [assistantApplication]);
+  }, [pushToTalkApplication]);
+  useEffect(() => {
+    return () => {
+      continuousApplication?.dispose();
+    };
+  }, [continuousApplication]);
 
   return (
     <View style={styles.authenticatedRoute}>
@@ -193,10 +228,14 @@ function AuthenticatedScheduleRoute({
         </Pressable>
       </View>
       <View style={styles.authenticatedContent}>
-        {currentLoadState?.status === 'ready' && scheduleService && assistantApplication ? (
+        {currentLoadState?.status === 'ready' &&
+        scheduleService &&
+        pushToTalkApplication &&
+        continuousApplication ? (
           <HomeScreen
             accountId={accountId}
-            application={assistantApplication}
+            continuousApplication={continuousApplication}
+            pushToTalkApplication={pushToTalkApplication}
             scheduleService={scheduleService}
             timezone={Intl.DateTimeFormat().resolvedOptions().timeZone}
           />

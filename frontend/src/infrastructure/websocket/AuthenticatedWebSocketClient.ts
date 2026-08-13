@@ -2,6 +2,7 @@ import {
   createSessionHello,
   parseSessionServerMessage,
   type SessionReady,
+  type VoiceMode,
 } from '../../contracts/authWebSocket';
 import type { AuthInvalidationPort } from '../network/client';
 import type { WebSocketFactory, WebSocketPort } from './WebSocketPort';
@@ -67,6 +68,7 @@ export class AuthenticatedWebSocketClient {
   private state: AuthenticatedWebSocketState = 'disconnected';
   private socket: WebSocketPort | undefined;
   private connection: Promise<SessionReady> | undefined;
+  private voiceMode: VoiceMode | undefined;
   private resolveConnection: ((ready: SessionReady) => void) | undefined;
   private rejectConnection: ((error: Error) => void) | undefined;
   private timeout: ReturnType<typeof setTimeout> | undefined;
@@ -84,16 +86,25 @@ export class AuthenticatedWebSocketClient {
   /**
    * 重复连接复用当前握手，避免产生第二个 socket——location 只在真正发起新连接
    * 时会被送进 session.hello；复用已有/正在进行的握手时静默忽略，不会补发。
+   *
+   * voiceMode 不同则例外：session.hello 只在建连时发一次，vendor 的 turn
+   * detection 由它决定，同一个连接中途不能切换模式，所以请求的 voiceMode 跟
+   * 当前连接/正在连接的 voiceMode 不一致时，先断开旧连接再用新模式重连。两种
+   * 模式的 UI 已经互斥，不会同时请求，这里的重连成本可以接受。
    */
-  connect(location?: AuthenticatedWebSocketLocation): Promise<SessionReady> {
+  connect(location?: AuthenticatedWebSocketLocation, voiceMode?: VoiceMode): Promise<SessionReady> {
     if (this.connection) {
-      return this.connection;
+      if (voiceMode === undefined || voiceMode === this.voiceMode) {
+        return this.connection;
+      }
+      this.disposeCurrent(new WebSocketConnectionError(), true);
     }
     if (this.options.coordinator.isInvalidating() || !isNonBlankString(this.options.deviceId)) {
       return Promise.reject(new WebSocketUnauthenticatedError());
     }
 
     this.state = 'connecting';
+    this.voiceMode = voiceMode;
     this.connectionAttempt += 1;
     const attempt = this.connectionAttempt;
     const connection = new Promise<SessionReady>((resolve, reject) => {
@@ -101,7 +112,7 @@ export class AuthenticatedWebSocketClient {
       this.rejectConnection = reject;
     });
     this.connection = connection;
-    void this.open(attempt, location);
+    void this.open(attempt, location, voiceMode);
     return connection;
   }
 
@@ -130,7 +141,11 @@ export class AuthenticatedWebSocketClient {
     this.disposeCurrent(new WebSocketConnectionError(), true);
   }
 
-  private async open(attempt: number, location?: AuthenticatedWebSocketLocation): Promise<void> {
+  private async open(
+    attempt: number,
+    location?: AuthenticatedWebSocketLocation,
+    voiceMode?: VoiceMode,
+  ): Promise<void> {
     let token: string | undefined;
     try {
       token = await this.options.coordinator.getAccessToken();
@@ -175,6 +190,7 @@ export class AuthenticatedWebSocketClient {
             location,
             requestId,
             timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            voiceMode,
           }),
         ),
       );
@@ -258,6 +274,7 @@ export class AuthenticatedWebSocketClient {
     this.clearTimeout();
     this.socket = undefined;
     this.state = 'disconnected';
+    this.voiceMode = undefined;
     this.connectionAttempt += 1;
     const reject = this.rejectConnection;
     this.resolveConnection = undefined;
