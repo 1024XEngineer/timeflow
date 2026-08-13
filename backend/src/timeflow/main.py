@@ -7,11 +7,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import Engine
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
 from sqlalchemy.orm import Session, sessionmaker
 
 from timeflow.business.auth import AccessTokenService, AuthAccessService
@@ -51,6 +46,10 @@ from timeflow.intelligence.realtime.agent import RealtimeAgent
 from timeflow.intelligence.realtime.instructions import build_instructions
 from timeflow.intelligence.realtime.schedule_tools import ToolBox
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 
