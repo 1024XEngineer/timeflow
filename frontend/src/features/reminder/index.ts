@@ -69,4 +69,9 @@ export {
   MockReminderStateStore,
   MOCK_REMINDER_SCHEDULES,
 } from './data/local';
-export { MockReminderPresenter, useReminderPermissionsOnLaunch } from './presentation';
+export {
+  AlertReminderPresenter,
+  MockReminderPresenter,
+  useReminderPermissionsOnLaunch,
+} from './presentation';
+export type { ReminderActionHandler, ReminderViewModel } from './presentation';

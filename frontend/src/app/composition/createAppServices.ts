@@ -21,7 +21,7 @@ import {
   ReactNativeVibration,
 } from '../../infrastructure/notifications';
 import { IntervalTimeListener } from '../../shared/time';
-import { MockReminderPresenter } from '../../features/reminder/presentation';
+import { AlertReminderPresenter } from '../../features/reminder/presentation';
 
 export type AppServices = {
   runtime: AppRuntime;
@@ -29,7 +29,7 @@ export type AppServices = {
   reminderPorts: ReminderApplicationDependencies;
 };
 
-/** 提醒组合根：时间/音频/震动已接原生适配器；presenter 仍为 mock。 */
+/** 提醒组合根：presenter 已接 AlertReminderPresenter，应用层仍为 mock。 */
 export function createAppServices(): AppServices {
   const reminderPorts: ReminderApplicationDependencies = {
     schedules: new MockLocalScheduleReader(),
@@ -39,7 +39,7 @@ export function createAppServices(): AppServices {
     delivery: new MockReminderDelivery(),
     audio: new ExpoAudioPlayback(),
     device: new NativeDeviceCapability(),
-    presenter: new MockReminderPresenter(),
+    presenter: new AlertReminderPresenter(),
     systemNotification: new MockSystemNotification(),
     popup: new MockPopup(),
     vibration: new ReactNativeVibration(),
