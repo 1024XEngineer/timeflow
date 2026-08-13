@@ -18,8 +18,9 @@ export type {
   ReminderTrigger,
   ReminderTriggerReason,
   ReminderType,
+  StrengthDeliveryPlan,
 } from './domain';
-export { DEFAULT_SNOOZE_MINUTES } from './domain';
+export { DEFAULT_SNOOZE_MINUTES, resolveStrengthDeliveryPlan } from './domain';
 export type {
   AlarmScheduleReceipt,
   AlarmScheduleRequest,
@@ -34,9 +35,13 @@ export type {
   LocalTimeTick,
   LocationMonitorEvent,
   LocationMonitorPort,
+  LocationRebuildTarget,
   LocationWatchHandle,
   LocationWatchMode,
   LocationWatchRequest,
+  AlertDialogButton,
+  AlertDialogPort,
+  AlertDialogRequest,
   PopupPort,
   PopupReceipt,
   PopupRequest,
@@ -71,4 +76,4 @@ export {
   MOCK_REMINDER_SCHEDULES,
   MemoryReminderStateStore,
 } from './data/local';
-export { MockReminderPresenter } from './presentation';
+export { AlertReminderPresenter, MockReminderPresenter } from './presentation';

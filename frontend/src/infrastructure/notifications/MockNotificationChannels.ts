@@ -1,4 +1,6 @@
 import type {
+  AlertDialogPort,
+  AlertDialogRequest,
   PopupPort,
   PopupReceipt,
   PopupRequest,
@@ -34,6 +36,12 @@ export class MockVibration implements VibrationPort {
   }
 
   async stop(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
+export class MockAlertDialog implements AlertDialogPort {
+  async show(_request: AlertDialogRequest): Promise<void> {
     return Promise.resolve();
   }
 }

@@ -10,7 +10,8 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSMicrophoneUsageDescription": "需要麦克风权限来录制语音指令",
-        "NSLocationWhenInUseUsageDescription": "需要定位权限来关联语音指令发生的地点"
+        "NSLocationWhenInUseUsageDescription": "需要定位权限来关联语音指令发生的地点，并在到达或离开地点时提醒你。",
+        "UIBackgroundModes": ["location"]
       },
       "bundleIdentifier": "com.anonymous.timeflow"
     },
@@ -25,10 +26,26 @@
       "permissions": [
         "RECORD_AUDIO",
         "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
       ],
       "package": "com.anonymous.timeflow"
     },
-    "plugins": ["expo-sqlite", "expo-location", "@irvingouj/expo-audio-stream"]
+    "plugins": [
+      "expo-sqlite",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "允许 Timeflow 使用你的位置，以便在到达或离开地点时提醒你。",
+          "locationWhenInUsePermission": "允许 Timeflow 在使用期间访问位置，以便地点提醒生效。",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      "@irvingouj/expo-audio-stream"
+    ]
   }
 }

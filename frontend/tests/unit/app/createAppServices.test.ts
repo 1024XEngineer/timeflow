@@ -1,6 +1,8 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
 import { createAppServices } from '../../../src/app/composition/createAppServices';
+import { AlertReminderPresenter } from '../../../src/features/reminder/presentation';
+import { ReactNativeAlertDialog } from '../../../src/infrastructure/notifications';
 import { FakeAuthSessionStore } from '../../fakes/FakeAuthSessionStore';
 
 describe('createAppServices', () => {
@@ -29,6 +31,8 @@ describe('createAppServices', () => {
       timezone: null,
     });
     expect(stopReminder).toHaveBeenCalledTimes(1);
+    expect(services.alertDialog).toBeInstanceOf(ReactNativeAlertDialog);
+    expect(services.reminderPorts.presenter).toBeInstanceOf(AlertReminderPresenter);
   });
 });
 

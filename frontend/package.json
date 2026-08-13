@@ -15,6 +15,7 @@
     "expo-secure-store": "~57.0.1",
     "expo-sqlite": "~57.0.1",
     "expo-status-bar": "~57.0.1",
+    "expo-task-manager": "~57.0.9",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.0",
