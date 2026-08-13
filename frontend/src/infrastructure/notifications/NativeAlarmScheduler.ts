@@ -10,7 +10,7 @@ import {
   nativeScheduleAlarm,
 } from './native/TimeflowAlarmBridge';
 
-/** Android TimeflowAlarm 适配器；无法挂上时返回 scheduled=false。 */
+/** Android TimeflowAlarm 适配器；无法挂上时返回 scheduled: false。 */
 export class NativeAlarmScheduler implements AlarmSchedulerPort {
   async schedule(request: AlarmScheduleRequest): Promise<AlarmScheduleReceipt> {
     if (!isTimeflowAlarmAvailable()) {
@@ -22,29 +22,33 @@ export class NativeAlarmScheduler implements AlarmSchedulerPort {
       return unscheduled(request.schedule_id);
     }
 
-    const ready = await nativeAreAlarmPermissionsGranted();
-    if (!ready) {
+    try {
+      const ready = await nativeAreAlarmPermissionsGranted();
+      if (!ready) {
+        return unscheduled(request.schedule_id);
+      }
+
+      const alarmId = await nativeScheduleAlarm(triggerAtMillis, request.title);
+      if (alarmId == null || alarmId.length === 0) {
+        return unscheduled(request.schedule_id);
+      }
+
+      return {
+        alarm_id: alarmId,
+        schedule_id: request.schedule_id,
+        scheduled: true,
+      };
+    } catch {
       return unscheduled(request.schedule_id);
     }
-
-    const alarmId = await nativeScheduleAlarm(triggerAtMillis, request.title);
-    if (alarmId == null || alarmId.length === 0) {
-      return unscheduled(request.schedule_id);
-    }
-
-    return {
-      alarm_id: alarmId,
-      schedule_id: request.schedule_id,
-      scheduled: true,
-    };
   }
 
   async cancel(alarmId: string | null): Promise<{ cancelled: boolean }> {
     if (alarmId == null || alarmId.length === 0) {
       return { cancelled: false };
     }
-    await nativeCancelAlarm(alarmId);
-    return { cancelled: true };
+    const cancelled = await nativeCancelAlarm(alarmId);
+    return { cancelled };
   }
 
   async rebuild(

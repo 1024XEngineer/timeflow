@@ -1,19 +1,59 @@
-import { useEffect, useMemo, type PropsWithChildren } from 'react';
+import { type PropsWithChildren, useEffect } from 'react';
 
-import { createAppServices } from './composition/createAppServices';
+import type { AuthController, AuthInvalidationCoordinator } from '../features/auth/application';
+import { AuthProvider, useAuth } from '../features/auth/presentation/AuthProvider';
 import { useReminderPermissionsOnLaunch } from '../features/reminder';
+import { AppServicesProvider } from './composition/AppServicesProvider';
+import type { AppServices } from './composition/createAppServices';
 
-/** 组合应用级提供器，并启动提醒运行时。 */
-export function AppProviders({ children }: PropsWithChildren) {
-  const services = useMemo(() => createAppServices(), []);
-  useReminderPermissionsOnLaunch(services.reminderPorts.device, services.alertDialog);
+/** 组合认证边界、业务依赖注入和认证后模块生命周期。 */
+export function AppProviders({
+  authController,
+  children,
+  invalidationCoordinator,
+  services,
+}: PropsWithChildren<{
+  authController: AuthController;
+  invalidationCoordinator?: AuthInvalidationCoordinator;
+  services: AppServices;
+}>) {
+  return (
+    <AuthProvider controller={authController} invalidationCoordinator={invalidationCoordinator}>
+      <AppServicesProvider services={services}>
+        <AuthenticatedRuntime
+          alertDialog={services.alertDialog}
+          device={services.reminderPorts.device}
+          runtime={services.runtime}
+        />
+        {children}
+      </AppServicesProvider>
+    </AuthProvider>
+  );
+}
+
+function AuthenticatedRuntime({
+  alertDialog,
+  device,
+  runtime,
+}: {
+  readonly alertDialog: AppServices['alertDialog'];
+  readonly device: AppServices['reminderPorts']['device'];
+  readonly runtime: AppServices['runtime'];
+}) {
+  const { viewState } = useAuth();
+  const authenticated = viewState.status === 'authenticated';
+  useReminderPermissionsOnLaunch(authenticated ? device : null, authenticated ? alertDialog : null);
 
   useEffect(() => {
-    void services.runtime.start();
-    return () => {
-      void services.runtime.stop();
-    };
-  }, [services]);
+    if (viewState.status !== 'authenticated') {
+      return;
+    }
 
-  return children;
+    void runtime.start();
+    return () => {
+      void runtime.stop();
+    };
+  }, [runtime, viewState.status]);
+
+  return null;
 }
