@@ -58,14 +58,22 @@ export class NativeDeviceCapability implements DeviceCapabilityPort {
 
   async requestPermission(permission: DevicePermission): Promise<boolean> {
     if (permission === 'notifications') {
-      return nativeRequestNotificationPermission();
+      try {
+        return await nativeRequestNotificationPermission();
+      } catch {
+        return false;
+      }
     }
     return this.openSettings(permission);
   }
 
   async openSettings(permission: DevicePermission): Promise<boolean> {
     const kind = SETTINGS_KIND[permission] ?? 'app';
-    return nativeOpenAlarmPermissionSettings(kind);
+    try {
+      return await nativeOpenAlarmPermissionSettings(kind);
+    } catch {
+      return false;
+    }
   }
 }
 

@@ -87,7 +87,12 @@ export function useReminderPermissionsOnLaunch(device: DeviceCapabilityPort | nu
         }
 
         if (missing === 'notifications') {
-          const granted = await device.requestPermission('notifications');
+          let granted = false;
+          try {
+            granted = await device.requestPermission('notifications');
+          } catch {
+            granted = false;
+          }
           if (cancelled) return;
           if (!granted) skippedRef.current.add('notifications');
           busyRef.current = false;
@@ -146,9 +151,20 @@ export function useReminderPermissionsOnLaunch(device: DeviceCapabilityPort | nu
 
 function confirmAsync(title: string, message: string): Promise<boolean> {
   return new Promise((resolve) => {
-    Alert.alert(title, message, [
-      { text: '暂不', style: 'cancel', onPress: () => resolve(false) },
-      { text: '去授权', onPress: () => resolve(true) },
-    ]);
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    Alert.alert(
+      title,
+      message,
+      [
+        { text: '暂不', style: 'cancel', onPress: () => finish(false) },
+        { text: '去授权', onPress: () => finish(true) },
+      ],
+      { cancelable: true, onDismiss: () => finish(false) },
+    );
   });
 }

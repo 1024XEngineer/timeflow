@@ -9,6 +9,11 @@ import type {
 } from '../../../../src/features/reminder/application/interfaces';
 import { useReminderPermissionsOnLaunch } from '../../../../src/features/reminder/presentation/useReminderPermissionsOnLaunch';
 
+const ALERT_OPTIONS = expect.objectContaining({
+  cancelable: true,
+  onDismiss: expect.any(Function),
+});
+
 function deniedPermissions(): Record<DevicePermission, boolean> {
   return {
     notifications: false,
@@ -61,6 +66,7 @@ function createDevice(
 }
 
 let alertButtons: readonly AlertButton[] = [];
+let dismissAlertCallback: (() => void) | undefined;
 const appStateListeners: ((state: string) => void)[] = [];
 
 async function flush(ms = 0): Promise<void> {
@@ -82,13 +88,23 @@ async function press(label: string): Promise<void> {
   });
 }
 
+async function dismissAlert(): Promise<void> {
+  await act(async () => {
+    dismissAlertCallback?.();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
 describe('useReminderPermissionsOnLaunch', () => {
   beforeEach(() => {
     alertButtons = [];
     appStateListeners.length = 0;
     Platform.OS = 'android';
-    jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons) => {
+    dismissAlertCallback = undefined;
+    jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons, options) => {
       alertButtons = buttons ?? [];
+      dismissAlertCallback = options?.onDismiss;
     });
     jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, listener) => {
       appStateListeners.push(listener as (state: string) => void);
@@ -134,6 +150,7 @@ describe('useReminderPermissionsOnLaunch', () => {
       '需要精确闹钟权限',
       expect.any(String),
       expect.any(Array),
+      ALERT_OPTIONS,
     );
     await press('去授权');
     expect(device.openSettings).toHaveBeenCalledWith('exact_alarm');
@@ -152,6 +169,7 @@ describe('useReminderPermissionsOnLaunch', () => {
       '需要悬浮窗权限',
       expect.any(String),
       expect.any(Array),
+      ALERT_OPTIONS,
     );
   });
 
@@ -167,6 +185,50 @@ describe('useReminderPermissionsOnLaunch', () => {
     await press('暂不');
     await flush(250);
     expect(device.openSettings).not.toHaveBeenCalled();
+    expect(Alert.alert).toHaveBeenCalledWith(
+      '需要悬浮窗权限',
+      expect.any(String),
+      expect.any(Array),
+      ALERT_OPTIONS,
+    );
+  });
+
+  it('skips and continues when the explanation alert is dismissed', async () => {
+    jest.useFakeTimers();
+    const device = createDevice({
+      platform: 'android',
+      supported: true,
+      permissions: { ...deniedPermissions(), notifications: true },
+    });
+    renderHook(() => useReminderPermissionsOnLaunch(device));
+    await flush(600);
+    await dismissAlert();
+    await flush(250);
+    expect(device.openSettings).not.toHaveBeenCalled();
+    expect(Alert.alert).toHaveBeenCalledWith(
+      '需要悬浮窗权限',
+      expect.any(String),
+      expect.any(Array),
+      ALERT_OPTIONS,
+    );
+  });
+
+  it('skips notifications and continues when requestPermission rejects', async () => {
+    jest.useFakeTimers();
+    const device = createDevice({ platform: 'android', supported: true });
+    device.requestPermission = jest.fn(async () => {
+      throw new Error('native prompt failed');
+    });
+    renderHook(() => useReminderPermissionsOnLaunch(device));
+    await flush(600);
+    expect(device.requestPermission).toHaveBeenCalledWith('notifications');
+    await flush(350);
+    expect(Alert.alert).toHaveBeenCalledWith(
+      '需要精确闹钟权限',
+      expect.any(String),
+      expect.any(Array),
+      ALERT_OPTIONS,
+    );
   });
 
   it('skips and continues when openSettings returns false', async () => {
@@ -186,6 +248,7 @@ describe('useReminderPermissionsOnLaunch', () => {
       '需要悬浮窗权限',
       expect.any(String),
       expect.any(Array),
+      ALERT_OPTIONS,
     );
   });
 
@@ -207,6 +270,7 @@ describe('useReminderPermissionsOnLaunch', () => {
       '需要悬浮窗权限',
       expect.any(String),
       expect.any(Array),
+      ALERT_OPTIONS,
     );
   });
 

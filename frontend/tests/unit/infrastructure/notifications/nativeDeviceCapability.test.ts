@@ -116,6 +116,19 @@ describe('NativeDeviceCapability', () => {
     expect(openSettings).not.toHaveBeenCalled();
   });
 
+  it('returns false when the native notification permission request rejects', async () => {
+    requestNotifications.mockRejectedValue(new Error('prompt failed'));
+    const device = new NativeDeviceCapability();
+    await expect(device.requestPermission('notifications')).resolves.toBe(false);
+  });
+
+  it('returns false when opening settings rejects', async () => {
+    openSettings.mockRejectedValue(new Error('intent failed'));
+    const device = new NativeDeviceCapability();
+    await expect(device.openSettings('overlay')).resolves.toBe(false);
+    await expect(device.requestPermission('exact_alarm')).resolves.toBe(false);
+  });
+
   it('opens the matching settings page for non-notification permissions', async () => {
     const device = new NativeDeviceCapability();
     await expect(device.requestPermission('exact_alarm')).resolves.toBe(true);
