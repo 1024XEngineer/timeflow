@@ -1,5 +1,7 @@
 export { LocalReminderApplication } from './LocalReminderApplication';
 export type {
+  AlarmNativeDisposition,
+  AlarmNativeEvent,
   AlarmScheduleReceipt,
   AlarmScheduleRequest,
   AlarmSchedulerPort,

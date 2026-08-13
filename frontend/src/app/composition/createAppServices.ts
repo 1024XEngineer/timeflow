@@ -4,20 +4,20 @@ import type {
   ReminderApplicationDependencies,
   ReminderApplicationPort,
 } from '../../features/reminder/application/interfaces';
+import { LocalReminderApplication } from '../../features/reminder/application';
 import {
-  MockLocalScheduleReader,
-  MockReminderApplication,
-  MockReminderDispositionSync,
-  MockReminderStateStore,
+  InMemoryLocalScheduleReader,
+  LocalReminderDelivery,
+  LocalReminderDispositionSync,
+  LocalReminderRecovery,
+  LocalSystemNotification,
+  MemoryReminderStateStore,
+  NoopPopup,
 } from '../../features/reminder/data/local';
 import { MockAudioPlayback } from '../../infrastructure/audio';
 import { MockLocationMonitor } from '../../infrastructure/location';
 import {
   MockDeviceCapability,
-  MockPopup,
-  MockReminderRecovery,
-  MockReminderDelivery,
-  MockSystemNotification,
   MockVibration,
   NativeAlarmScheduler,
 } from '../../infrastructure/notifications';
@@ -43,22 +43,22 @@ export interface CreateAppServicesOptions {
 export function createAppServices(options: CreateAppServicesOptions = {}): AppServices {
   const auth = createAuthRuntime(options.auth);
   const reminderPorts: ReminderApplicationDependencies = {
-    schedules: new MockLocalScheduleReader(),
+    schedules: new InMemoryLocalScheduleReader(),
     time: new MockTimeListener(),
     location: new MockLocationMonitor(),
     alarms: new NativeAlarmScheduler(),
-    delivery: new MockReminderDelivery(),
+    delivery: new LocalReminderDelivery(),
     audio: new MockAudioPlayback(),
     device: new MockDeviceCapability(),
     presenter: new MockReminderPresenter(),
-    systemNotification: new MockSystemNotification(),
-    popup: new MockPopup(),
+    systemNotification: new LocalSystemNotification(),
+    popup: new NoopPopup(),
     vibration: new MockVibration(),
-    recovery: new MockReminderRecovery(),
-    state: new MockReminderStateStore(),
-    dispositionSync: new MockReminderDispositionSync(),
+    recovery: new LocalReminderRecovery(),
+    state: new MemoryReminderStateStore(),
+    dispositionSync: new LocalReminderDispositionSync(),
   };
-  const reminder = new MockReminderApplication(reminderPorts);
+  const reminder = new LocalReminderApplication(reminderPorts);
   const scheduleView = new ScheduleViewStore();
   const runtime = new AppRuntime([
     {

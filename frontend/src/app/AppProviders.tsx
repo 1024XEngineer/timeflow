@@ -1,4 +1,5 @@
 import { type PropsWithChildren, useEffect } from 'react';
+import { AppState } from 'react-native';
 
 import type { AuthController, AuthInvalidationCoordinator } from '../features/auth/application';
 import { AuthProvider, useAuth } from '../features/auth/presentation/AuthProvider';
@@ -19,14 +20,20 @@ export function AppProviders({
   return (
     <AuthProvider controller={authController} invalidationCoordinator={invalidationCoordinator}>
       <AppServicesProvider services={services}>
-        <AuthenticatedRuntime runtime={services.runtime} />
+        <AuthenticatedRuntime reminder={services.reminder} runtime={services.runtime} />
         {children}
       </AppServicesProvider>
     </AuthProvider>
   );
 }
 
-function AuthenticatedRuntime({ runtime }: { readonly runtime: AppServices['runtime'] }) {
+function AuthenticatedRuntime({
+  reminder,
+  runtime,
+}: {
+  readonly reminder: AppServices['reminder'];
+  readonly runtime: AppServices['runtime'];
+}) {
   const { viewState } = useAuth();
 
   useEffect(() => {
@@ -39,6 +46,20 @@ function AuthenticatedRuntime({ runtime }: { readonly runtime: AppServices['runt
       void runtime.stop();
     };
   }, [runtime, viewState.status]);
+
+  useEffect(() => {
+    if (viewState.status !== 'authenticated') {
+      return;
+    }
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void reminder.rebuild();
+      }
+    });
+    return () => {
+      subscription.remove();
+    };
+  }, [reminder, viewState.status]);
 
   return null;
 }

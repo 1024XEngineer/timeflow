@@ -21,6 +21,8 @@ export type {
 } from './domain';
 export { DEFAULT_SNOOZE_MINUTES } from './domain';
 export type {
+  AlarmNativeDisposition,
+  AlarmNativeEvent,
   AlarmScheduleReceipt,
   AlarmScheduleRequest,
   AlarmSchedulerPort,
@@ -64,11 +66,17 @@ export type {
 } from './application';
 export { LocalReminderApplication } from './application';
 export {
+  InMemoryLocalScheduleReader,
+  LocalReminderDelivery,
+  LocalReminderDispositionSync,
+  LocalReminderRecovery,
+  LocalSystemNotification,
   MockLocalScheduleReader,
   MockReminderApplication,
   MockReminderDispositionSync,
   MockReminderStateStore,
   MOCK_REMINDER_SCHEDULES,
   MemoryReminderStateStore,
+  NoopPopup,
 } from './data/local';
 export { MockReminderPresenter } from './presentation';

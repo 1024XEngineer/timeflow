@@ -22,6 +22,7 @@ describe('createAppServices', () => {
 
     expect(services.protectedClient).toBe(services.auth.protectedClient);
     expect(services.webSocketClient).toBe(services.auth.webSocketClient);
+    expect(services.reminder.constructor.name).toBe('LocalReminderApplication');
     expect(services.scheduleView.getSnapshot()).toEqual({
       accountId: null,
       occurrences: [],
