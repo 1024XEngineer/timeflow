@@ -13,6 +13,9 @@ import type {
   ScheduleOccurrenceView,
 } from '../src/features/schedule/application';
 import type {
+  ApplyFullScheduleSnapshotCommand,
+  FullScheduleSnapshotSyncService,
+  FullSnapshotApplyResult,
   ScheduleSyncService,
   SnapshotApplyErrorCode,
   SnapshotApplyFailureResult,
@@ -90,6 +93,24 @@ export type ScheduleCalendarLocationResultContract = Assert<
 
 export type ScheduleSyncOperationsContract = Assert<
   Equal<keyof ScheduleSyncService, 'applyScheduleSnapshotToSqlite'>
+>;
+
+export type FullScheduleSnapshotSyncOperationsContract = Assert<
+  Equal<keyof FullScheduleSnapshotSyncService, 'applyFullScheduleSnapshotToSqlite'>
+>;
+
+export type FullScheduleSnapshotSyncCommandContract = Assert<
+  Equal<
+    Parameters<FullScheduleSnapshotSyncService['applyFullScheduleSnapshotToSqlite']>,
+    [ApplyFullScheduleSnapshotCommand]
+  >
+>;
+
+export type FullScheduleSnapshotSyncResultContract = Assert<
+  Equal<
+    ReturnType<FullScheduleSnapshotSyncService['applyFullScheduleSnapshotToSqlite']>,
+    Promise<FullSnapshotApplyResult>
+  >
 >;
 
 export type ScheduleOccurrenceViewContract = Assert<

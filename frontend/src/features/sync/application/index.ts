@@ -1,5 +1,10 @@
 export type {
+  ApplyFullScheduleSnapshotCommand,
   ApplyScheduleSnapshotCommand,
+  FullScheduleSnapshotSyncService,
+  FullSnapshotApplyFailureResult,
+  FullSnapshotApplyResult,
+  FullSnapshotApplySuccessResult,
   ScheduleSyncService,
   SnapshotApplyErrorCode,
   SnapshotApplyFailureResult,
