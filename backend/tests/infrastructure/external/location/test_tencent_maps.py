@@ -79,9 +79,9 @@ def test_reverse_sends_only_the_required_tencent_parameters() -> None:
                 },
             )
 
-        assert await _port(handler).reverse(Coordinate(31.22846, 121.47822, "gcj02")) == CurrentArea(
-            "上海市", "上海市"
-        )
+        assert await _port(handler).reverse(
+            Coordinate(31.22846, 121.47822, "gcj02")
+        ) == CurrentArea("上海市", "上海市")
 
     asyncio.run(scenario())
 
@@ -89,9 +89,7 @@ def test_reverse_sends_only_the_required_tencent_parameters() -> None:
 def test_reverse_rejects_a_non_tencent_coordinate() -> None:
     async def scenario() -> None:
         with pytest.raises(LocationInputError, match="gcj02"):
-            await _port(lambda _: httpx.Response(500)).reverse(
-                Coordinate(31.23, 121.47, "wgs84")
-            )
+            await _port(lambda _: httpx.Response(500)).reverse(Coordinate(31.23, 121.47, "wgs84"))
 
     asyncio.run(scenario())
 
@@ -179,7 +177,9 @@ def test_invalid_json_is_sanitized() -> None:
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("error", [httpx.TimeoutException("timeout"), httpx.RemoteProtocolError("bad protocol")])
+@pytest.mark.parametrize(
+    "error", [httpx.TimeoutException("timeout"), httpx.RemoteProtocolError("bad protocol")]
+)
 def test_transport_failures_are_sanitized_and_clear_the_exception_cause(error: Exception) -> None:
     async def scenario() -> None:
         def handler(request: httpx.Request) -> httpx.Response:
@@ -229,9 +229,7 @@ def test_network_failure_does_not_log_key_or_current_coordinate(
     ("latitude", "longitude"),
     [(float("nan"), 121.318), (31.194, float("inf"))],
 )
-def test_search_skips_pois_with_non_finite_coordinates(
-    latitude: object, longitude: object
-) -> None:
+def test_search_skips_pois_with_non_finite_coordinates(latitude: object, longitude: object) -> None:
     response = {
         "status": 0,
         "data": [_poi(latitude=latitude, longitude=longitude)],
@@ -274,9 +272,12 @@ def test_search_skips_pois_missing_required_area(field: str) -> None:
         item = _poi()
         item["ad_info"] = {"province": "上海市", "city": "上海市"}
         item["ad_info"][field] = ""  # type: ignore[index]
-        assert await _port(lambda _: httpx.Response(200, json={"status": 0, "data": [item]})).search(
-            "虹桥", _context()
-        ) == ()
+        assert (
+            await _port(lambda _: httpx.Response(200, json={"status": 0, "data": [item]})).search(
+                "虹桥", _context()
+            )
+            == ()
+        )
 
     asyncio.run(scenario())
 

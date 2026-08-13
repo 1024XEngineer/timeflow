@@ -81,7 +81,6 @@ def clear_model_environment(monkeypatch: MonkeyPatch) -> None:
     clear_tencent_map_environment(monkeypatch)
 
 
-
 def test_settings_use_timeflow_environment(monkeypatch: MonkeyPatch) -> None:
     """TIMEFLOW-prefixed variables override development defaults."""
     clear_model_environment(monkeypatch)
@@ -324,9 +323,7 @@ def test_settings_convert_tencent_map_environment_values(monkeypatch: MonkeyPatc
         "https://apis.map.qq.com#fragment",
     ],
 )
-def test_settings_reject_invalid_tencent_map_base_url(
-    monkeypatch: MonkeyPatch, value: str
-) -> None:
+def test_settings_reject_invalid_tencent_map_base_url(monkeypatch: MonkeyPatch, value: str) -> None:
     clear_model_environment(monkeypatch)
     monkeypatch.setenv("TIMEFLOW_TENCENT_MAP_BASE_URL", value)
 
@@ -335,9 +332,7 @@ def test_settings_reject_invalid_tencent_map_base_url(
 
 
 @pytest.mark.parametrize("value", ["0", "-1", "nan", "inf"])
-def test_settings_reject_invalid_tencent_map_timeout(
-    monkeypatch: MonkeyPatch, value: str
-) -> None:
+def test_settings_reject_invalid_tencent_map_timeout(monkeypatch: MonkeyPatch, value: str) -> None:
     clear_model_environment(monkeypatch)
     monkeypatch.setenv("TIMEFLOW_TENCENT_MAP_TIMEOUT_SECONDS", value)
 

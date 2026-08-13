@@ -55,15 +55,15 @@ def test_current_area_requires_both_coarse_fields() -> None:
 
 def test_search_context_requires_a_tencent_coordinate() -> None:
     with pytest.raises(LocationInputError, match="gcj02"):
-        LocationSearchContext(CurrentArea("上海市", "上海市"), Coordinate(31, 121, "wgs84"), "wgs84")
+        LocationSearchContext(
+            CurrentArea("上海市", "上海市"), Coordinate(31, 121, "wgs84"), "wgs84"
+        )
 
 
 def test_provider_candidate_requires_identity_and_gcj02() -> None:
     valid_area = ("上海市", "上海市", "闵行区")
     with pytest.raises(LocationInputError, match="provider_id"):
-        ProviderLocationCandidate(
-            "", "虹桥站", "", "", Coordinate(31, 121, "gcj02"), *valid_area
-        )
+        ProviderLocationCandidate("", "虹桥站", "", "", Coordinate(31, 121, "gcj02"), *valid_area)
     with pytest.raises(LocationInputError, match="gcj02"):
         ProviderLocationCandidate(
             "poi-1", "虹桥站", "", "", Coordinate(31, 121, "wgs84"), *valid_area

@@ -43,9 +43,7 @@ def _gcj02_to_wgs84(latitude: float, longitude: float) -> tuple[float, float]:
     wgs_latitude = latitude
     wgs_longitude = longitude
     for _ in range(3):
-        converted_latitude, converted_longitude = _wgs84_to_gcj02(
-            wgs_latitude, wgs_longitude
-        )
+        converted_latitude, converted_longitude = _wgs84_to_gcj02(wgs_latitude, wgs_longitude)
         wgs_latitude -= converted_latitude - latitude
         wgs_longitude -= converted_longitude - longitude
     return wgs_latitude, wgs_longitude
@@ -64,45 +62,27 @@ def _offset(latitude: float, longitude: float) -> tuple[float, float]:
         * 180.0
         / ((_EARTH_RADIUS * (1 - _ECCENTRICITY_SQUARED)) / (magic * root) * math.pi)
     )
-    longitude_delta = (
-        longitude_delta
-        * 180.0
-        / (_EARTH_RADIUS / root * math.cos(radians) * math.pi)
-    )
+    longitude_delta = longitude_delta * 180.0 / (_EARTH_RADIUS / root * math.cos(radians) * math.pi)
     return latitude_delta, longitude_delta
 
 
 def _transform_latitude(x: float, y: float) -> float:
-    result = (
-        -100.0
-        + 2.0 * x
-        + 3.0 * y
-        + 0.2 * y * y
-        + 0.1 * x * y
-        + 0.2 * math.sqrt(abs(x))
-    )
+    result = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * math.sqrt(abs(x))
     result += (20.0 * math.sin(6.0 * x * math.pi) + 20.0 * math.sin(2.0 * x * math.pi)) * 2.0 / 3.0
     result += (20.0 * math.sin(y * math.pi) + 40.0 * math.sin(y / 3.0 * math.pi)) * 2.0 / 3.0
     result += (
-        160.0 * math.sin(y / 12.0 * math.pi) + 320.0 * math.sin(y * math.pi / 30.0)
-    ) * 2.0 / 3.0
+        (160.0 * math.sin(y / 12.0 * math.pi) + 320.0 * math.sin(y * math.pi / 30.0)) * 2.0 / 3.0
+    )
     return result
 
 
 def _transform_longitude(x: float, y: float) -> float:
-    result = (
-        300.0
-        + x
-        + 2.0 * y
-        + 0.1 * x * x
-        + 0.1 * x * y
-        + 0.1 * math.sqrt(abs(x))
-    )
+    result = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * math.sqrt(abs(x))
     result += (20.0 * math.sin(6.0 * x * math.pi) + 20.0 * math.sin(2.0 * x * math.pi)) * 2.0 / 3.0
     result += (20.0 * math.sin(x * math.pi) + 40.0 * math.sin(x / 3.0 * math.pi)) * 2.0 / 3.0
     result += (
-        150.0 * math.sin(x / 12.0 * math.pi) + 300.0 * math.sin(x / 30.0 * math.pi)
-    ) * 2.0 / 3.0
+        (150.0 * math.sin(x / 12.0 * math.pi) + 300.0 * math.sin(x / 30.0 * math.pi)) * 2.0 / 3.0
+    )
     return result
 
 
