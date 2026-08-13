@@ -157,19 +157,36 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       });
       const conversationId = await started;
 
-      await this.deps.capture.start((chunk, soundLevel) => {
-        // capture.stop() 不保证之后不会再有一次迟到的回调（原生侧缓冲区排空的
-        // 时序不受这边控制）；streamId 在 endTurn() 里和发 voice.stream.end 同一
-        // 拍清空，迟到的音频块必须在这里挡住，否则服务端会因为收到不属于任何
-        // 活跃流的音频帧而报错。暂停期间录音本身不停（恢复更快），只是采到的
-        // 帧不再往外发。
-        if (this.streamId === null || this.muted) {
-          return;
+      try {
+        await this.deps.capture.start((chunk, soundLevel) => {
+          // capture.stop() 不保证之后不会再有一次迟到的回调（原生侧缓冲区排空的
+          // 时序不受这边控制）；streamId 在 endTurn() 里和发 voice.stream.end 同一
+          // 拍清空，迟到的音频块必须在这里挡住，否则服务端会因为收到不属于任何
+          // 活跃流的音频帧而报错。暂停期间录音本身不停（恢复更快），只是采到的
+          // 帧不再往外发。
+          if (this.streamId === null || this.muted) {
+            return;
+          }
+          connection.sendAudioFrame(chunk);
+          this.soundLevel = soundLevel;
+          this.notifyListeners();
+        });
+      } catch (error) {
+        // 服务端这时候已经确认开流了（stream_id 拿到手了）：跟 endTurn() 一样的
+        // 收尾——不发 voice.stream.end 并关掉连接，这条 session 就卡在"有一条
+        // 活跃流"，重试会复用同一个连接，下一次 voice.stream.start 被服务端当
+        // 已有活跃流拒绝。
+        if (this.streamId !== null) {
+          connection.send({ payload: { stream_id: this.streamId }, type: 'voice.stream.end' });
         }
-        connection.sendAudioFrame(chunk);
-        this.soundLevel = soundLevel;
-        this.notifyListeners();
-      });
+        this.unsubscribeConnection?.();
+        connection.close();
+        this.streamId = null;
+        this.unsubscribeConnection = null;
+        this.connection = null;
+        this.setState({ message: '录音启动失败', phase: 'error' });
+        throw error;
+      }
       this.setState({ conversationId, phase: 'listening' });
       this.armIdleTimer();
     } finally {

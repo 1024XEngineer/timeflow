@@ -491,4 +491,48 @@ describe('AssistantContinuousConversationService', () => {
     expect(service.getState()).toEqual({ conversationId: 'conv_001', phase: 'listening' });
     service.dispose();
   });
+
+  it('ends the server stream and closes the connection when capture.start() rejects', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    deps.capture.start = jest.fn(async () => {
+      throw new Error('native recording failed to start');
+    });
+    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+
+    const turn = service.startTurn();
+    await flushAsync();
+    // 服务端已经确认开流了（stream_id 拿到手），然后原生录音才失败——这正是
+    // 会把连接卡在"有一条活跃流"的时序。
+    fake.emitMessage({
+      ok: true,
+      payload: { conversation_id: 'conv_001', stream_id: 'stream_001' },
+      type: 'voice.stream.started',
+    } as AssistantServerMessage);
+    await expect(turn).rejects.toThrow('native recording failed to start');
+
+    expect(fake.sent).toContainEqual({
+      payload: { stream_id: 'stream_001' },
+      type: 'voice.stream.end',
+    });
+    expect(fake.closeCalls.count).toBe(1);
+    expect(fake.unsubscribeCalls).toEqual({ audio: 1, close: 1, message: 1 });
+    expect(service.getState()).toEqual({ message: '录音启动失败', phase: 'error' });
+
+    // 重试必须能重新打开一条连接，不是卡在上一条已经关掉的连接上；这次原生录音
+    // 能正常启动了。
+    const fakeRetry = createFakeConnection();
+    const connectMock = deps.transport.connect as jest.MockedFunction<
+      typeof deps.transport.connect
+    >;
+    connectMock.mockResolvedValueOnce(fakeRetry.connection);
+    let retryOnChunk: ((chunk: ArrayBuffer, soundLevel: number | null) => void) | null = null;
+    const captureStartMock = deps.capture.start as jest.MockedFunction<typeof deps.capture.start>;
+    captureStartMock.mockImplementationOnce(async (onChunk) => {
+      retryOnChunk = onChunk;
+    });
+    await startListening(fakeRetry, service);
+    expect(retryOnChunk).not.toBeNull();
+    expect(service.getState()).toEqual({ conversationId: 'conv_001', phase: 'listening' });
+  });
 });
