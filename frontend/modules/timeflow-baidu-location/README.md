@@ -9,7 +9,7 @@ Android 百度定位桥接（`LocationClient` 连续定位），**不使用 Goog
 
 ## 控制台要求
 
-Android AK 必须与包名 **`com.timeflow`** + 签名证书 **SHA1** 绑定，否则定位会失败（常见 locType 鉴权错误）。
+Android AK 必须与当前应用的 `expo.android.package`（现为 **`com.anonymous.timeflow`**）以及签名证书 **SHA1** 绑定，否则定位会失败（常见 locType 鉴权错误）。换包名时要在百度控制台同步改绑。
 
 ## 应用侧
 

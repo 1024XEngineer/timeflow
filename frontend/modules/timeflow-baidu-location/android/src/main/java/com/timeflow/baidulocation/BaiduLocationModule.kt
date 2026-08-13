@@ -112,6 +112,11 @@ class BaiduLocationModule(
       locationClient.locOption = option
 
       if (!updating) {
+        try {
+          BaiduLocationForegroundService.start(reactContext.applicationContext)
+        } catch (error: Exception) {
+          Log.w(NAME, "foreground service start failed", error)
+        }
         locationClient.start()
         updating = true
       } else {
@@ -128,6 +133,7 @@ class BaiduLocationModule(
     try {
       client?.stop()
       updating = false
+      BaiduLocationForegroundService.stop(reactContext.applicationContext)
       promise.resolve(true)
     } catch (error: Exception) {
       promise.reject("STOP_FAILED", error.message, error)
@@ -158,6 +164,7 @@ class BaiduLocationModule(
     try {
       client?.unRegisterLocationListener(listener)
       client?.stop()
+      BaiduLocationForegroundService.stop(reactContext.applicationContext)
     } catch (_: Exception) {
     }
     client = null
