@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import { NativeDeviceCapability } from '../../../../src/infrastructure/notifications/NativeDeviceCapability';
 import {
@@ -111,5 +111,26 @@ describe('NativeDeviceCapability', () => {
       'battery',
       'app',
     ]);
+  });
+
+  it('notifies listeners when the app returns to the foreground', () => {
+    const listeners: ((state: string) => void)[] = [];
+    const remove = jest.fn();
+    const addEventListener = jest
+      .spyOn(AppState, 'addEventListener')
+      .mockImplementation((_event, listener) => {
+        listeners.push(listener as (state: string) => void);
+        return { remove } as ReturnType<typeof AppState.addEventListener>;
+      });
+    const device = new NativeDeviceCapability();
+    const onActive = jest.fn();
+    const unsubscribe = device.onAppActive(onActive);
+    listeners.forEach((listener) => listener('background'));
+    expect(onActive).not.toHaveBeenCalled();
+    listeners.forEach((listener) => listener('active'));
+    expect(onActive).toHaveBeenCalledTimes(1);
+    unsubscribe();
+    expect(remove).toHaveBeenCalledTimes(1);
+    addEventListener.mockRestore();
   });
 });

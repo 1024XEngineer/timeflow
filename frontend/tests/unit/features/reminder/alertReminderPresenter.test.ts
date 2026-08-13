@@ -1,6 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
-import { Alert, type AlertButton } from 'react-native';
+import { describe, expect, it, jest } from '@jest/globals';
 
+import type {
+  AlertDialogPort,
+  AlertDialogRequest,
+} from '../../../../src/features/reminder/application/interfaces';
 import { AlertReminderPresenter } from '../../../../src/features/reminder/presentation/AlertReminderPresenter';
 import type {
   ReminderDeliveryRequest,
@@ -29,21 +32,15 @@ function request(
 }
 
 describe('AlertReminderPresenter', () => {
-  let lastButtons: readonly AlertButton[] = [];
-
-  beforeEach(() => {
-    lastButtons = [];
-    jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons) => {
-      lastButtons = buttons ?? [];
-    });
-  });
-
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
-
   it('shows the reason-specific copy and default title fallback', async () => {
-    const presenter = new AlertReminderPresenter();
+    const shown: AlertDialogRequest[] = [];
+    const dialog: AlertDialogPort = {
+      show: jest.fn(async (dialogRequest: AlertDialogRequest) => {
+        shown.push(dialogRequest);
+      }),
+    };
+    const presenter = new AlertReminderPresenter(dialog);
+
     await presenter.show(request('at_time'));
     await presenter.show(request('before_start'));
     await presenter.show(request('arrive_location'));
@@ -51,52 +48,31 @@ describe('AlertReminderPresenter', () => {
     await presenter.show(request('snooze_expired'));
     await presenter.show(request('at_time', { title: '' }));
 
-    expect(Alert.alert).toHaveBeenNthCalledWith(
-      1,
-      '晨会',
+    expect(shown.map((item) => item.message)).toEqual([
       '已到提醒时间，请及时处理。',
-      expect.any(Array),
-    );
-    expect(Alert.alert).toHaveBeenNthCalledWith(
-      2,
-      '晨会',
       '日程即将开始，请及时处理。',
-      expect.any(Array),
-    );
-    expect(Alert.alert).toHaveBeenNthCalledWith(
-      3,
-      '晨会',
       '您已进入目标地点附近，请及时处理。',
-      expect.any(Array),
-    );
-    expect(Alert.alert).toHaveBeenNthCalledWith(
-      4,
-      '晨会',
       '您已回到记录地点附近，请及时处理。',
-      expect.any(Array),
-    );
-    expect(Alert.alert).toHaveBeenNthCalledWith(
-      5,
-      '晨会',
       '延后提醒时间已到，请及时处理。',
-      expect.any(Array),
-    );
-    expect(Alert.alert).toHaveBeenNthCalledWith(
-      6,
-      '日程提醒',
       '已到提醒时间，请及时处理。',
-      expect.any(Array),
-    );
+    ]);
+    expect(shown[5]?.title).toBe('日程提醒');
   });
 
   it('emits confirm and snooze until hide suppresses further actions', async () => {
-    const presenter = new AlertReminderPresenter();
+    let lastRequest: AlertDialogRequest | undefined;
+    const dialog: AlertDialogPort = {
+      show: jest.fn(async (dialogRequest: AlertDialogRequest) => {
+        lastRequest = dialogRequest;
+      }),
+    };
+    const presenter = new AlertReminderPresenter(dialog);
     const listener = jest.fn();
     const unsubscribe = presenter.onAction(listener);
 
     await presenter.show(request('at_time'));
-    lastButtons.find((button) => button.text === '确认')?.onPress?.();
-    lastButtons.find((button) => button.text === '延后')?.onPress?.();
+    lastRequest?.buttons[1]?.onPress?.();
+    lastRequest?.buttons[0]?.onPress?.();
     expect(listener).toHaveBeenNthCalledWith(1, {
       schedule_id: 'schedule-time',
       action: 'confirm',
@@ -104,7 +80,7 @@ describe('AlertReminderPresenter', () => {
     expect(listener).toHaveBeenNthCalledWith(2, { schedule_id: 'schedule-time', action: 'snooze' });
 
     await presenter.hide('schedule-time');
-    lastButtons.find((button) => button.text === '确认')?.onPress?.();
+    lastRequest?.buttons[1]?.onPress?.();
     expect(listener).toHaveBeenCalledTimes(2);
     unsubscribe();
   });

@@ -1,8 +1,9 @@
 import { act, renderHook } from '@testing-library/react-native';
-import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
-import { Alert, AppState, Platform, type AlertButton } from 'react-native';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 import type {
+  AlertDialogPort,
+  AlertDialogRequest,
   DeviceCapabilityPort,
   DeviceCapabilityStatus,
   DevicePermission,
@@ -33,13 +34,17 @@ function grantedPermissions(): Record<DevicePermission, boolean> {
   };
 }
 
-type FakeDevice = DeviceCapabilityPort & { status: DeviceCapabilityStatus };
+type FakeDevice = DeviceCapabilityPort & {
+  status: DeviceCapabilityStatus;
+  emitActive: () => void;
+};
 
 function createDevice(
   status: Partial<DeviceCapabilityStatus> & Pick<DeviceCapabilityStatus, 'platform'> = {
     platform: 'android',
   },
 ): FakeDevice {
+  const appActive = new Set<() => void>();
   const device: FakeDevice = {
     status: {
       platform: status.platform,
@@ -56,12 +61,30 @@ function createDevice(
       return true;
     }),
     openSettings: jest.fn(async () => true),
+    onAppActive: jest.fn((listener: () => void) => {
+      appActive.add(listener);
+      return () => {
+        appActive.delete(listener);
+      };
+    }),
+    emitActive() {
+      for (const listener of appActive) {
+        listener();
+      }
+    },
   };
   return device;
 }
 
-let alertButtons: readonly AlertButton[] = [];
-const appStateListeners: ((state: string) => void)[] = [];
+function createDialog(): AlertDialogPort & { requests: AlertDialogRequest[] } {
+  const dialog = {
+    requests: [] as AlertDialogRequest[],
+    show: jest.fn(async (request: AlertDialogRequest) => {
+      dialog.requests.push(request);
+    }),
+  };
+  return dialog;
+}
 
 async function flush(ms = 0): Promise<void> {
   await act(async () => {
@@ -74,50 +97,50 @@ async function flush(ms = 0): Promise<void> {
   });
 }
 
-async function press(label: string): Promise<void> {
+async function press(label: string, requests: AlertDialogRequest[]): Promise<void> {
   await act(async () => {
-    alertButtons.find((button) => button.text === label)?.onPress?.();
+    requests[requests.length - 1]?.buttons.find((button) => button.text === label)?.onPress?.();
     await Promise.resolve();
     await Promise.resolve();
   });
 }
 
 describe('useReminderPermissionsOnLaunch', () => {
-  beforeEach(() => {
-    alertButtons = [];
-    appStateListeners.length = 0;
-    Platform.OS = 'android';
-    jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons) => {
-      alertButtons = buttons ?? [];
-    });
-    jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, listener) => {
-      appStateListeners.push(listener as (state: string) => void);
-      return { remove: jest.fn() } as ReturnType<typeof AppState.addEventListener>;
-    });
-  });
-
   afterEach(() => {
     jest.useRealTimers();
-    jest.restoreAllMocks();
+    jest.clearAllTimers();
   });
 
-  it('does nothing off Android or without a device', async () => {
+  it('does nothing when the device or dialog is missing', async () => {
     jest.useFakeTimers();
-    const androidDevice = createDevice();
-    Platform.OS = 'ios';
-    renderHook(() => useReminderPermissionsOnLaunch(androidDevice));
-    Platform.OS = 'android';
-    renderHook(() => useReminderPermissionsOnLaunch(null));
+    const device = createDevice();
+    const dialog = createDialog();
+    renderHook(() => useReminderPermissionsOnLaunch(null, dialog));
+    renderHook(() => useReminderPermissionsOnLaunch(device, null));
     await flush(1_000);
-    expect(androidDevice.getStatus).not.toHaveBeenCalled();
+    expect(device.getStatus).not.toHaveBeenCalled();
   });
 
-  it('requests notifications directly without an explanation alert', async () => {
+  it('skips permission prompts on web and unknown platforms', async () => {
+    jest.useFakeTimers();
+    const web = createDevice({ platform: 'web' });
+    const unknown = createDevice({ platform: 'unknown' });
+    const dialog = createDialog();
+    renderHook(() => useReminderPermissionsOnLaunch(web, dialog));
+    renderHook(() => useReminderPermissionsOnLaunch(unknown, dialog));
+    await flush(600);
+    expect(web.requestPermission).not.toHaveBeenCalled();
+    expect(unknown.requestPermission).not.toHaveBeenCalled();
+    expect(dialog.show).not.toHaveBeenCalled();
+  });
+
+  it('requests notifications directly on Android without a pre-prompt', async () => {
     jest.useFakeTimers();
     const device = createDevice({ platform: 'android', supported: true });
-    renderHook(() => useReminderPermissionsOnLaunch(device));
+    const dialog = createDialog();
+    renderHook(() => useReminderPermissionsOnLaunch(device, dialog));
     await flush(600);
-    expect(Alert.alert).not.toHaveBeenCalled();
+    expect(dialog.show).not.toHaveBeenCalled();
     expect(device.requestPermission).toHaveBeenCalledWith('notifications');
   });
 
@@ -128,14 +151,12 @@ describe('useReminderPermissionsOnLaunch', () => {
       supported: true,
       permissions: { ...deniedPermissions(), notifications: true },
     });
-    renderHook(() => useReminderPermissionsOnLaunch(device));
+    const dialog = createDialog();
+    renderHook(() => useReminderPermissionsOnLaunch(device, dialog));
+
     await flush(600);
-    expect(Alert.alert).toHaveBeenCalledWith(
-      '需要精确闹钟权限',
-      expect.any(String),
-      expect.any(Array),
-    );
-    await press('去授权');
+    expect(dialog.requests[0]?.title).toBe('需要精确闹钟权限');
+    await press('去授权', dialog.requests);
     expect(device.openSettings).toHaveBeenCalledWith('exact_alarm');
     expect(device.requestPermission).not.toHaveBeenCalled();
 
@@ -144,29 +165,28 @@ describe('useReminderPermissionsOnLaunch', () => {
       permissions: { ...device.status.permissions, exact_alarm: true },
     };
     await act(async () => {
-      appStateListeners.forEach((listener) => listener('active'));
+      device.emitActive();
       await Promise.resolve();
     });
     await flush(300);
-    expect(Alert.alert).toHaveBeenCalledWith(
-      '需要悬浮窗权限',
-      expect.any(String),
-      expect.any(Array),
-    );
+    expect(dialog.requests.some((item) => item.title === '需要悬浮窗权限')).toBe(true);
   });
 
-  it('skips a permission when the user declines the explanation alert', async () => {
+  it('skips a permission when the user declines the explanation dialog', async () => {
     jest.useFakeTimers();
     const device = createDevice({
       platform: 'android',
       supported: true,
       permissions: { ...deniedPermissions(), notifications: true },
     });
-    renderHook(() => useReminderPermissionsOnLaunch(device));
+    const dialog = createDialog();
+    renderHook(() => useReminderPermissionsOnLaunch(device, dialog));
+
     await flush(600);
-    await press('暂不');
+    await press('暂不', dialog.requests);
     await flush(250);
     expect(device.openSettings).not.toHaveBeenCalled();
+    expect(dialog.requests.filter((item) => item.title === '需要精确闹钟权限')).toHaveLength(1);
   });
 
   it('does not prompt when every permission is already granted', async () => {
@@ -176,9 +196,21 @@ describe('useReminderPermissionsOnLaunch', () => {
       supported: true,
       permissions: grantedPermissions(),
     });
-    renderHook(() => useReminderPermissionsOnLaunch(device));
+    const dialog = createDialog();
+    renderHook(() => useReminderPermissionsOnLaunch(device, dialog));
     await flush(600);
     expect(device.requestPermission).not.toHaveBeenCalled();
-    expect(Alert.alert).not.toHaveBeenCalled();
+    expect(dialog.show).not.toHaveBeenCalled();
+  });
+
+  it('unsubscribes from app-active on unmount', async () => {
+    jest.useFakeTimers();
+    const device = createDevice();
+    const dialog = createDialog();
+    const { unmount } = renderHook(() => useReminderPermissionsOnLaunch(device, dialog));
+    expect(device.onAppActive).toHaveBeenCalledTimes(1);
+    unmount();
+    await flush(600);
+    expect(device.getStatus).not.toHaveBeenCalled();
   });
 });

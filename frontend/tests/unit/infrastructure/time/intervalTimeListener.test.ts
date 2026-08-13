@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
-import { IntervalTimeListener } from '../../../../src/shared/time/IntervalTimeListener';
+import { IntervalTimeListener } from '../../../../src/infrastructure/time/IntervalTimeListener';
 
 describe('IntervalTimeListener', () => {
   afterEach(() => {
