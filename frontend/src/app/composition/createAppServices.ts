@@ -1,4 +1,5 @@
 import { AppRuntime } from '../orchestration/AppRuntime';
+import { createAuthRuntime, type AuthRuntime, type CreateAuthRuntimeOptions } from '../authRuntime';
 import type {
   ReminderApplicationDependencies,
   ReminderApplicationPort,
@@ -22,15 +23,25 @@ import {
 } from '../../infrastructure/notifications';
 import { MockTimeListener } from '../../shared/time';
 import { MockReminderPresenter } from '../../features/reminder/presentation';
+import { ScheduleViewStore } from '../../features/schedule/presentation';
 
 export type AppServices = {
+  auth: AuthRuntime;
+  protectedClient: AuthRuntime['protectedClient'];
   runtime: AppRuntime;
   reminder: ReminderApplicationPort;
   reminderPorts: ReminderApplicationDependencies;
+  scheduleView: ScheduleViewStore;
+  webSocketClient: AuthRuntime['webSocketClient'];
 };
 
-/** 提醒端口的组合根；当前所有具体适配器都是确定性的模拟实现。 */
-export function createAppServices(): AppServices {
+export interface CreateAppServicesOptions {
+  readonly auth?: CreateAuthRuntimeOptions;
+}
+
+/** 应用唯一组合根：认证传输、功能服务、生命周期和账号内存清理在此接线。 */
+export function createAppServices(options: CreateAppServicesOptions = {}): AppServices {
+  const auth = createAuthRuntime(options.auth);
   const reminderPorts: ReminderApplicationDependencies = {
     schedules: new MockLocalScheduleReader(),
     time: new MockTimeListener(),
@@ -48,15 +59,24 @@ export function createAppServices(): AppServices {
     dispositionSync: new MockReminderDispositionSync(),
   };
   const reminder = new MockReminderApplication(reminderPorts);
+  const scheduleView = new ScheduleViewStore();
+  const runtime = new AppRuntime([
+    {
+      start: () => reminder.start(),
+      stop: () => reminder.stop(),
+    },
+  ]);
+
+  auth.accountStateCleaners.register('schedule-view', () => scheduleView.clear());
+  auth.accountStateCleaners.register('reminder-runtime', () => runtime.stop());
 
   return {
-    runtime: new AppRuntime([
-      {
-        start: () => reminder.start(),
-        stop: () => reminder.stop(),
-      },
-    ]),
+    auth,
+    protectedClient: auth.protectedClient,
+    runtime,
     reminder,
     reminderPorts,
+    scheduleView,
+    webSocketClient: auth.webSocketClient,
   };
 }

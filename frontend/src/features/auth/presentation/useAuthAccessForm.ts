@@ -2,19 +2,13 @@ import { useState } from 'react';
 
 import {
   AuthAccessError,
-  type AuthAccess,
   type AuthAccessRequest,
-  type AuthAccessResponse,
   type AuthErrorCode,
 } from '../../../contracts/auth';
+import { useAuth } from './AuthProvider';
 
 type AuthField = keyof AuthAccessRequest;
 type FormErrors = Partial<Record<AuthField, string>>;
-
-interface AuthAccessFormOptions {
-  authAccess: AuthAccess;
-  onAuthenticated?: (response: AuthAccessResponse) => void;
-}
 
 const INITIAL_VALUES: AuthAccessRequest = { password: '', username: '' };
 const FALLBACK_ERROR_MESSAGE = '登录或注册失败，请稍后重试';
@@ -30,7 +24,8 @@ const AUTH_ERROR_MESSAGES: Partial<Record<AuthErrorCode, string>> = {
  *
  * 页面只消费字段值、展示错误和提交动作，不需要重复理解认证错误或请求归一化规则。
  */
-export function useAuthAccessForm({ authAccess, onAuthenticated }: AuthAccessFormOptions) {
+export function useAuthAccessForm() {
+  const { authenticate } = useAuth();
   const [values, setValues] = useState<AuthAccessRequest>(INITIAL_VALUES);
   const [errors, setErrors] = useState<FormErrors>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -58,8 +53,7 @@ export function useAuthAccessForm({ authAccess, onAuthenticated }: AuthAccessFor
 
     setIsSubmitting(true);
     try {
-      const response = await authAccess(request);
-      onAuthenticated?.(response);
+      await authenticate(request);
     } catch (error) {
       setSubmitError(getSubmitErrorMessage(error));
     } finally {
