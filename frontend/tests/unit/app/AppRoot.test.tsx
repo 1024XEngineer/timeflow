@@ -28,9 +28,6 @@ jest.mock('../../../src/features/assistant/data/audio/ExpoAudioCapture', () => (
 jest.mock('../../../src/features/assistant/data/audio/ExpoAudioPlayback', () => ({
   ExpoAudioPlayback: jest.fn(),
 }));
-jest.mock('../../../src/features/assistant/data/websocket/WebSocketVoiceTransport', () => ({
-  WebSocketVoiceTransport: jest.fn(),
-}));
 jest.mock('../../../src/infrastructure/location/ExpoLocationProvider', () => ({
   ExpoLocationProvider: jest.fn(),
 }));

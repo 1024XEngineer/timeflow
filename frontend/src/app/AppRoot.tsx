@@ -4,19 +4,19 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { AssistantConversationService } from '../features/assistant/application/AssistantConversationService';
 import { ExpoAudioCapture } from '../features/assistant/data/audio/ExpoAudioCapture';
 import { ExpoAudioPlayback } from '../features/assistant/data/audio/ExpoAudioPlayback';
+import { AuthenticatedVoiceTransport } from '../features/assistant/data/websocket/AuthenticatedVoiceTransport';
 import { LocalScheduleWriter } from '../features/assistant/data/local/LocalScheduleWriter';
-import { WebSocketVoiceTransport } from '../features/assistant/data/websocket/WebSocketVoiceTransport';
 import type { AuthController } from '../features/auth/application';
 import { useAuth } from '../features/auth/presentation/AuthProvider';
 import { SqliteScheduleClientService } from '../features/schedule/application';
 import { ScheduleLocalRepository } from '../features/schedule/data';
+import type { AuthenticatedWebSocketClient } from '../infrastructure/websocket';
 import { openTimeflowDatabase } from '../infrastructure/database';
 import { ExpoLocationProvider } from '../infrastructure/location/ExpoLocationProvider';
 import { HomeScreen } from '../screens/HomeScreen';
 import { LoginScreen } from '../screens/LoginScreen';
 import { colors, spacing } from '../shared/ui/theme';
 import { AppProviders } from './AppProviders';
-import { AUTH_WEB_SOCKET_URL } from './authRuntime';
 import { createAppServices, type AppServices } from './composition/createAppServices';
 
 export function AppRoot({
@@ -34,12 +34,16 @@ export function AppRoot({
       invalidationCoordinator={authController ? undefined : services.auth.invalidationCoordinator}
       services={services}
     >
-      <AuthRoute authController={controller} />
+      <AuthRoute webSocketClient={services.webSocketClient} />
     </AppProviders>
   );
 }
 
-function AuthRoute({ authController }: { readonly authController: AuthController }) {
+function AuthRoute({
+  webSocketClient,
+}: {
+  readonly webSocketClient: AuthenticatedWebSocketClient;
+}) {
   const { retryInitialization, viewState } = useAuth();
 
   if (viewState.status === 'loading') {
@@ -69,9 +73,9 @@ function AuthRoute({ authController }: { readonly authController: AuthController
   return (
     <AuthenticatedScheduleRoute
       accountId={viewState.accountId}
-      authController={authController}
       key={viewState.accountId}
       username={viewState.username}
+      webSocketClient={webSocketClient}
     />
   );
 }
@@ -89,19 +93,17 @@ type ScheduleLoadState =
 
 function AuthenticatedScheduleRoute({
   accountId,
-  authController,
   username,
+  webSocketClient,
 }: {
   readonly accountId: string;
-  readonly authController: AuthController;
   readonly username: string;
+  readonly webSocketClient: AuthenticatedWebSocketClient;
 }) {
   const { signOut } = useAuth();
   const [loadState, setLoadState] = useState<ScheduleLoadState>();
   const [retryToken, setRetryToken] = useState(0);
   const [isSigningOut, setIsSigningOut] = useState(false);
-  // 登录流程目前不带 device_id；先按会话生成一个稳定 id，持久化设备标识不在本轮范围。
-  const [deviceId] = useState(() => `device-${Math.random().toString(36).slice(2)}`);
 
   useEffect(() => {
     let active = true;
@@ -145,27 +147,23 @@ function AuthenticatedScheduleRoute({
     [currentLoadState],
   );
 
-  // getAccessToken() 是 AuthController 特意留的口子：展示层的 AuthViewState 不带
-  // Token，但语音这条独立 WS 连接需要自己认证，只能从控制器直接取，不走 context。
+  // 语音这条连接复用应用唯一的 AuthenticatedWebSocketClient——握手、鉴权失效、
+  // 断线通知都由它统一处理，这里不再单独持有 access_token/device_id/wsUrl。
   const assistantApplication = useMemo(() => {
     if (currentLoadState?.status !== 'ready') {
       return null;
     }
-    const accessToken = authController.getAccessToken();
-    if (!accessToken) {
-      return null;
-    }
     return new AssistantConversationService(
-      { accessToken, accountId, deviceId, wsUrl: AUTH_WEB_SOCKET_URL },
+      { accountId },
       {
         capture: new ExpoAudioCapture(),
         localScheduleWriter: new LocalScheduleWriter(currentLoadState.repository),
         location: new ExpoLocationProvider(),
         playback: new ExpoAudioPlayback(),
-        transport: new WebSocketVoiceTransport(),
+        transport: new AuthenticatedVoiceTransport(webSocketClient),
       },
     );
-  }, [currentLoadState, authController, accountId, deviceId]);
+  }, [currentLoadState, accountId, webSocketClient]);
 
   return (
     <View style={styles.authenticatedRoute}>

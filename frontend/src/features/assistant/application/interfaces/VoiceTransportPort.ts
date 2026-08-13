@@ -2,10 +2,15 @@ import type {
   AssistantClientMessage,
   AssistantServerMessage,
 } from '../../../../contracts/conversation';
+import type { LocationSample } from '../../../reminder/domain';
 
-/** 打开一个已握手的 WS 连接。真实实现见 data/websocket；测试用脚本化的假连接替换。 */
+/**
+ * 打开一个已握手的 WS 连接。真实实现（data/websocket）包了共享的
+ * AuthenticatedWebSocketClient，握手本身（session.hello → session.ready）由它
+ * 完成，这里传的 location 只是附带在首帧里；测试用脚本化的假连接替换。
+ */
 export interface VoiceTransportPort {
-  connect(url: string): Promise<VoiceTransportConnection>;
+  connect(location?: LocationSample | null): Promise<VoiceTransportConnection>;
 }
 
 /** 一条已连接的会话。上层只发消息、收消息，不关心底层是文本帧还是二进制帧。 */

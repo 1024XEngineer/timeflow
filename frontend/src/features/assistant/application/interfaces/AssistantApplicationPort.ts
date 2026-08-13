@@ -11,9 +11,6 @@ export type AssistantApplicationDependencies = {
 };
 
 export interface AssistantApplicationOptions {
-  wsUrl: string;
-  accessToken: string;
-  deviceId: string;
   accountId: string;
 }
 

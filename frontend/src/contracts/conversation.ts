@@ -5,23 +5,15 @@
  * voice.stream.end → voice.asr.completed → voice.command.result（或先
  * voice.dialogue.question 再补一轮）→ message.ack，TTS 走独立的
  * voice.tts.start → [Binary] → voice.tts.end 旁路。
+ *
+ * session.hello/session.ready 不在这份契约里——那段握手由应用唯一共享的
+ * AuthenticatedWebSocketClient 处理（契约见 `contracts/authWebSocket.ts`），
+ * 这里从 voice.stream.start 开始，都是握手 ready 之后才会收发的业务消息。
  */
 
 import type { OutgoingEnvelope, TransportErrorEnvelope } from './transport';
 
 /* ---------- 客户端 → 服务端 ---------- */
-
-export interface SessionHelloPayload {
-  access_token: string;
-  device_id: string;
-  app_version?: string;
-  timezone?: string;
-  latitude?: number;
-  longitude?: number;
-  /** 标注 latitude/longitude 的坐标系；设备定位给的是原始值，不做转换。 */
-  coordinate_system?: 'WGS84';
-}
-export type SessionHelloMessage = OutgoingEnvelope<'session.hello', SessionHelloPayload>;
 
 export interface VoiceStreamStartPayload {
   conversation_id?: string;
@@ -51,16 +43,9 @@ export interface MessageAckMessage {
 }
 
 export type AssistantClientMessage =
-  SessionHelloMessage | VoiceStreamStartMessage | VoiceStreamEndMessage | MessageAckMessage;
+  VoiceStreamStartMessage | VoiceStreamEndMessage | MessageAckMessage;
 
 /* ---------- 服务端 → 客户端 ---------- */
-
-export interface SessionReadyMessage {
-  type: 'session.ready';
-  request_id?: string;
-  ok: true;
-  payload: { session_id: string; server_time: string };
-}
 
 export interface VoiceStreamStartedMessage {
   type: 'voice.stream.started';
@@ -136,7 +121,6 @@ export interface VoiceTtsEndMessage {
 }
 
 export type AssistantServerMessage =
-  | SessionReadyMessage
   | VoiceStreamStartedMessage
   | VoiceAsrCompletedMessage
   | VoiceCommandResultMessage

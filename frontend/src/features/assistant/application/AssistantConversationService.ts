@@ -11,8 +11,8 @@ import type { VoiceTransportConnection } from './interfaces/VoiceTransportPort';
 const AUDIO_FORMAT = 'pcm_s16le';
 const SAMPLE_RATE_HZ = 16000;
 const CHANNELS = 1;
-// 服务端握手超时默认 5s（TIMEFLOW_WS_HANDSHAKE_TIMEOUT_SECONDS）；定位留出一部分
-// 预算，超时就不带，不能让 hello 本身也赶不上。
+// 共享连接的握手超时（AuthenticatedWebSocketClient 内部固定 5s）已经不归这里管；
+// 这个只是给定位单独留的预算，拿不到就不带，不能让 connect() 本身被定位拖住。
 const LOCATION_TIMEOUT_MS = 2000;
 
 /**
@@ -143,39 +143,20 @@ export class AssistantConversationService implements AssistantApplicationPort {
   }
 
   private async connect(): Promise<void> {
-    // 定位放在开连接之前:服务端握手超时从 socket 打开那一刻起计时,原生定位
-    // (尤其冷启动 GPS)可能耗时数秒,放在连接之后拿会把这段时间算进握手预算,
-    // 导致 hello 送达前就被服务端以 1008 断开。超时兜底,拿不到就不带,不阻塞握手。
+    // 拿不到定位（超时或权限拒绝）就不带，transport.connect() 收到 null 会跳过
+    // session.hello 里的 latitude/longitude，不阻塞连接本身。
     const sample = await Promise.race([
       this.deps.location.getCurrentSample().catch(() => null),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), LOCATION_TIMEOUT_MS)),
     ]);
 
-    const connection = await this.deps.transport.connect(this.options.wsUrl);
+    // session.hello → session.ready 的握手已经在 transport.connect() 内部完成
+    // （共享的 AuthenticatedWebSocketClient 负责），这里拿到的就是已经 ready 的连接。
+    const connection = await this.deps.transport.connect(sample);
     this.connection = connection;
     connection.onMessage((message) => this.handleMessage(message));
     connection.onAudioFrame((chunk) => this.handleAudioFrame(chunk));
     connection.onClose((event) => this.handleClose(event));
-
-    const ready = new Promise<void>((resolve) => {
-      const unsubscribe = connection.onMessage((message) => {
-        if (message.type === 'session.ready') {
-          unsubscribe();
-          resolve();
-        }
-      });
-    });
-    connection.send({
-      payload: {
-        access_token: this.options.accessToken,
-        coordinate_system: sample ? 'WGS84' : undefined,
-        device_id: this.options.deviceId,
-        latitude: sample?.latitude,
-        longitude: sample?.longitude,
-      },
-      type: 'session.hello',
-    });
-    await ready;
   }
 
   private handleMessage(message: AssistantServerMessage): void {
