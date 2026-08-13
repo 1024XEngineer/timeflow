@@ -111,9 +111,34 @@ def _json(value: object) -> str:
     )
 
 
+# Shared across both Agents: whatever kept a real LocationSearchTool from being built at
+# all -- no client location, no configured provider -- degrades to the exact same result
+# LocationSearchTool.execute() itself returns for a live provider failure, so the model
+# sees one error contract regardless of which layer decided location search was unavailable.
+PROVIDER_UNAVAILABLE_RESULT = _json({"status": "provider_unavailable", "candidates": []})
+
+
+@dataclass(frozen=True, slots=True)
+class _UnavailableLocationSearchTool:
+    """Stand in for LocationSearchTool when no location context could be prepared."""
+
+    definition: ToolDefinition
+
+    async def execute(self, arguments: Mapping[str, object]) -> str:
+        """Ignore the query and report the provider as unavailable."""
+        return PROVIDER_UNAVAILABLE_RESULT
+
+
+def build_unavailable_location_search_tool() -> _UnavailableLocationSearchTool:
+    """Return a location_search stand-in that always reports itself unavailable."""
+    return _UnavailableLocationSearchTool(location_search_definition())
+
+
 __all__ = [
     "LOCATION_SEARCH",
+    "PROVIDER_UNAVAILABLE_RESULT",
     "LocationSearchTool",
     "build_location_search_tool",
+    "build_unavailable_location_search_tool",
     "location_search_definition",
 ]

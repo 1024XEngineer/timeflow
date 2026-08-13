@@ -18,6 +18,9 @@ class _StreamIdentity:
     stream_id: str
     conversation_id: str
     request_id: str | None
+    latitude: float | None
+    longitude: float | None
+    coordinate_system: str | None
 
 
 class AgentAudioSink:
@@ -42,4 +45,7 @@ def _identity_of(stream: StreamContext) -> _StreamIdentity:
         stream_id=stream.stream_id,
         conversation_id=stream.conversation_id,
         request_id=stream.request_id,
+        latitude=stream.latitude,
+        longitude=stream.longitude,
+        coordinate_system=stream.coordinate_system,
     )

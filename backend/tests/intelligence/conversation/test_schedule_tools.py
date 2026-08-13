@@ -36,6 +36,38 @@ from timeflow.intelligence.conversation.schedule_tools import (
     schedule_tool_definitions,
 )
 from timeflow.intelligence.conversation.tools import build_agent_tool_registry
+from timeflow.intelligence.location import (
+    Coordinate,
+    CurrentArea,
+    LocationSearchContext,
+    LocationSearchService,
+    ProviderLocationCandidate,
+)
+
+
+class _FakeLocationPort:
+    """Return scripted provider candidates, mirroring tests/intelligence/location's fake."""
+
+    def __init__(self, candidates: tuple[ProviderLocationCandidate, ...] = ()) -> None:
+        self.candidates = candidates
+        self.queries: list[str] = []
+
+    async def reverse(self, coordinate: Coordinate) -> CurrentArea:
+        return CurrentArea("上海市", "上海市")
+
+    async def search(
+        self, query: str, context: LocationSearchContext
+    ) -> tuple[ProviderLocationCandidate, ...]:
+        self.queries.append(query)
+        return self.candidates
+
+
+def _location_context() -> LocationSearchContext:
+    return LocationSearchContext(
+        CurrentArea("上海市", "上海市"),
+        Coordinate(31.22846, 121.47822, "gcj02"),
+        "gcj02",
+    )
 
 
 class FakeScheduleService(ScheduleAgentService):
@@ -119,12 +151,14 @@ def create_arguments() -> dict[str, object]:
 def test_definitions_match_business_contract_dimensions() -> None:
     definitions = {item.name: item for item in schedule_tool_definitions()}
 
+    # location_search is not among these: its canonical definition lives in
+    # intelligence.location.tools, shared with the Realtime Agent -- see
+    # test_the_registered_location_search_matches_the_shared_definition below.
     assert set(definitions) == {
         "schedule_create",
         "schedule_query",
         "schedule_update",
         "schedule_delete",
-        "location_search",
     }
     create_properties = definitions["schedule_create"].parameters["properties"]
     assert isinstance(create_properties, dict)
@@ -172,6 +206,23 @@ def test_create_arguments_map_to_existing_business_command() -> None:
     )
     assert command.start_time is not None
     assert command.start_time.isoformat() == "2026-08-12T15:00:00+08:00"
+
+
+def test_create_accepts_a_quoted_number_for_latitude_longitude_and_offset_minutes() -> None:
+    """See the Realtime Agent's identical test: the model sometimes quotes a
+    long-precision coordinate when copying it verbatim from a location_search candidate.
+    """
+    command = map_create_schedule_command(
+        {
+            **create_arguments(),
+            "latitude": "31.187830664332115",
+            "longitude": "121.60552031564809",
+            "reminder_offset_minutes": "0",
+        }
+    )
+    assert command.latitude == 31.187830664332115
+    assert command.longitude == 121.60552031564809
+    assert command.reminder_offset_minutes == 0
 
 
 def test_query_update_and_delete_arguments_map_to_business_contracts() -> None:
@@ -452,37 +503,60 @@ async def test_business_error_is_returned_as_stable_tool_result() -> None:
 
 
 @pytest.mark.asyncio
-async def test_location_search_remains_truthful_placeholder() -> None:
+async def test_location_search_degrades_to_provider_unavailable_without_a_location() -> None:
+    """No location_service/location_context given -- the same rule the Realtime Agent
+    follows -- so location_search reports itself unavailable rather than being absent.
+    """
     service = FakeScheduleService()
     tool = build_agent_tool_registry(service, "account-1").get("location_search")
 
     result = json.loads(await tool.execute({"query": "万达广场"}))
 
-    assert result == {
-        "message": "地图地点搜索服务尚未接入",
-        "status": "not_implemented",
-        "tool": "location_search",
-    }
+    assert result == {"status": "provider_unavailable", "candidates": []}
     assert service.calls == []
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "arguments",
-    [
-        {},
-        {"query": "万达", "city": "上海"},
-        {"query": "万达", "nearby_latitude": "31"},
-        {"query": "万达", "nearby_longitude": 181},
-    ],
-)
-async def test_location_search_validates_its_placeholder_contract(
-    arguments: dict[str, object],
-) -> None:
-    tool = build_agent_tool_registry(FakeScheduleService(), "account-1").get("location_search")
+async def test_location_search_returns_real_candidates_when_configured() -> None:
+    """Given both a location_service and a prepared context, location_search searches
+    for real -- proving Composed Agent wiring reuses the same module the Realtime Agent
+    does, not a reimplementation.
+    """
+    candidate = ProviderLocationCandidate(
+        "poi-1",
+        "万达广场",
+        "银川路 100 号",
+        "商场",
+        Coordinate(31.23, 121.48, "gcj02"),
+        "上海市",
+        "上海市",
+        "闵行区",
+    )
+    location_service = LocationSearchService(_FakeLocationPort((candidate,)))
+    tool = build_agent_tool_registry(
+        FakeScheduleService(),
+        "account-1",
+        location_service=location_service,
+        location_context=_location_context(),
+    ).get("location_search")
 
-    with pytest.raises(ScheduleToolInputError):
-        await tool.execute(arguments)
+    result = json.loads(await tool.execute({"query": "万达广场"}))
+
+    assert result["status"] == "ok"
+    assert [item["name"] for item in result["candidates"]] == ["万达广场"]
+
+
+def test_the_registered_location_search_matches_the_shared_definition() -> None:
+    """The Function schema exposed here is exactly location_search_definition() -- no
+    nearby_latitude/nearby_longitude leak, query-only, matching the Realtime Agent's copy.
+    """
+    from timeflow.intelligence.location import location_search_definition
+
+    registered = build_agent_tool_registry(FakeScheduleService(), "account-1").get(
+        "location_search"
+    )
+
+    assert registered.definition == location_search_definition()
 
 
 def test_account_id_must_come_from_authenticated_context() -> None:

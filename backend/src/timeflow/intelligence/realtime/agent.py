@@ -4,11 +4,12 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
+from timeflow.intelligence.location import ClientLocation, Coordinate, LocationInputError
 from timeflow.intelligence.ports import (
     AudioCanceled,
     AudioReply,
@@ -66,6 +67,24 @@ def new_question_id() -> str:
     return f"question_{uuid4().hex}"
 
 
+def _client_location_from_stream(stream: StreamInfo) -> ClientLocation | None:
+    """Build a validated client position from the stream's raw wire fields, or None.
+
+    None covers every reason location_search should degrade rather than the turn
+    failing: no permission granted (all three fields unset), an unrecognized reference
+    system, or coordinates the location module itself rejects as out of range.
+    """
+    if stream.latitude is None or stream.longitude is None or stream.coordinate_system is None:
+        return None
+    system = stream.coordinate_system.lower()
+    if system not in ("wgs84", "gcj02"):
+        return None
+    try:
+        return ClientLocation(Coordinate(stream.latitude, stream.longitude, system))  # type: ignore[arg-type]
+    except LocationInputError:
+        return None
+
+
 @dataclass(slots=True)
 class _Held:
     """A session kept open past its turn, so the next turn remembers this one."""
@@ -85,7 +104,8 @@ class RealtimeAgent:
         sessions: RealtimeSessionFactory,
         result_sink: ResultSink,
         *,
-        tools_factory: Callable[[str, str], ToolBox] | None = None,
+        tools_factory: Callable[[str, str, ClientLocation | None], Awaitable[ToolBox]]
+        | None = None,
         instructions: Callable[[str], str] | None = None,
         audio_id_factory: Callable[[], str] | None = None,
         reply_id_factory: Callable[[], str] | None = None,
@@ -121,7 +141,7 @@ class RealtimeAgent:
         self._forget_idle_locks()
 
         async with self._lock_for(key):
-            held = await self._session_for(key, stream.timezone, stream.voice_mode)
+            held = await self._session_for(key, stream)
             if held is None:
                 return
 
@@ -190,26 +210,29 @@ class RealtimeAgent:
             turn.note_input_chunk(len(chunk))
         await session.finish_input()
 
-    async def _session_for(
-        self, key: tuple[str, str], timezone: str, voice_mode: str
-    ) -> _Held | None:
+    async def _session_for(self, key: tuple[str, str], stream: StreamInfo) -> _Held | None:
         """Return the conversation's open session, opening one when there is none.
 
-        The timezone only matters for a session opened fresh here -- a held session keeps
-        whatever zone was live when it opened. A conversation crossing zones mid-flight is
-        not handled; it is replaced the ordinary way once its budget runs out. A voice mode
-        change is handled at once instead: the vendor only accepts turn_detection at
-        connect time, so a held session in the wrong mode is discarded and reopened.
+        The timezone and location only matter for a session opened fresh here -- a held
+        session keeps whatever zone and location were live when it opened. A conversation
+        crossing zones or moving mid-flight is not handled; it is replaced the ordinary way
+        once its budget runs out. A voice mode change is handled at once instead: the vendor
+        only accepts turn_detection at connect time, so a held session in the wrong mode is
+        discarded and reopened.
         """
         held = self._held.get(key)
         if held is not None:
-            if held.voice_mode == voice_mode:
+            if held.voice_mode == stream.voice_mode:
                 return held
             await self._discard(key)
 
         account_id, _ = key
+        timezone = stream.timezone
+        voice_mode = stream.voice_mode
         tools = (
-            self._tools_factory(account_id, timezone) if self._tools_factory is not None else None
+            await self._tools_factory(account_id, timezone, _client_location_from_stream(stream))
+            if self._tools_factory is not None
+            else None
         )
         schemas = tools.tools() if tools is not None else []
         try:
@@ -415,7 +438,10 @@ class _Turn:
     async def failed(self, message: str) -> None:
         """Record that the session could not continue."""
         self.failure = message
-        logger.warning("realtime session failed", extra={"reason": message})
+        # The reason is interpolated into the message rather than passed via extra=:
+        # this project's configured log format string does not reference extra fields,
+        # so extra={"reason": message} alone would silently print no reason at all.
+        logger.warning("realtime session failed: %s", message)
         # Continuous mode holds a full-screen call open until it is told the session
         # ended, and a failure ends it as surely as end_conversation does. Saying nothing
         # would leave that call up around a microphone nobody is reading any more.

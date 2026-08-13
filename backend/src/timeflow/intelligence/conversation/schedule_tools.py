@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import TypeVar, cast
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from timeflow.business.calendar import (
     CreateScheduleCommand,
@@ -27,6 +27,20 @@ from timeflow.business.calendar import (
     UpdateScheduleCommand,
 )
 from timeflow.intelligence.conversation.llm import ToolDefinition
+
+# intelligence.location.tools imports conversation.llm (for ToolDefinition), and this
+# module is reached while the conversation package is still initializing (llm -> package
+# __init__ -> agent -> tools -> here) -- a real top-level import of intelligence.location
+# would re-enter it before its own imports finish. TYPE_CHECKING keeps annotations
+# resolvable for mypy without executing at runtime; build_schedule_tools() imports the
+# two functions it actually calls locally, once both packages have finished initializing.
+if TYPE_CHECKING:
+    from timeflow.intelligence.location import (
+        LocationSearchContext,
+        LocationSearchService,
+        LocationSearchTool,
+    )
+    from timeflow.intelligence.location.tools import _UnavailableLocationSearchTool
 
 _EnumT = TypeVar("_EnumT", bound=StrEnum)
 _MISSING = object()
@@ -120,41 +134,39 @@ class _ScheduleTool:
         raise RuntimeError(f"Unsupported schedule tool: {name}")
 
 
-@dataclass(frozen=True, slots=True)
-class _LocationSearchPlaceholder:
-    definition: ToolDefinition
-
-    async def execute(self, arguments: Mapping[str, object]) -> str:
-        _reject_unknown(arguments, {"query", "nearby_latitude", "nearby_longitude"})
-        _required_string(arguments, "query")
-        _optional_float(arguments, "nearby_latitude", minimum=-90, maximum=90)
-        _optional_float(arguments, "nearby_longitude", minimum=-180, maximum=180)
-        return json.dumps(
-            {
-                "message": "地图地点搜索服务尚未接入",
-                "status": "not_implemented",
-                "tool": self.definition.name,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-
-
 def build_schedule_tools(
     service: ScheduleAgentService,
     account_id: str,
-) -> tuple[_ScheduleTool | _LocationSearchPlaceholder, ...]:
-    """Build schedule and location tools for an authenticated account."""
+    *,
+    location_service: LocationSearchService | None = None,
+    location_context: LocationSearchContext | None = None,
+) -> tuple[_ScheduleTool | LocationSearchTool | _UnavailableLocationSearchTool, ...]:
+    """Build schedule and location tools for an authenticated account.
+
+    location_service and location_context are either both given -- a real, prepared
+    search -- or both omitted, in which case location_search degrades to
+    provider_unavailable rather than being withheld from the schema. Realtime Agent's
+    ToolBox follows the identical rule; see its docstring for why.
+    """
+    from timeflow.intelligence.location import (
+        build_location_search_tool,
+        build_unavailable_location_search_tool,
+    )
+
     if not account_id.strip():
         raise ValueError("account_id must be non-empty")
     definitions = schedule_tool_definitions()
+    location_tool = (
+        build_location_search_tool(location_service, location_context)
+        if location_service is not None and location_context is not None
+        else build_unavailable_location_search_tool()
+    )
     return (
         _ScheduleTool(definitions[0], service, account_id),
         _ScheduleTool(definitions[1], service, account_id),
         _ScheduleTool(definitions[2], service, account_id),
         _ScheduleTool(definitions[3], service, account_id),
-        _LocationSearchPlaceholder(definitions[4]),
+        location_tool,
     )
 
 
@@ -245,28 +257,6 @@ def schedule_tool_definitions() -> tuple[ToolDefinition, ...]:
                     },
                 },
                 "required": ["schedule_id", "expected_revision", "schedule_kind"],
-                "additionalProperties": False,
-            },
-        ),
-        ToolDefinition(
-            "location_search",
-            "Search for a location instead of inventing an address or coordinates.",
-            {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "minLength": 1},
-                    "nearby_latitude": {
-                        "type": ["number", "null"],
-                        "minimum": -90,
-                        "maximum": 90,
-                    },
-                    "nearby_longitude": {
-                        "type": ["number", "null"],
-                        "minimum": -180,
-                        "maximum": 180,
-                    },
-                },
-                "required": ["query"],
                 "additionalProperties": False,
             },
         ),
@@ -430,8 +420,8 @@ def _optional_bool(arguments: Mapping[str, object], field: str, *, default: bool
 
 
 def _required_int(arguments: Mapping[str, object], field: str, *, minimum: int) -> int:
-    value = arguments.get(field)
-    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+    value = _coerce_int(arguments.get(field), field)
+    if value is None or value < minimum:
         raise ScheduleToolInputError(
             f"{field} must be an integer greater than or equal to {minimum}"
         )
@@ -439,14 +429,32 @@ def _required_int(arguments: Mapping[str, object], field: str, *, minimum: int) 
 
 
 def _optional_int(arguments: Mapping[str, object], field: str, *, minimum: int) -> int | None:
-    value = arguments.get(field)
-    if value is None:
+    raw = arguments.get(field)
+    if raw is None:
         return None
-    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+    value = _coerce_int(raw, field)
+    if value is None or value < minimum:
         raise ScheduleToolInputError(
             f"{field} must be an integer greater than or equal to {minimum}"
         )
     return value
+
+
+def _coerce_int(value: object, field: str) -> int | None:
+    """Accept a native int or an integer-valued numeric string.
+
+    See the Realtime Agent's identical fix in intelligence/realtime/tool_mapping.py.
+    """
+    if isinstance(value, bool):
+        raise ScheduleToolInputError(f"{field} must be an integer")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            raise ScheduleToolInputError(f"{field} must be an integer") from None
+    raise ScheduleToolInputError(f"{field} must be an integer")
 
 
 def _optional_float(
@@ -459,7 +467,17 @@ def _optional_float(
     value = arguments.get(field)
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool):
+        raise ScheduleToolInputError(f"{field} must be a number or null")
+    if isinstance(value, str):
+        # See the Realtime Agent's identical fix in intelligence/realtime/tool_mapping.py:
+        # the model sometimes quotes a long-precision location_search coordinate when
+        # copying it verbatim into schedule_create, and never self-corrects on retry.
+        try:
+            value = float(value)
+        except ValueError:
+            raise ScheduleToolInputError(f"{field} must be a number or null") from None
+    elif not isinstance(value, (int, float)):
         raise ScheduleToolInputError(f"{field} must be a number or null")
     result = float(value)
     if not minimum <= result <= maximum:

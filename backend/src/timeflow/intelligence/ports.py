@@ -43,6 +43,21 @@ class StreamInfo(Protocol):
         """Request that opened the stream, when the client supplied one."""
         ...
 
+    @property
+    def latitude(self) -> float | None:
+        """Client latitude reported at handshake, if any."""
+        ...
+
+    @property
+    def longitude(self) -> float | None:
+        """Client longitude reported at handshake, if any."""
+        ...
+
+    @property
+    def coordinate_system(self) -> str | None:
+        """Reference system the client's coordinates are expressed in, if any."""
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class Transcript:

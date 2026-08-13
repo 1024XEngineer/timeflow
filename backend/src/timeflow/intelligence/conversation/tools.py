@@ -9,6 +9,7 @@ from typing import Protocol
 from timeflow.business.calendar import ScheduleAgentService
 from timeflow.intelligence.conversation.llm import ToolDefinition
 from timeflow.intelligence.conversation.schedule_tools import build_schedule_tools
+from timeflow.intelligence.location import LocationSearchContext, LocationSearchService
 
 
 class Tool(Protocol):
@@ -90,11 +91,19 @@ def request_user_input_definition() -> ToolDefinition:
 def build_agent_tool_registry(
     schedule_service: ScheduleAgentService,
     account_id: str,
+    *,
+    location_service: LocationSearchService | None = None,
+    location_context: LocationSearchContext | None = None,
 ) -> ToolRegistry:
     """Build the authenticated PR 2 tool registry."""
     return ToolRegistry(
         [
-            *build_schedule_tools(schedule_service, account_id),
+            *build_schedule_tools(
+                schedule_service,
+                account_id,
+                location_service=location_service,
+                location_context=location_context,
+            ),
             _RequestUserInputTool(request_user_input_definition()),
         ]
     )

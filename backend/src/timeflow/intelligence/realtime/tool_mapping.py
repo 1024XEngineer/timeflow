@@ -209,19 +209,39 @@ def _optional_bool(arguments: Mapping[str, object], field: str, *, default: bool
 
 
 def _required_int(arguments: Mapping[str, object], field: str, *, minimum: int) -> int:
-    value = arguments.get(field)
-    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+    value = _coerce_int(arguments.get(field), field)
+    if value is None or value < minimum:
         raise ToolInputError(f"{field} must be an integer greater than or equal to {minimum}")
     return value
 
 
 def _optional_int(arguments: Mapping[str, object], field: str, *, minimum: int) -> int | None:
-    value = arguments.get(field)
-    if value is None:
+    raw = arguments.get(field)
+    if raw is None:
         return None
-    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+    value = _coerce_int(raw, field)
+    if value is None or value < minimum:
         raise ToolInputError(f"{field} must be an integer greater than or equal to {minimum}")
     return value
+
+
+def _coerce_int(value: object, field: str) -> int | None:
+    """Accept a native int or an integer-valued numeric string.
+
+    Same reasoning as _optional_float: a value copied verbatim from a previous tool's
+    JSON output (e.g. reminder_offset_minutes) sometimes arrives quoted, and the model
+    does not reliably self-correct on retry.
+    """
+    if isinstance(value, bool):
+        raise ToolInputError(f"{field} must be an integer")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            raise ToolInputError(f"{field} must be an integer") from None
+    raise ToolInputError(f"{field} must be an integer")
 
 
 def _optional_float(
@@ -234,7 +254,20 @@ def _optional_float(
     value = arguments.get(field)
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool):
+        raise ToolInputError(f"{field} must be a number or null")
+    if isinstance(value, str):
+        # A location_search candidate's own latitude/longitude are real JSON numbers,
+        # but the model sometimes quotes a long-precision one when copying it verbatim
+        # into schedule_create's arguments -- found retrying the exact same schedule_create
+        # four times with a quoted value and never self-correcting. A numeric string this
+        # well-formed is worth accepting rather than failing a turn the model already got
+        # the value right for.
+        try:
+            value = float(value)
+        except ValueError:
+            raise ToolInputError(f"{field} must be a number or null") from None
+    elif not isinstance(value, (int, float)):
         raise ToolInputError(f"{field} must be a number or null")
     result = float(value)
     if not minimum <= result <= maximum:

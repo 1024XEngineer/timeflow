@@ -12,7 +12,6 @@ class SessionContext:
     session_id: str
     account_id: str
     device_id: str
-    # Accepted but not acted on yet -- no geocoding or geofencing consumes these.
     latitude: float | None = None
     longitude: float | None = None
     coordinate_system: Literal["WGS84"] | None = None
@@ -61,6 +60,21 @@ class StreamContext:
     def voice_mode(self) -> str:
         """Voice interaction mode resolved for this session."""
         return self.session.voice_mode
+
+    @property
+    def latitude(self) -> float | None:
+        """Client latitude reported at handshake, if any."""
+        return self.session.latitude
+
+    @property
+    def longitude(self) -> float | None:
+        """Client longitude reported at handshake, if any."""
+        return self.session.longitude
+
+    @property
+    def coordinate_system(self) -> Literal["WGS84"] | None:
+        """Reference system the client's coordinates are expressed in, if any."""
+        return self.session.coordinate_system
 
 
 class AudioSink(Protocol):

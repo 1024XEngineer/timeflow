@@ -22,6 +22,16 @@ from timeflow.business.calendar import (
     ScheduleMutationResult,
     ScheduleType,
 )
+from timeflow.intelligence.location import (
+    LOCATION_SEARCH,
+    PROVIDER_UNAVAILABLE_RESULT,
+    ClientLocation,
+    LocationError,
+    LocationSearchContext,
+    LocationSearchService,
+    build_location_search_tool,
+    location_search_definition,
+)
 from timeflow.intelligence.realtime.tool_mapping import (
     ToolInputError,
     map_create_schedule_command,
@@ -42,6 +52,7 @@ SCHEDULE_UPDATE = "schedule_update"
 SCHEDULE_DELETE = "schedule_delete"
 REQUEST_USER_INPUT = "request_user_input"
 END_CONVERSATION = "end_conversation"
+# Re-exported for callers that only import this module: LOCATION_SEARCH == "location_search".
 
 # Four question kinds registered; clients branch on this enum.
 QUESTION_KINDS = ("missing_field", "ambiguous_target", "recurrence_scope", "confirmation")
@@ -238,6 +249,14 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
             "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": location_search_definition().name,
+            "description": location_search_definition().description,
+            "parameters": location_search_definition().parameters,
+        },
+    },
 )
 
 
@@ -250,12 +269,30 @@ class ToolBox:
         service: ScheduleAgentService,
         timezone: str = DEFAULT_TIMEZONE,
         now: Callable[[], datetime] | None = None,
+        *,
+        location_service: LocationSearchService | None = None,
+        client_location: ClientLocation | None = None,
     ) -> None:
-        """Store the account, the service, the client's zone, and the clock seam."""
+        """Store the account, the service, the client's zone, and the clock seam.
+
+        client_location is whatever position the client reported at handshake -- see
+        RealtimeAgent._session_for -- fixed for the life of the held session same as
+        timezone. location_service being None means location_search degrades to
+        provider_unavailable rather than being withheld from the schema: the model can
+        always call it, it just may not always do anything.
+
+        Preparing a LocationSearchContext from client_location is deferred to the first
+        location_search call rather than done here, and retried on every call until it
+        succeeds once: a transient failure (the provider being briefly unreachable) must
+        not disable location_search for the rest of a session that can hold for minutes.
+        """
         self._account_id = account_id
         self._service = service
         self._timezone = ZoneInfo(timezone)
         self._now = now or (lambda: datetime.now(self._timezone))
+        self._location_service = location_service
+        self._client_location = client_location
+        self._location_context: LocationSearchContext | None = None
 
     # The service is synchronous and reaches Postgres over a socket, so every call goes
     # to a worker thread: awaiting it inline would stall the loop streaming this turn's
@@ -273,6 +310,8 @@ class ToolBox:
             return ToolResult(
                 output=json.dumps({"status": "ok"}, ensure_ascii=False), ends_conversation=True
             )
+        if name == LOCATION_SEARCH:
+            return await self._location_search(arguments)
 
         # Normalize datetime fields before mapping
         arguments = normalize_datetime_args(arguments, self._timezone)
@@ -293,6 +332,26 @@ class ToolBox:
 
         logger.warning("realtime model asked for a tool that is not offered", extra={"tool": name})
         return _refusal(f"工具 {name} 不可用。")
+
+    async def _location_search(self, arguments: dict[str, Any]) -> ToolResult:
+        """Search real places near the client, or report the search as unavailable.
+
+        Unavailable covers "no location shared at handshake", "not configured", and a
+        provider failure while preparing the search context -- the model gets the same
+        stable status either way and never sees why. A prepare() failure is retried on
+        the next call rather than remembered, so a provider outage this session opened
+        during does not disable location_search for the rest of the call once the
+        provider recovers.
+        """
+        if self._location_service is None or self._client_location is None:
+            return ToolResult(output=PROVIDER_UNAVAILABLE_RESULT)
+        if self._location_context is None:
+            try:
+                self._location_context = await self._location_service.prepare(self._client_location)
+            except LocationError:
+                return ToolResult(output=PROVIDER_UNAVAILABLE_RESULT)
+        tool = build_location_search_tool(self._location_service, self._location_context)
+        return ToolResult(output=await tool.execute(arguments))
 
     async def _create(self, arguments: dict[str, Any]) -> ToolResult:
         command = map_create_schedule_command(arguments, self._timezone)

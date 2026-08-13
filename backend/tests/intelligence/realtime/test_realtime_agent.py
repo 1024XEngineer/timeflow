@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
+from timeflow.intelligence.location import ClientLocation, Coordinate
 from timeflow.intelligence.ports import (
     AudioReply,
     CommandResult,
@@ -26,6 +27,9 @@ class _Stream:
     stream_id: str = "stream_test"
     conversation_id: str = "conversation_test"
     request_id: str | None = "req_voice_001"
+    latitude: float | None = None
+    longitude: float | None = None
+    coordinate_system: str | None = None
 
 
 @dataclass
@@ -142,6 +146,29 @@ async def _chunks(*payloads: bytes) -> AsyncIterator[bytes]:
     """Yield the given chunks with no delay."""
     for payload in payloads:
         yield payload
+
+
+class _FakeToolBox:
+    """Stand in for a ToolBox when a test only cares what the factory was called with."""
+
+    def tools(self) -> list[dict[str, Any]]:
+        """Register nothing."""
+        return []
+
+
+class _RecordingToolsFactory:
+    """Record the ClientLocation each call received, and hand back an empty ToolBox."""
+
+    def __init__(self) -> None:
+        """Start with nothing recorded."""
+        self.received: list[ClientLocation | None] = []
+
+    async def __call__(
+        self, account_id: str, timezone: str, client_location: ClientLocation | None
+    ) -> _FakeToolBox:
+        """Record the location this open received."""
+        self.received.append(client_location)
+        return _FakeToolBox()
 
 
 def test_a_turn_pushes_the_transcript_then_the_spoken_reply() -> None:
@@ -601,5 +628,60 @@ def test_continuous_mode_cancels_the_response_before_cancelling_the_pump() -> No
 
         assert session.order == ["cancel_response", "pump_cancelled"]
         assert session.cancel_response_calls == 1
+
+    asyncio.run(scenario())
+
+
+def test_tools_factory_receives_a_client_location_built_from_the_stream() -> None:
+    """A stream reporting a position hands the factory a validated ClientLocation."""
+
+    async def scenario() -> None:
+        factory = _RecordingToolsFactory()
+
+        await RealtimeAgent(
+            ScriptedFactory(ScriptedSession([])), RecordingSink(), tools_factory=factory
+        ).handle_audio(
+            _chunks(b"a"),
+            _Stream(latitude=31.2304, longitude=121.4737, coordinate_system="WGS84"),
+        )
+
+        assert factory.received == [ClientLocation(Coordinate(31.2304, 121.4737, "wgs84"))]
+
+    asyncio.run(scenario())
+
+
+def test_tools_factory_receives_none_when_the_stream_has_no_location() -> None:
+    """No permission granted at handshake -- all three fields default to None -- degrades
+    to no location rather than a half-built one.
+    """
+
+    async def scenario() -> None:
+        factory = _RecordingToolsFactory()
+
+        await RealtimeAgent(
+            ScriptedFactory(ScriptedSession([])), RecordingSink(), tools_factory=factory
+        ).handle_audio(_chunks(b"a"), _Stream())
+
+        assert factory.received == [None]
+
+    asyncio.run(scenario())
+
+
+def test_tools_factory_receives_none_for_a_malformed_stream_location() -> None:
+    """Out-of-range coordinates or an unrecognized reference system degrade to no
+    location rather than raising out of session open.
+    """
+
+    async def scenario() -> None:
+        factory = _RecordingToolsFactory()
+
+        await RealtimeAgent(
+            ScriptedFactory(ScriptedSession([])), RecordingSink(), tools_factory=factory
+        ).handle_audio(
+            _chunks(b"a"),
+            _Stream(latitude=999.0, longitude=121.4737, coordinate_system="WGS84"),
+        )
+
+        assert factory.received == [None]
 
     asyncio.run(scenario())

@@ -99,6 +99,26 @@ def test_a_create_carries_every_optional_field_through() -> None:
     assert command.reminder_strength is ReminderStrength.HIGH
 
 
+def test_a_create_accepts_a_quoted_number_for_latitude_longitude_and_offset_minutes() -> None:
+    """Found live: the model sometimes quotes a long-precision coordinate when copying it
+    verbatim from a location_search candidate into schedule_create, and retries with the
+    exact same quoted value instead of self-correcting. A well-formed numeric string is
+    worth accepting rather than failing a turn the model already got the value right for.
+    """
+    command = map_create_schedule_command(
+        {
+            **MINIMAL_CREATE,
+            "latitude": "31.187830664332115",
+            "longitude": "121.60552031564809",
+            "reminder_offset_minutes": "0",
+        },
+        TZ,
+    )
+    assert command.latitude == 31.187830664332115
+    assert command.longitude == 121.60552031564809
+    assert command.reminder_offset_minutes == 0
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
@@ -186,6 +206,14 @@ def test_an_update_carries_every_patchable_field_through() -> None:
     assert command.changes["reminder_type"] is ReminderType.BEFORE_START
     assert command.changes["reminder_strength"] is ReminderStrength.LOW
     assert command.changes["reminder_offset_minutes"] == 15
+
+
+def test_an_update_accepts_a_quoted_expected_revision() -> None:
+    """Same reasoning as the create-time coercion test above, for a required int field."""
+    command = map_update_schedule_command(
+        {"schedule_id": "sch_1", "expected_revision": "3", "changes": {"title": "改过的"}}
+    )
+    assert command.expected_revision == 3
 
 
 def test_an_update_can_clear_a_field_by_naming_it_null() -> None:

@@ -42,6 +42,26 @@ class _UnusedAuthAccess:
         raise AssertionError(f"unexpected auth access for {username!r} and password")
 
 
+class _FakeAsyncClient:
+    """记录 aclose() 是否被调用，不真的打开网络连接。"""
+
+    def __init__(self, *, timeout: float) -> None:
+        self.timeout = timeout
+        self.closed = False
+
+    async def aclose(self) -> None:
+        """记录关闭。"""
+        self.closed = True
+
+
+def _tencent_environment() -> dict[str, str]:
+    """腾讯地图凭据就绪时的最小环境变量集合。"""
+    return {
+        "TIMEFLOW_TENCENT_MAP_KEY": "key-for-test",
+        "TIMEFLOW_TENCENT_MAP_BASE_URL": "https://apis.map.qq.com",
+    }
+
+
 def _build_with_environment(
     environment: str,
     *,
@@ -239,3 +259,41 @@ def test_lifespan_does_not_dispose_an_injected_database_engine() -> None:
 
     assert disposed == []
     engine.dispose()
+
+
+def test_building_with_tencent_and_aliyun_configured_wires_location() -> None:
+    """腾讯地图和实时模型凭据都配置齐全时，组合根能正常装配位置检索能力。"""
+    with mock.patch.dict(os.environ, _tencent_environment(), clear=False):
+        application = _build_with_environment("production", audio_configured=True)
+
+    assert application is not None
+
+
+def test_lifespan_closes_the_owned_tencent_http_client() -> None:
+    """应用关闭时释放组合根为地图检索创建的 HTTP client，跟数据库引擎释放同一套时机。"""
+    client = _FakeAsyncClient(timeout=5.0)
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+
+    with (
+        mock.patch("timeflow.main.httpx.AsyncClient", return_value=client) as factory,
+        mock.patch.dict(os.environ, _tencent_environment(), clear=False),
+    ):
+        application = _build_with_environment("development", auth_access=None, engine=engine)
+
+    factory.assert_called_once()
+    with TestClient(application):
+        assert client.closed is False
+
+    assert client.closed is True
+
+
+def test_voice_agent_mode_two_never_opens_a_tencent_http_client() -> None:
+    """mode=2 在能建出 Agent 之前就已失败，不该先泄漏一个没人关闭的 HTTP client。"""
+    with (
+        mock.patch("timeflow.main.httpx.AsyncClient") as factory,
+        mock.patch.dict(os.environ, _tencent_environment(), clear=False),
+        pytest.raises(RuntimeError, match="TIMEFLOW_VOICE_AGENT_MODE=2"),
+    ):
+        _build_with_environment("development", voice_agent_mode="2")
+
+    factory.assert_not_called()

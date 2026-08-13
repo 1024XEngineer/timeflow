@@ -22,8 +22,10 @@ from timeflow.intelligence.location.service import (
 )
 from timeflow.intelligence.location.tools import (
     LOCATION_SEARCH,
+    PROVIDER_UNAVAILABLE_RESULT,
     LocationSearchTool,
     build_location_search_tool,
+    build_unavailable_location_search_tool,
     location_search_definition,
 )
 
@@ -43,9 +45,11 @@ __all__ = [
     "LocationSearchContext",
     "LocationSearchService",
     "LocationSearchTool",
+    "PROVIDER_UNAVAILABLE_RESULT",
     "ProviderLocationCandidate",
     "build_agent_location_context",
     "build_location_search_tool",
+    "build_unavailable_location_search_tool",
     "convert_coordinate",
     "location_search_definition",
 ]
