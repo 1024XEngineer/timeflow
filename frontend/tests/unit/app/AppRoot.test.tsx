@@ -19,6 +19,24 @@ jest.mock('../../../src/features/schedule/presentation/ScheduleCalendarScreen', 
     return <Text>日程日历</Text>;
   },
 }));
+// 语音助手这几个真实实现都要接原生模块（麦克风/播放/定位），测试环境没有对应的
+// native module 注册，AppRoot 一 import 到就会在模块加载阶段直接抛错；跟上面的
+// SQLite/日历屏一样，只测装配逻辑，不需要真实实现。
+jest.mock('../../../src/features/assistant/data/audio/ExpoAudioCapture', () => ({
+  ExpoAudioCapture: jest.fn(),
+}));
+jest.mock('../../../src/features/assistant/data/audio/ExpoAudioPlayback', () => ({
+  ExpoAudioPlayback: jest.fn(),
+}));
+jest.mock('../../../src/features/assistant/data/websocket/WebSocketVoiceTransport', () => ({
+  WebSocketVoiceTransport: jest.fn(),
+}));
+jest.mock('../../../src/infrastructure/location/ExpoLocationProvider', () => ({
+  ExpoLocationProvider: jest.fn(),
+}));
+jest.mock('../../../src/features/assistant/presentation/AssistantVoiceOverlay', () => ({
+  AssistantVoiceOverlay: () => null,
+}));
 
 const mockedOpenTimeflowDatabase = openTimeflowDatabase as jest.MockedFunction<
   typeof openTimeflowDatabase
