@@ -12,7 +12,10 @@ import type {
   VoiceTransportConnection,
   VoiceTransportPort,
 } from '../../../../../src/features/assistant/application/interfaces/VoiceTransportPort';
-import type { AppLifecycleStatus, AppStateProvider } from '../../../../../src/infrastructure/appState/AppStateProvider';
+import type {
+  AppLifecycleStatus,
+  AppStateProvider,
+} from '../../../../../src/infrastructure/appState/AppStateProvider';
 import type { LocationProvider } from '../../../../../src/infrastructure/location/LocationProvider';
 
 const SESSION_IDLE_TIMEOUT_MS = 180_000;
@@ -89,11 +92,13 @@ function createFakeConnection() {
   };
 }
 
-function createDeps(overrides: {
-  applyCommandResult?: () => Promise<void>;
-  connection?: VoiceTransportConnection;
-  requestPermission?: () => Promise<boolean>;
-} = {}) {
+function createDeps(
+  overrides: {
+    applyCommandResult?: () => Promise<void>;
+    connection?: VoiceTransportConnection;
+    requestPermission?: () => Promise<boolean>;
+  } = {},
+) {
   let capturedOnChunk: ((chunk: ArrayBuffer, soundLevel: number | null) => void) | null = null;
   let capturedAppStateListener: ((status: AppLifecycleStatus) => void) | null = null;
   const unsubscribeAppState = jest.fn();
