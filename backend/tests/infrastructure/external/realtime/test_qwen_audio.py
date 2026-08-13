@@ -948,6 +948,40 @@ def test_continuous_pump_reports_tool_calls_and_a_bad_one_ends_the_stream() -> N
     asyncio.run(scenario())
 
 
+def test_continuous_first_response_done_after_a_tool_call_does_not_end_the_turn() -> None:
+    """A tool call's response.create (send_tool_result) keeps the pump from settling early.
+
+    Mirrors push-to-talk's test_first_response_done_does_not_end_a_tool_extended_turn:
+    the first response.done belongs to the response that ran the tool, not the one
+    carrying the model's actual reply, so it must not report turn_completed on its own
+    -- a caller like end_conversation would otherwise hang up before the model even
+    started its real (possibly farewell) reply.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("response.created"),
+            _event("response.done"),
+            _event("response.created"),
+            _event("response.audio_transcript.done", transcript="好的，再见"),
+            _event("response.done"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        session = QwenAudioSession(transport, CONFIG, CONTINUOUS)
+        observer = RecordingObserver()
+        await session.send_tool_result("call-1", "{}")
+
+        await session.pump(observer)
+
+        assert observer.calls == [
+            ("spoke", "好的，再见"),
+            ("turn_completed", None),
+            ("failed", "stream ended"),
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_continuous_pump_stops_when_a_frame_cannot_be_parsed() -> None:
     """A malformed frame ends a continuous stream the same way it ends push-to-talk."""
 
@@ -997,5 +1031,50 @@ def test_continuous_pump_ignores_speech_started_before_any_reply() -> None:
 
         assert observer.calls == [("heard", "你好"), ("failed", "stream ended")]
         assert transport.types() == []
+
+    asyncio.run(scenario())
+
+
+def test_cancel_response_sends_response_cancel_when_a_reply_is_in_flight() -> None:
+    """cancel_response() tells the vendor to stop a reply that never finished on its own.
+
+    Mirrors what agent.py does when the microphone closes mid-reply: the pump task
+    gets cancelled by the caller before it can naturally observe response.done, so
+    cancel_response() must read the session's own responding state rather than
+    depending on the pump loop having settled it.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("response.created"),
+            _event("response.audio_transcript.delta", delta="你好"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        session = QwenAudioSession(transport, CONFIG, CONTINUOUS)
+        observer = RecordingObserver()
+
+        await session.pump(observer)
+        await session.cancel_response()
+
+        assert transport.types()[-1] == "response.cancel"
+
+    asyncio.run(scenario())
+
+
+def test_cancel_response_is_a_no_op_when_nothing_is_responding() -> None:
+    """Calling cancel_response() with no reply in flight sends nothing to the vendor.
+
+    A blind response.cancel would risk drawing a vendor error event with nothing to
+    cancel -- and since the session is reused, that stray frame would be read by the
+    next turn's pump as if it were about that turn's own stream.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport()
+        session = QwenAudioSession(transport, CONFIG, CONTINUOUS)
+
+        await session.cancel_response()
+
+        assert transport.sent == []
 
     asyncio.run(scenario())

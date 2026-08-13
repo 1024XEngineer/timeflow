@@ -84,6 +84,9 @@ class ToolCallingSession:
         """Record what the tool answered, which is what the model would read."""
         self.tool_results.append((call_id, output))
 
+    async def cancel_response(self) -> None:
+        """Push-to-talk never calls this; present only to satisfy the protocol."""
+
     async def close(self) -> None:
         """Record release."""
         self.closed = True

@@ -120,8 +120,14 @@ class QwenAudioSession:
         self._transport = transport
         self._config = config
         self._voice_mode = voice_mode
-        # Push-to-talk only: a tool makes a turn two responses, the second carries the audio.
+        # A tool call makes one turn into two (or more) vendor responses -- the one that
+        # ran the tool, then whatever response.create it triggered actually carries the
+        # reply. Both pump loops use this to wait for the last one before settling.
         self._open_responses = 0
+        # Continuous mode only: true between a response.created and its matching
+        # response.done (or a cancellation). cancel_response() reads this to know
+        # whether there is anything to tell the vendor to abandon.
+        self._responding = False
 
     async def configure(self, instructions: str, tools: list[dict[str, Any]]) -> None:
         """Set the session up before any audio; turn_detection only takes effect here."""
@@ -173,6 +179,21 @@ class QwenAudioSession:
         )
         await self._send({"type": "response.create"})
         self._open_responses += 1
+
+    async def cancel_response(self) -> None:
+        """Tell the vendor to abandon its in-flight reply, if there is one.
+
+        The caller (mic closed, continuous mode) is about to stop reading events on
+        this session. Without this, the vendor keeps streaming the abandoned reply
+        into the same socket; since the session gets reused, those frames -- and a
+        stale nonzero _open_responses -- would otherwise bleed into the next turn's
+        pump instead of being discarded.
+        """
+        if not self._responding:
+            return
+        self._responding = False
+        self._open_responses = 0
+        await self._send({"type": "response.cancel"})
 
     async def close(self) -> None:
         """Close the underlying connection, ignoring an already-closed one."""
@@ -239,7 +260,7 @@ class QwenAudioSession:
         once the stream's input ends, same as any other in-flight work it owns.
         """
         spoken = ""
-        responding = False
+        self._responding = False
         # True from the moment we cancel a reply until the next one starts: the vendor
         # may still emit a few queued deltas for the cancelled reply before it catches up.
         suppressed = False
@@ -250,12 +271,12 @@ class QwenAudioSession:
             kind = event.get("type")
 
             if kind == "input_audio_buffer.speech_started":
-                if responding and not suppressed:
+                if self._responding and not suppressed:
                     suppressed = True
                     await self._send({"type": "response.cancel"})
                     await observer.interrupted()
             elif kind == "response.created":
-                responding = True
+                self._responding = True
                 suppressed = False
                 spoken = ""
             elif kind == "conversation.item.input_audio_transcription.completed":
@@ -279,7 +300,16 @@ class QwenAudioSession:
                     return
                 await observer.tool_requested(**requested)
             elif kind == "response.done":
-                responding = False
+                if self._open_responses > 0:
+                    # A tool call inside this response asked the vendor for a
+                    # follow-up (send_tool_result's response.create) -- that follow-up,
+                    # not this response, is what actually finishes the turn. Settling
+                    # here would let a caller like end_conversation hang up before the
+                    # model's actual reply to it has even started. Same pattern as
+                    # _pump_single_turn's push-to-talk handling below.
+                    self._open_responses -= 1
+                    continue
+                self._responding = False
                 await observer.turn_completed()
             elif kind == "error":
                 await observer.failed(_error_message(event))

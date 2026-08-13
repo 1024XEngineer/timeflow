@@ -148,6 +148,12 @@ class RealtimeAgent:
                     # The vendor decides when each reply starts and ends, so pump() never
                     # returns on its own; once the microphone closes there is nothing
                     # further for it to report, so it is stopped here instead of awaited.
+                    # cancel_response() must run first: if the vendor is still mid-reply,
+                    # cancelling the pump without telling it stops us from reading, but
+                    # the vendor keeps generating into the same socket -- since this
+                    # session gets reused, those frames would otherwise bleed into the
+                    # next turn's pump instead of being discarded with this one.
+                    await held.session.cancel_response()
                     pumping.cancel()
                     with contextlib.suppress(BaseException):
                         await pumping

@@ -81,6 +81,7 @@ class ScriptedSession:
         self.finished = False
         self.closed = False
         self.tool_results: list[tuple[str, str]] = []
+        self.cancel_response_calls = 0
 
     async def send_audio(self, chunk: bytes) -> None:
         self.audio_sent.append(chunk)
@@ -90,6 +91,9 @@ class ScriptedSession:
 
     async def send_tool_result(self, call_id: str, output: str) -> None:
         self.tool_results.append((call_id, output))
+
+    async def cancel_response(self) -> None:
+        self.cancel_response_calls += 1
 
     async def close(self) -> None:
         self.closed = True

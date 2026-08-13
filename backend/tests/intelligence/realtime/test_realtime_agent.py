@@ -82,6 +82,7 @@ class ScriptedSession:
         self.finished = False
         self.closed = False
         self.tool_results: list[tuple[str, str]] = []
+        self.cancel_response_calls = 0
 
     async def send_audio(self, chunk: bytes) -> None:
         """Record one chunk of the user's speech."""
@@ -94,6 +95,10 @@ class ScriptedSession:
     async def send_tool_result(self, call_id: str, output: str) -> None:
         """Record a tool result written back."""
         self.tool_results.append((call_id, output))
+
+    async def cancel_response(self) -> None:
+        """Record that the in-flight reply was told to stop."""
+        self.cancel_response_calls += 1
 
     async def close(self) -> None:
         """Record that the session was released."""
@@ -421,5 +426,60 @@ def test_a_failure_while_sending_audio_does_not_leave_the_pump_running() -> None
 
         assert session.pump_cancelled is True
         assert session.closed is True
+
+    asyncio.run(scenario())
+
+
+def test_continuous_mode_cancels_the_response_before_cancelling_the_pump() -> None:
+    """Ending a continuous stream mid-reply tells the vendor to stop before dropping the pump.
+
+    Cancelling the pump task first would stop us from reading the vendor's stream, but the
+    vendor keeps generating into the same socket -- and since the session is reused across
+    turns, those frames would bleed into the next turn's pump instead of being discarded
+    with this one. cancel_response() must be awaited first.
+    """
+
+    class BlockingSession(ScriptedSession):
+        """A continuous-mode session whose pump waits forever unless cancelled."""
+
+        def __init__(self) -> None:
+            """Start with nothing scripted and an empty ordering record."""
+            super().__init__([])
+            self.order: list[str] = []
+
+        async def cancel_response(self) -> None:
+            """Record that the reply was cancelled before recording the base call."""
+            self.order.append("cancel_response")
+            await super().cancel_response()
+
+        async def pump(self, observer: Any) -> None:
+            """Wait to be cancelled, recording that it was."""
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.order.append("pump_cancelled")
+                raise
+
+    async def yielding_chunks() -> AsyncIterator[bytes]:
+        """Yield one chunk, then cede control so the pump task actually starts.
+
+        A task's first step never runs until something really suspends -- the ScriptedSession
+        stand-ins below have no genuine await in them, so without this the pump task would
+        still be sitting unstarted in the ready queue when it gets cancelled, and its except
+        block would never run at all (confirmed against a bare CPython repro).
+        """
+        yield b"a"
+        await asyncio.sleep(0)
+
+    async def scenario() -> None:
+        """Run a continuous-mode turn and inspect the shutdown order."""
+        session = BlockingSession()
+
+        await RealtimeAgent(ScriptedFactory(session), RecordingSink()).handle_audio(
+            yielding_chunks(), _Stream(voice_mode="continuous")
+        )
+
+        assert session.order == ["cancel_response", "pump_cancelled"]
+        assert session.cancel_response_calls == 1
 
     asyncio.run(scenario())

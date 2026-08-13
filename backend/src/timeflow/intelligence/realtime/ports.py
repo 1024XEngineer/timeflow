@@ -59,6 +59,15 @@ class RealtimeSession(Protocol):
         """Return a tool's output and let the model continue from it."""
         ...
 
+    async def cancel_response(self) -> None:
+        """Abandon whatever reply is in flight, if any.
+
+        Continuous mode only -- called when the microphone closes while the model is
+        still replying, so the vendor stops generating it instead of continuing to
+        stream it into a session that may be reused for the next turn.
+        """
+        ...
+
     async def pump(self, observer: TurnObserver) -> None:
         """Report what the model says.
 
