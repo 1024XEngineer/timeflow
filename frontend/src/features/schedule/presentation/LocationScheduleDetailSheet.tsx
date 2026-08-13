@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 import type { LocationScheduleView } from '../application';
 import {
   DetailMeta,
@@ -14,15 +16,28 @@ export function LocationScheduleDetailSheet({
   schedule: LocationScheduleView | null;
   onClose: () => void;
 }) {
-  if (!schedule) {
-    return null;
+  const [previousSchedule, setPreviousSchedule] = useState<LocationScheduleView | null>(schedule);
+  const [lastSchedule, setLastSchedule] = useState<LocationScheduleView | null>(schedule);
+  if (schedule !== previousSchedule) {
+    setPreviousSchedule(schedule);
+    if (schedule) setLastSchedule(schedule);
   }
+  const detailSchedule = schedule ?? lastSchedule;
+  if (!detailSchedule) return null;
 
-  const location = normalizeDetailText(schedule.locationName);
-  const reminder = formatReminderDetail(schedule.reminderType, schedule.reminderStrength);
+  const location = normalizeDetailText(detailSchedule.locationName);
+  const reminder = formatReminderDetail(
+    detailSchedule.reminderType,
+    detailSchedule.reminderStrength,
+  );
 
   return (
-    <ScheduleDetailSheet badges={['地点日程']} onClose={onClose} title={schedule.title}>
+    <ScheduleDetailSheet
+      badges={['地点日程']}
+      onClose={onClose}
+      title={detailSchedule.title}
+      visible={schedule !== null}
+    >
       {location ? <DetailSection icon="📍" label="地点" primary={location} /> : null}
       {reminder ? (
         <DetailSection
@@ -32,7 +47,7 @@ export function LocationScheduleDetailSheet({
           secondary={reminder.secondary}
         />
       ) : null}
-      <DetailMeta icon="◎">时区 · {schedule.timezone}</DetailMeta>
+      <DetailMeta icon="◎">时区 · {detailSchedule.timezone}</DetailMeta>
     </ScheduleDetailSheet>
   );
 }

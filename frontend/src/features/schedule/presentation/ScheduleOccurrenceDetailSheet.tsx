@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import type { ScheduleOccurrenceView } from '../application';
@@ -9,7 +10,7 @@ import {
   normalizeDetailText,
   ScheduleDetailSheet,
 } from './ScheduleDetailSheet';
-import { formatTime } from './scheduleDisplay';
+import { dateKeyInTimezone, formatTime } from './scheduleDisplay';
 
 export function ScheduleOccurrenceDetailSheet({
   occurrence,
@@ -18,21 +19,41 @@ export function ScheduleOccurrenceDetailSheet({
   occurrence: ScheduleOccurrenceView | null;
   onClose: () => void;
 }) {
-  if (!occurrence) {
-    return null;
+  const [previousOccurrence, setPreviousOccurrence] = useState<ScheduleOccurrenceView | null>(
+    occurrence,
+  );
+  const [lastOccurrence, setLastOccurrence] = useState<ScheduleOccurrenceView | null>(occurrence);
+  if (occurrence !== previousOccurrence) {
+    setPreviousOccurrence(occurrence);
+    if (occurrence) setLastOccurrence(occurrence);
   }
+  const detailOccurrence = occurrence ?? lastOccurrence;
+  if (!detailOccurrence) return null;
 
-  const date = formatOccurrenceDate(occurrence.occurrenceStart, occurrence.timezone);
-  const location = normalizeDetailText(occurrence.locationName);
-  const reminder = formatReminderDetail(occurrence.reminderType, occurrence.reminderStrength);
+  const date = formatOccurrenceDate(detailOccurrence.occurrenceStart, detailOccurrence.timezone);
+  const location = normalizeDetailText(detailOccurrence.locationName);
+  const reminder = formatReminderDetail(
+    detailOccurrence.reminderType,
+    detailOccurrence.reminderStrength,
+  );
+  const crossesDay = isCrossDay(
+    detailOccurrence.occurrenceStart,
+    detailOccurrence.occurrenceEnd,
+    detailOccurrence.timezone,
+  );
   const badges = [
-    occurrence.scheduleCategory === 'time' ? '时间日程' : '地点日程',
-    occurrence.recurrenceMode === 'recurring' ? '周期日程' : '一次性',
-    ...(occurrence.isAllDay ? ['全天'] : []),
+    detailOccurrence.scheduleCategory === 'time' ? '时间日程' : '地点日程',
+    detailOccurrence.recurrenceMode === 'recurring' ? '周期日程' : '一次性',
+    ...(detailOccurrence.isAllDay ? ['全天'] : []),
   ];
 
   return (
-    <ScheduleDetailSheet badges={badges} onClose={onClose} title={occurrence.title}>
+    <ScheduleDetailSheet
+      badges={badges}
+      onClose={onClose}
+      title={detailOccurrence.title}
+      visible={occurrence !== null}
+    >
       <View style={styles.timeCard}>
         <View style={styles.timeHeader}>
           <View accessible={false} style={styles.timeIcon}>
@@ -47,18 +68,28 @@ export function ScheduleOccurrenceDetailSheet({
           </View>
         ) : null}
         <View style={styles.timeDivider} />
-        {occurrence.isAllDay ? (
+        {detailOccurrence.isAllDay ? (
           <Text style={styles.allDay}>全天</Text>
         ) : (
           <View style={styles.timeRange}>
             <TimePoint
+              date={
+                crossesDay
+                  ? formatShortDate(detailOccurrence.occurrenceStart, detailOccurrence.timezone)
+                  : undefined
+              }
               label="开始"
-              value={formatTime(occurrence.occurrenceStart, occurrence.timezone)}
+              value={formatTime(detailOccurrence.occurrenceStart, detailOccurrence.timezone)}
             />
-            {occurrence.occurrenceEnd ? (
+            {detailOccurrence.occurrenceEnd ? (
               <TimePoint
+                date={
+                  crossesDay
+                    ? formatShortDate(detailOccurrence.occurrenceEnd, detailOccurrence.timezone)
+                    : undefined
+                }
                 label="结束"
-                value={formatTime(occurrence.occurrenceEnd, occurrence.timezone)}
+                value={formatTime(detailOccurrence.occurrenceEnd, detailOccurrence.timezone)}
               />
             ) : null}
           </View>
@@ -73,18 +104,37 @@ export function ScheduleOccurrenceDetailSheet({
           secondary={reminder.secondary}
         />
       ) : null}
-      <DetailMeta icon="◎">时区 · {occurrence.timezone}</DetailMeta>
+      <DetailMeta icon="◎">时区 · {detailOccurrence.timezone}</DetailMeta>
     </ScheduleDetailSheet>
   );
 }
 
-function TimePoint({ label, value }: { label: string; value: string }) {
+function TimePoint({ date, label, value }: { date?: string; label: string; value: string }) {
   return (
     <View style={styles.timePoint}>
       <Text style={styles.timePointLabel}>{label}</Text>
+      {date ? <Text style={styles.timePointDate}>{date}</Text> : null}
       <Text style={styles.timePointValue}>{value}</Text>
     </View>
   );
+}
+
+function isCrossDay(start: string | null, end: string | null, timezone: string): boolean {
+  if (!start || !end) return false;
+  const startDate = dateKeyInTimezone(start, timezone);
+  const endDate = dateKeyInTimezone(end, timezone);
+  return startDate !== null && endDate !== null && startDate !== endDate;
+}
+
+function formatShortDate(instant: string | null, timezone: string): string | undefined {
+  if (!instant) return undefined;
+  const parsed = new Date(instant);
+  if (Number.isNaN(parsed.getTime())) return undefined;
+  return new Intl.DateTimeFormat('zh-CN', {
+    day: 'numeric',
+    month: 'long',
+    timeZone: timezone,
+  }).format(parsed);
 }
 
 function formatOccurrenceDate(instant: string | null, timezone: string) {
@@ -143,6 +193,7 @@ const styles = StyleSheet.create({
   timeIconText: { color: colors.text, fontSize: 17, fontWeight: '700' },
   timeLabel: { color: colors.mutedText, fontSize: 12, fontWeight: '700' },
   timePoint: { flex: 1, minWidth: 96 },
+  timePointDate: { color: colors.mutedText, fontSize: 13, fontWeight: '600', marginTop: 5 },
   timePointLabel: { color: colors.mutedText, fontSize: 12, fontWeight: '700' },
   timePointValue: { color: colors.text, fontSize: 24, fontWeight: '800', marginTop: 2 },
   timeRange: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },

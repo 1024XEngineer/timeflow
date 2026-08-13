@@ -8,14 +8,16 @@ export function ScheduleDetailSheet({
   children,
   onClose,
   title,
+  visible,
 }: {
   badges: readonly string[];
   children: ReactNode;
   onClose: () => void;
   title: string;
+  visible: boolean;
 }) {
   return (
-    <Modal animationType="slide" transparent visible onRequestClose={onClose}>
+    <Modal animationType="slide" transparent visible={visible} onRequestClose={onClose}>
       <View style={styles.backdrop}>
         <View accessibilityViewIsModal style={styles.sheet}>
           <View style={styles.handle} />
@@ -114,6 +116,7 @@ export function formatReminderDetail(type: string | null, strength: string | nul
 
 const styles = StyleSheet.create({
   backdrop: {
+    alignItems: 'center',
     backgroundColor: 'rgba(18, 53, 45, 0.32)',
     flex: 1,
     justifyContent: 'flex-end',
