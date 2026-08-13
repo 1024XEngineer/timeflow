@@ -609,6 +609,39 @@ describe('SqliteScheduleSyncService', () => {
     expect(await repository.getSchedule('account-a', 'invalid-schedule')).toBeNull();
   });
 
+  it('rejects an invalid non-null location start time without changing SQLite', async () => {
+    await service.applyScheduleSnapshotToSqlite({
+      messageId: 'seed',
+      accountId: 'account-a',
+      snapshot: {
+        schedules: [scheduleSnapshot({ id: 'existing-schedule' })],
+        occurrence_overrides: [],
+      },
+    });
+
+    const result = await service.applyFullScheduleSnapshotToSqlite({
+      accountId: 'account-a',
+      snapshot: {
+        schedules: [
+          scheduleSnapshot({
+            id: 'invalid-location',
+            schedule_type: 'location',
+            start_time: 'not-an-iso-instant',
+            latitude: 31.2304,
+            longitude: 121.4737,
+          }),
+        ],
+        occurrence_overrides: [],
+      },
+    });
+
+    expect(result).toMatchObject({ status: 'failed', errorCode: 'invalid_snapshot' });
+    expect((await repository.listSchedules('account-a')).map((row) => row.id)).toEqual([
+      'existing-schedule',
+    ]);
+    expect(await repository.getSchedule('account-a', 'invalid-location')).toBeNull();
+  });
+
   it('adds missing schedules and updates authoritative fields without resetting local runtime', async () => {
     await service.applyScheduleSnapshotToSqlite({
       messageId: 'seed',
