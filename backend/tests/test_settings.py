@@ -40,6 +40,11 @@ JWT_ENVIRONMENT_VARIABLES = (
     "TIMEFLOW_JWT_ACCESS_TTL_SECONDS",
 )
 CORS_ENVIRONMENT_VARIABLES = ("TIMEFLOW_CORS_ALLOWED_ORIGINS",)
+TENCENT_MAP_ENVIRONMENT_VARIABLES = (
+    "TIMEFLOW_TENCENT_MAP_KEY",
+    "TIMEFLOW_TENCENT_MAP_BASE_URL",
+    "TIMEFLOW_TENCENT_MAP_TIMEOUT_SECONDS",
+)
 
 
 def clear_asr_environment(monkeypatch: MonkeyPatch) -> None:
@@ -60,13 +65,21 @@ def clear_tts_environment(monkeypatch: MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
+def clear_tencent_map_environment(monkeypatch: MonkeyPatch) -> None:
+    """Remove map variables so local credentials do not affect tests."""
+    for name in TENCENT_MAP_ENVIRONMENT_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+
+
 def clear_model_environment(monkeypatch: MonkeyPatch) -> None:
-    """Remove model-specific variables before settings assertions."""
+    """Remove provider-specific variables before settings assertions."""
     clear_asr_environment(monkeypatch)
     clear_llm_environment(monkeypatch)
     clear_tts_environment(monkeypatch)
     for name in JWT_ENVIRONMENT_VARIABLES + CORS_ENVIRONMENT_VARIABLES:
         monkeypatch.delenv(name, raising=False)
+    clear_tencent_map_environment(monkeypatch)
+
 
 
 def test_settings_use_timeflow_environment(monkeypatch: MonkeyPatch) -> None:
@@ -271,6 +284,65 @@ def test_settings_convert_tts_environment_values(monkeypatch: MonkeyPatch) -> No
     assert settings.aliyun_tts_voice == "custom-voice"
     assert settings.aliyun_tts_connect_timeout_seconds == 8.5
     assert settings.aliyun_tts_task_timeout_seconds == 20.0
+
+
+def test_settings_use_tencent_map_defaults(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    clear_model_environment(monkeypatch)
+
+    settings = Settings.from_environment(tmp_path / "missing.env")
+
+    assert settings.tencent_map_api_key == ""
+    assert settings.tencent_map_base_url == "https://apis.map.qq.com"
+    assert settings.tencent_map_timeout_seconds == 5.0
+    assert settings.tencent_maps_is_configured() is False
+
+
+def test_settings_convert_tencent_map_environment_values(monkeypatch: MonkeyPatch) -> None:
+    clear_model_environment(monkeypatch)
+    monkeypatch.setenv("TIMEFLOW_TENCENT_MAP_KEY", " test-map-key ")
+    monkeypatch.setenv("TIMEFLOW_TENCENT_MAP_BASE_URL", " https://maps.example.test ")
+    monkeypatch.setenv("TIMEFLOW_TENCENT_MAP_TIMEOUT_SECONDS", "7.5")
+
+    settings = Settings.from_environment()
+
+    assert settings.tencent_map_api_key == "test-map-key"
+    assert settings.tencent_map_base_url == "https://maps.example.test"
+    assert settings.tencent_map_timeout_seconds == 7.5
+    assert settings.tencent_maps_is_configured() is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "http://apis.map.qq.com",
+        "https://",
+        "https://user:password@apis.map.qq.com",
+        "https://apis.map.qq.com?key=secret",
+        "https://apis.map.qq.com#fragment",
+    ],
+)
+def test_settings_reject_invalid_tencent_map_base_url(
+    monkeypatch: MonkeyPatch, value: str
+) -> None:
+    clear_model_environment(monkeypatch)
+    monkeypatch.setenv("TIMEFLOW_TENCENT_MAP_BASE_URL", value)
+
+    with pytest.raises(ValueError, match="credential-free HTTPS URL"):
+        Settings.from_environment()
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf"])
+def test_settings_reject_invalid_tencent_map_timeout(
+    monkeypatch: MonkeyPatch, value: str
+) -> None:
+    clear_model_environment(monkeypatch)
+    monkeypatch.setenv("TIMEFLOW_TENCENT_MAP_TIMEOUT_SECONDS", value)
+
+    with pytest.raises(ValueError, match="TIMEFLOW_TENCENT_MAP_TIMEOUT_SECONDS"):
+        Settings.from_environment()
 
 
 @pytest.mark.parametrize(
