@@ -155,6 +155,42 @@ describe('AppRoot', () => {
 
     await waitFor(() => expect(mockedOpenTimeflowDatabase).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.getByText('日程日历')).toBeTruthy());
+    expect(screen.getByText('timeflow_user')).toBeTruthy();
+    expect(screen.queryByText(/账号：/)).toBeNull();
+  });
+
+  it('can sign out when SQLite initialization fails', async () => {
+    mockedOpenTimeflowDatabase.mockRejectedValue(new Error('database unavailable'));
+    const controller = createController({
+      accountId: 'acc_001',
+      accessToken: 'opaque-token',
+      expiresAt: 200_000,
+      username: 'timeflow_user',
+    });
+    render(<AppRoot authController={controller} />);
+
+    await screen.findByText('本地日程存储初始化失败');
+    fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
+
+    await waitFor(() => expect(screen.getByText('登录或注册')).toBeTruthy());
+    expect(controller.getViewState()).toEqual({ status: 'unauthenticated' });
+  });
+
+  it('can sign out while SQLite initialization is pending', async () => {
+    mockedOpenTimeflowDatabase.mockImplementation(() => new Promise(() => undefined));
+    const controller = createController({
+      accountId: 'acc_001',
+      accessToken: 'opaque-token',
+      expiresAt: 200_000,
+      username: 'timeflow_user',
+    });
+    render(<AppRoot authController={controller} />);
+
+    await screen.findByText('正在准备日程');
+    fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
+
+    await waitFor(() => expect(screen.getByText('登录或注册')).toBeTruthy());
+    expect(controller.getViewState()).toEqual({ status: 'unauthenticated' });
   });
 
   it('signs out from the authenticated account shell', async () => {

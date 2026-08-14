@@ -234,6 +234,18 @@ function AuthenticatedScheduleRoute({
               <Text style={styles.retryText}>重试</Text>
             </Pressable>
           ) : null}
+          <Pressable
+            accessibilityLabel="退出登录"
+            accessibilityRole="button"
+            accessibilityState={{ disabled: isSigningOut }}
+            disabled={isSigningOut}
+            onPress={() => void handleSignOut()}
+            style={styles.loadStateSignOut}
+          >
+            <Text style={styles.loadStateSignOutText}>
+              {isSigningOut ? '正在退出…' : '退出登录'}
+            </Text>
+          </Pressable>
         </View>
       )}
     </View>
@@ -250,6 +262,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: spacing.xl,
   },
+  loadStateSignOut: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  loadStateSignOutText: { color: colors.mutedText, fontWeight: '600' },
   retry: {
     backgroundColor: colors.text,
     borderRadius: 8,
