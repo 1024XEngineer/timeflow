@@ -4,7 +4,7 @@ Android 百度定位桥接（`LocationClient` 连续定位），**不使用 Goog
 
 - 原生模块名：`TimeflowBaiduLocation`
 - 事件：`TimeflowBaiduLocation`（latitude / longitude / accuracy / observedAt）
-- 坐标系：`gcj02`
+- 坐标系：`wgs84`（与日程坐标、设备定位契约一致）
 - AK 通过 Expo 插件写入 `com.baidu.lbsapi.API_KEY`
 
 ## 控制台要求

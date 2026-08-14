@@ -1,5 +1,6 @@
 package com.timeflow.baidulocation
 
+import android.content.Context
 import android.util.Log
 import com.baidu.location.BDAbstractLocationListener
 import com.baidu.location.BDLocation
@@ -19,7 +20,7 @@ import java.util.TimeZone
 
 /**
  * 百度连续定位桥：不使用 Google Geofencing。
- * 坐标系默认 gcj02，便于与国内常见选点坐标对齐后做 Haversine。
+ * 坐标系使用 wgs84，与日程/设备定位契约一致后再做 Haversine。
  */
 class BaiduLocationModule(
   private val reactContext: ReactApplicationContext,
@@ -65,6 +66,33 @@ class BaiduLocationModule(
   override fun getName(): String = NAME
 
   @ReactMethod
+  fun getPrivacyConsent(promise: Promise) {
+    try {
+      val agreed =
+        reactContext.applicationContext
+          .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+          .getBoolean(PREFS_CONSENT, false)
+      promise.resolve(agreed)
+    } catch (error: Exception) {
+      promise.reject("CONSENT_READ_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun persistPrivacyConsent(agree: Boolean, promise: Promise) {
+    try {
+      reactContext.applicationContext
+        .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        .edit()
+        .putBoolean(PREFS_CONSENT, agree)
+        .apply()
+      promise.resolve(true)
+    } catch (error: Exception) {
+      promise.reject("CONSENT_WRITE_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
   fun setAgreePrivacy(agree: Boolean, promise: Promise) {
     try {
       LocationClient.setAgreePrivacy(agree)
@@ -77,7 +105,6 @@ class BaiduLocationModule(
   @ReactMethod
   fun init(ak: String?, promise: Promise) {
     try {
-      LocationClient.setAgreePrivacy(true)
       if (client == null) {
         client = LocationClient(reactContext.applicationContext)
         client?.registerLocationListener(listener)
@@ -94,7 +121,6 @@ class BaiduLocationModule(
   @ReactMethod
   fun startUpdating(intervalMs: Double, promise: Promise) {
     try {
-      LocationClient.setAgreePrivacy(true)
       val locationClient =
         client ?: LocationClient(reactContext.applicationContext).also {
           it.registerLocationListener(listener)
@@ -104,7 +130,7 @@ class BaiduLocationModule(
       val span = intervalMs.toInt().coerceAtLeast(1000)
       val option = LocationClientOption()
       option.locationMode = LocationClientOption.LocationMode.Hight_Accuracy
-      option.setCoorType("gcj02")
+      option.setCoorType("wgs84")
       option.setScanSpan(span)
       option.isOpenGps = true
       option.setIsNeedAddress(false)
@@ -175,6 +201,8 @@ class BaiduLocationModule(
   companion object {
     const val NAME = "TimeflowBaiduLocation"
     const val EVENT_LOCATION = "TimeflowBaiduLocation"
+    private const val PREFS_NAME = "timeflow_baidu"
+    private const val PREFS_CONSENT = "privacy_consent"
 
     private fun isUsableLocation(location: BDLocation): Boolean {
       if (location.latitude == 0.0 && location.longitude == 0.0) return false

@@ -54,23 +54,16 @@ export class NativeLocationMonitor implements LocationMonitorPort, LocationProvi
       await this.removeWatch(existingId, false);
     }
 
-    const listener_id = `location-${request.schedule_id}`;
-    this.watches.set(listener_id, {
-      listener_id,
-      request: { ...request },
-      listener,
-      inside: null,
-    });
-    this.scheduleToListener.set(request.schedule_id, listener_id);
+    const handle = this.installWatch(request, listener);
     await this.enqueueSync();
 
     const sample = await this.getCurrentSample();
-    const watch = this.watches.get(listener_id);
+    const watch = this.watches.get(handle.listener_id);
     if (sample != null && watch != null) {
       this.emitForWatch(watch, sample, /*forcePhase*/ true);
     }
 
-    return { listener_id, schedule_id: request.schedule_id };
+    return handle;
   }
 
   async unwatch(listenerId: string): Promise<void> {
@@ -84,13 +77,20 @@ export class NativeLocationMonitor implements LocationMonitorPort, LocationProvi
     for (const listenerId of [...this.watches.keys()]) {
       await this.removeWatch(listenerId, false);
     }
-    await this.enqueueSync();
 
     const handles: LocationWatchHandle[] = [];
     for (const schedule of schedules) {
       const request = toWatchRequest(schedule);
       if (request == null) continue;
-      handles.push(await this.watch(request, listener));
+      handles.push(this.installWatch(request, listener));
+    }
+    await this.enqueueSync();
+
+    const sample = this.lastSample ?? (await this.getCurrentSample());
+    if (sample != null) {
+      for (const watch of this.watches.values()) {
+        this.emitForWatch(watch, sample, true);
+      }
     }
     return handles;
   }
@@ -127,6 +127,21 @@ export class NativeLocationMonitor implements LocationMonitorPort, LocationProvi
     if (state !== 'active' || this.watches.size === 0) return;
     void this.enqueueSync();
   };
+
+  private installWatch(
+    request: LocationWatchRequest,
+    listener: (event: LocationMonitorEvent) => void,
+  ): LocationWatchHandle {
+    const listener_id = `location-${request.schedule_id}`;
+    this.watches.set(listener_id, {
+      listener_id,
+      request: { ...request },
+      listener,
+      inside: null,
+    });
+    this.scheduleToListener.set(request.schedule_id, listener_id);
+    return { listener_id, schedule_id: request.schedule_id };
+  }
 
   private async removeWatch(listenerId: string, sync: boolean): Promise<void> {
     const watch = this.watches.get(listenerId);
@@ -172,8 +187,8 @@ export class NativeLocationMonitor implements LocationMonitorPort, LocationProvi
     }
 
     await baiduInit(null);
-    await baiduStartUpdating(5_000);
-    this.started = true;
+    const started = await baiduStartUpdating(5_000);
+    this.started = started;
   }
 
   private emitForWatch(watch: ActiveWatch, sample: LocationSample, forcePhase: boolean): void {

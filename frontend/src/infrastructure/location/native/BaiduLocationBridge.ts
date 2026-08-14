@@ -10,6 +10,8 @@ export type BaiduLocationSample = {
 
 type TimeflowBaiduLocationNative = {
   setAgreePrivacy: (agree: boolean) => Promise<boolean>;
+  getPrivacyConsent: () => Promise<boolean>;
+  persistPrivacyConsent: (agree: boolean) => Promise<boolean>;
   init: (ak: string | null) => Promise<boolean>;
   startUpdating: (intervalMs: number) => Promise<boolean>;
   stopUpdating: () => Promise<boolean>;
@@ -26,6 +28,26 @@ export function isBaiduLocationAvailable(): boolean {
   return Platform.OS === 'android' && getNative() != null;
 }
 
+export async function readBaiduPrivacyConsent(): Promise<boolean> {
+  const native = getNative();
+  if (native == null) return false;
+  try {
+    return Boolean(await native.getPrivacyConsent());
+  } catch {
+    return false;
+  }
+}
+
+export async function persistBaiduPrivacyConsent(agree: boolean): Promise<void> {
+  const native = getNative();
+  if (native == null) return;
+  try {
+    await native.persistPrivacyConsent(agree);
+  } catch {
+    return;
+  }
+}
+
 export async function baiduSetAgreePrivacy(agree: boolean): Promise<void> {
   const native = getNative();
   if (native == null) return;
@@ -35,6 +57,7 @@ export async function baiduSetAgreePrivacy(agree: boolean): Promise<void> {
 export async function baiduInit(ak: string | null = null): Promise<boolean> {
   const native = getNative();
   if (native == null) return false;
+  if (!(await readBaiduPrivacyConsent())) return false;
   await native.setAgreePrivacy(true);
   return native.init(ak);
 }
@@ -42,6 +65,7 @@ export async function baiduInit(ak: string | null = null): Promise<boolean> {
 export async function baiduStartUpdating(intervalMs = 5_000): Promise<boolean> {
   const native = getNative();
   if (native == null) return false;
+  if (!(await readBaiduPrivacyConsent())) return false;
   return native.startUpdating(intervalMs);
 }
 

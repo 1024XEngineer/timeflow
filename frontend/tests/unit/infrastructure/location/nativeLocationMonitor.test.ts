@@ -148,9 +148,18 @@ describe('NativeLocationMonitor', () => {
 
   it('rebuilds watches from location schedules then stops native updates on unwatch', async () => {
     const monitor = new NativeLocationMonitor();
-    const handles = await monitor.rebuild([locationSchedule('a')], () => undefined);
-    expect(handles).toEqual([{ listener_id: 'location-a', schedule_id: 'a' }]);
+    const handles = await monitor.rebuild(
+      [locationSchedule('a'), locationSchedule('b')],
+      () => undefined,
+    );
+    expect(handles).toEqual([
+      { listener_id: 'location-a', schedule_id: 'a' },
+      { listener_id: 'location-b', schedule_id: 'b' },
+    ]);
+    expect(baiduStartUpdating).toHaveBeenCalledTimes(1);
     await monitor.unwatch('location-a');
+    expect(baiduStopUpdating).not.toHaveBeenCalled();
+    await monitor.unwatch('location-b');
     expect(baiduStopUpdating).toHaveBeenCalled();
     monitor.dispose();
   });

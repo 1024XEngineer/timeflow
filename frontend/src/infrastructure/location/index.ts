@@ -4,7 +4,10 @@ export type { LocationProvider } from './LocationProvider';
 export {
   isBaiduLocationAvailable,
   baiduInit,
+  baiduSetAgreePrivacy,
   baiduStartUpdating,
   baiduStopUpdating,
+  persistBaiduPrivacyConsent,
+  readBaiduPrivacyConsent,
   subscribeBaiduLocation,
 } from './native/BaiduLocationBridge';
