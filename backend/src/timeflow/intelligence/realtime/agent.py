@@ -338,6 +338,9 @@ class _Turn:
         self._question_id_factory = question_id_factory
         # None between replies; assigned on first use so each reply gets a fresh id.
         self._audio_id: str | None = None
+        # 保留最近一次已经交给客户端播放的 id。模型生成通常快于手机播放：等模型
+        # 侧交付完成后再发生的打断，仍必须准确指出需要停止的是哪条旧音频。
+        self._last_audio_id: str | None = None
         self._reply_id: str | None = None
         self._spoken = ""
         self._purpose = REPLY_PURPOSE
@@ -384,6 +387,7 @@ class _Turn:
         """Queue one chunk, starting the delivery on the first one."""
         if self._speaking is None:
             self._audio_id = self._audio_id_factory()
+            self._last_audio_id = self._audio_id
             self._speaking = asyncio.create_task(self._speak())
         await self._audio.put(data)
 
@@ -488,10 +492,12 @@ class _Turn:
             # own before the barge-in arrived -- but the model generates audio faster
             # than it plays back, so the phone can still be sounding it out. The session
             # only calls interrupted() this late when its own playable-until estimate
-            # says that's still plausible, so the client is told to stop regardless of
-            # what this turn still has queued locally. audio_id is empty because there
-            # is no reply left here to name; the client's handler does not read it.
-            await self._result_sink.deliver_canceled(AudioCanceled(audio_id=""), self._stream)
+            # says that's still plausible. Preserve the original id so the client can
+            # distinguish this old cancellation from a newer reply that has just begun.
+            if self._last_audio_id is not None:
+                await self._result_sink.deliver_canceled(
+                    AudioCanceled(audio_id=self._last_audio_id), self._stream
+                )
         self._spoken = ""
         self._reply_id = None
         self._audio_id = None
