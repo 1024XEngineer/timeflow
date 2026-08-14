@@ -12,10 +12,15 @@ class _StreamIdentity:
     """Identifiers lifted out of a stream context for the agent."""
 
     account_id: str
+    timezone: str
+    voice_mode: str
     session_id: str
     stream_id: str
     conversation_id: str
     request_id: str | None
+    latitude: float | None
+    longitude: float | None
+    coordinate_system: str | None
 
 
 class AgentAudioSink:
@@ -34,8 +39,13 @@ def _identity_of(stream: StreamContext) -> _StreamIdentity:
     """Lift the identifiers the agent needs out of the transport's context."""
     return _StreamIdentity(
         account_id=stream.account_id,
+        timezone=stream.timezone,
+        voice_mode=stream.voice_mode,
         session_id=stream.session.session_id,
         stream_id=stream.stream_id,
         conversation_id=stream.conversation_id,
         request_id=stream.request_id,
+        latitude=stream.latitude,
+        longitude=stream.longitude,
+        coordinate_system=stream.coordinate_system,
     )

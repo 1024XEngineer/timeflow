@@ -72,6 +72,7 @@ def _build_app(
     sink: AudioSink,
     *,
     max_audio_duration_ms: int = 120_000,
+    max_continuous_audio_duration_ms: int = 1_800_000,
     queue_max_chunks: int = 32,
 ) -> FastAPI:
     """Build an app wiring the transport to the given sink."""
@@ -82,6 +83,7 @@ def _build_app(
     voice_streams = VoiceStreamHandlers(
         sink,
         max_audio_duration_ms=max_audio_duration_ms,
+        max_continuous_audio_duration_ms=max_continuous_audio_duration_ms,
         queue_max_chunks=queue_max_chunks,
         stream_id_factory=lambda: "stream_test",
         conversation_id_factory=lambda: "conversation_test",
@@ -341,6 +343,31 @@ def test_audio_beyond_the_duration_budget_is_refused() -> None:
 
     assert reply["error"]["code"] == "AUDIO_INVALID"
     assert "10 ms" in reply["error"]["message"]
+
+
+def test_continuous_mode_uses_its_own_larger_duration_budget() -> None:
+    """continuous mode is not held to push-to-talk's one-press-and-hold budget.
+
+    Audio that would overrun the push-to-talk budget is accepted here because the stream
+    is in continuous mode, which draws from a separate, much larger budget.
+    """
+    sink = CapturingSink()
+    # 10 ms of push-to-talk budget; 100 ms of continuous budget. 321 bytes is ~10 ms.
+    client = TestClient(
+        _build_app(sink, max_audio_duration_ms=10, max_continuous_audio_duration_ms=100)
+    )
+    hello = {**VALID_HELLO, "payload": {**VALID_HELLO["payload"], "voice_mode": "continuous"}}
+
+    with client.websocket_connect("/ws?device_id=device_001") as websocket:
+        websocket.send_json(hello)
+        websocket.receive_json()
+        websocket.send_json(START)
+        websocket.receive_json()
+        websocket.send_bytes(b"\x00" * 321)
+        websocket.send_json({"type": "voice.stream.end", "payload": {"stream_id": "stream_test"}})
+        assert sink.completed.wait(timeout=2)
+
+    assert sink.audio() == b"\x00" * 321
 
 
 def test_unsupported_audio_format_is_refused() -> None:

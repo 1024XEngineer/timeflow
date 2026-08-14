@@ -12,6 +12,7 @@ import type {
   VoiceTransportConnection,
   VoiceTransportPort,
 } from '../../../../../src/features/assistant/application/interfaces/VoiceTransportPort';
+import type { AppStateProvider } from '../../../../../src/infrastructure/appState/AppStateProvider';
 import type { LocationProvider } from '../../../../../src/infrastructure/location/LocationProvider';
 
 /**
@@ -104,7 +105,10 @@ function createDeps(overrides: {
   const localScheduleWriter: LocalScheduleWriterPort = {
     applyCommandResult: jest.fn(overrides.applyCommandResult ?? (async () => undefined)),
   };
-  return { capture, localScheduleWriter, location, playback, transport };
+  const appState: AppStateProvider = {
+    subscribe: jest.fn(() => () => undefined),
+  };
+  return { appState, capture, localScheduleWriter, location, playback, transport };
 }
 
 async function completeStreamStart(

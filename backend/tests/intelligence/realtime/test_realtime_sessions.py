@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from timeflow.intelligence.location import ClientLocation, Coordinate
 from timeflow.intelligence.ports import (
     AudioReply,
     CommandResult,
@@ -28,10 +29,15 @@ class _Stream:
     """Identifiers of the audio stream a turn answers."""
 
     account_id: str = "acc_test"
+    timezone: str = "Asia/Shanghai"
+    voice_mode: str = "push_to_talk"
     session_id: str = "ws_session_test"
     stream_id: str = "stream_test"
     conversation_id: str = "conversation_test"
     request_id: str | None = "req_voice_001"
+    latitude: float | None = None
+    longitude: float | None = None
+    coordinate_system: str | None = None
 
 
 @dataclass
@@ -60,6 +66,12 @@ class RecordingSink:
             self.calls.append(("audio", chunk))
         self.calls.append(("audio_end", reply.audio_id))
 
+    async def deliver_canceled(self, canceled: Any, stream: Any) -> None:
+        self.calls.append(("canceled", canceled))
+
+    async def deliver_session_end(self, stream: Any) -> None:
+        self.calls.append(("session_end", None))
+
     def kinds(self) -> list[str]:
         return [kind for kind, _ in self.calls]
 
@@ -73,6 +85,8 @@ class ScriptedSession:
         self.finished = False
         self.closed = False
         self.tool_results: list[tuple[str, str]] = []
+        self.responds_asked: list[bool] = []
+        self.cancel_response_calls = 0
 
     async def send_audio(self, chunk: bytes) -> None:
         self.audio_sent.append(chunk)
@@ -80,8 +94,12 @@ class ScriptedSession:
     async def finish_input(self) -> None:
         self.finished = True
 
-    async def send_tool_result(self, call_id: str, output: str) -> None:
+    async def send_tool_result(self, call_id: str, output: str, *, respond: bool = True) -> None:
         self.tool_results.append((call_id, output))
+        self.responds_asked.append(respond)
+
+    async def cancel_response(self) -> None:
+        self.cancel_response_calls += 1
 
     async def close(self) -> None:
         self.closed = True
@@ -98,7 +116,9 @@ class CountingFactory:
         self.script = script or []
         self.opened: list[ScriptedSession] = []
 
-    async def open(self, instructions: str, tools: list[dict[str, Any]]) -> ScriptedSession:
+    async def open(
+        self, instructions: str, tools: list[dict[str, Any]], voice_mode: str
+    ) -> ScriptedSession:
         self.opened.append(ScriptedSession(list(self.script)))
         return self.opened[-1]
 
@@ -118,6 +138,19 @@ class StubToolBox:
         return self.result
 
 
+def _stub_factory(
+    tools: StubToolBox,
+) -> Callable[[str, str, ClientLocation | None], Awaitable[StubToolBox]]:
+    """Wrap an already-built StubToolBox as an async tools_factory, ignoring its args."""
+
+    async def factory(
+        _account: str, _timezone: str, _location: ClientLocation | None
+    ) -> StubToolBox:
+        return tools
+
+    return factory
+
+
 async def _chunks(*payloads: bytes) -> AsyncIterator[bytes]:
     for payload in payloads:
         yield payload
@@ -135,6 +168,44 @@ def test_a_second_turn_reuses_the_session_the_first_one_opened() -> None:
 
         assert len(factory.opened) == 1
         assert factory.opened[0].closed is False
+
+    asyncio.run(scenario())
+
+
+def test_a_held_session_keeps_the_location_context_from_when_it_opened() -> None:
+    """Location is fixed at session-open time, exactly like timezone: a second turn
+    reporting a different position does not reopen the session or reach tools_factory
+    again -- it is simply not seen.
+    """
+
+    async def scenario() -> None:
+        tools = StubToolBox(ToolResult(output=json.dumps({"status": "ok"})))
+        received: list[ClientLocation | None] = []
+
+        async def factory(
+            _account: str, _timezone: str, client_location: ClientLocation | None
+        ) -> StubToolBox:
+            received.append(client_location)
+            return tools
+
+        session_factory = CountingFactory([("spoke", ("好",))])
+        agent = RealtimeAgent(
+            session_factory,
+            RecordingSink(),
+            tools_factory=factory,  # type: ignore[arg-type]
+        )
+
+        await agent.handle_audio(
+            _chunks(b"a" * 3200),
+            _Stream(latitude=31.0, longitude=121.0, coordinate_system="WGS84"),
+        )
+        await agent.handle_audio(
+            _chunks(b"b" * 3200),
+            _Stream(latitude=40.0, longitude=116.0, coordinate_system="WGS84"),
+        )
+
+        assert len(session_factory.opened) == 1
+        assert received == [ClientLocation(Coordinate(31.0, 121.0, "wgs84"))]
 
     asyncio.run(scenario())
 
@@ -189,9 +260,11 @@ def test_a_committed_tool_call_answers_the_client_and_the_model() -> None:
             [("tool_requested", ("call_1", "schedule_create", {"title": "开会"}))]
         )
 
-        await RealtimeAgent(factory, sink, tools_factory=lambda _: tools).handle_audio(  # type: ignore[arg-type]
-            _chunks(b"a" * 3200), _Stream()
-        )
+        await RealtimeAgent(
+            factory,
+            sink,
+            tools_factory=_stub_factory(tools),  # type: ignore[arg-type]
+        ).handle_audio(_chunks(b"a" * 3200), _Stream())
 
         assert tools.calls == [("schedule_create", {"title": "开会"})]
         (result,) = [payload for kind, payload in sink.calls if kind == "result"]
@@ -220,9 +293,11 @@ def test_a_mutation_result_reaches_the_client_flat_not_wrapped_in_the_outcome() 
             [("tool_requested", ("call_1", "schedule_create", {"title": "开会"}))]
         )
 
-        await RealtimeAgent(factory, sink, tools_factory=lambda _: tools).handle_audio(  # type: ignore[arg-type]
-            _chunks(b"a" * 3200), _Stream()
-        )
+        await RealtimeAgent(
+            factory,
+            sink,
+            tools_factory=_stub_factory(tools),  # type: ignore[arg-type]
+        ).handle_audio(_chunks(b"a" * 3200), _Stream())
 
         (result,) = [payload for kind, payload in sink.calls if kind == "result"]
         assert result.schedule == snapshot
@@ -245,9 +320,11 @@ def test_a_query_result_carries_the_matches_as_schedules_not_schedule() -> None:
         sink = RecordingSink()
         factory = CountingFactory([("tool_requested", ("call_1", "schedule_query", {}))])
 
-        await RealtimeAgent(factory, sink, tools_factory=lambda _: tools).handle_audio(  # type: ignore[arg-type]
-            _chunks(b"a" * 3200), _Stream()
-        )
+        await RealtimeAgent(
+            factory,
+            sink,
+            tools_factory=_stub_factory(tools),  # type: ignore[arg-type]
+        ).handle_audio(_chunks(b"a" * 3200), _Stream())
 
         (result,) = [payload for kind, payload in sink.calls if kind == "result"]
         assert result.operation == "list_schedules"
@@ -267,9 +344,11 @@ def test_a_refused_tool_call_reaches_the_model_and_not_the_client() -> None:
             [("tool_requested", ("call_1", "schedule_create", {"title": "开会"}))]
         )
 
-        await RealtimeAgent(factory, sink, tools_factory=lambda _: tools).handle_audio(  # type: ignore[arg-type]
-            _chunks(b"a" * 3200), _Stream()
-        )
+        await RealtimeAgent(
+            factory,
+            sink,
+            tools_factory=_stub_factory(tools),  # type: ignore[arg-type]
+        ).handle_audio(_chunks(b"a" * 3200), _Stream())
 
         assert "result" not in sink.kinds()
         assert factory.opened[0].tool_results == [("call_1", json.dumps({"status": "failed"}))]
@@ -297,9 +376,11 @@ def test_a_question_from_a_tool_is_pushed_to_the_client() -> None:
             [("tool_requested", ("call_1", "request_user_input", {})), ("audio", (b"pcm",))]
         )
 
-        await RealtimeAgent(factory, sink, tools_factory=lambda _: tools).handle_audio(  # type: ignore[arg-type]
-            _chunks(b"a" * 3200), _Stream()
-        )
+        await RealtimeAgent(
+            factory,
+            sink,
+            tools_factory=_stub_factory(tools),  # type: ignore[arg-type]
+        ).handle_audio(_chunks(b"a" * 3200), _Stream())
 
         (question,) = [payload for kind, payload in sink.calls if kind == "question"]
         assert question.question_kind == "missing_field"
@@ -344,5 +425,93 @@ def test_a_session_that_grew_too_old_is_replaced() -> None:
 
         assert len(factory.opened) == 2
         assert factory.opened[0].closed is True
+
+    asyncio.run(scenario())
+
+
+def test_ending_the_conversation_tells_the_client_after_any_farewell_audio() -> None:
+    """A farewell the model spoke in the same turn is fully sent before the hang-up.
+
+    Cutting the client off mid-sentence would defeat the point of letting the model say
+    goodbye at all -- deliver_session_end must come after the reply's audio, not before.
+    """
+
+    async def scenario() -> None:
+        tools = StubToolBox(ToolResult(output=json.dumps({"status": "ok"}), ends_conversation=True))
+        sink = RecordingSink()
+        factory = CountingFactory(
+            [
+                ("spoke", ("好的，再见",)),
+                ("audio", (b"pcm",)),
+                ("tool_requested", ("call_1", "end_conversation", {})),
+            ]
+        )
+
+        await RealtimeAgent(
+            factory,
+            sink,
+            tools_factory=_stub_factory(tools),  # type: ignore[arg-type]
+        ).handle_audio(_chunks(b"a" * 3200), _Stream())
+
+        kinds = sink.kinds()
+        assert kinds[-1] == "session_end"
+        assert kinds.index("audio_end") < kinds.index("session_end")
+        # No follow-up reply is asked for: the farewell above is the whole goodbye.
+        assert factory.opened[0].responds_asked == [False]
+
+    asyncio.run(scenario())
+
+
+def test_an_ordinary_tool_call_still_asks_the_model_to_carry_on() -> None:
+    """Only a conversation-ending tool skips the follow-up; the rest still need one.
+
+    The vendor's turn detection only starts a turn from the user's audio, so without this
+    request a tool result would reach the model with nothing prompting it to speak.
+    """
+
+    async def scenario() -> None:
+        tools = StubToolBox(
+            ToolResult(
+                output=json.dumps({"status": "applied"}),
+                outcome={"operation": "create_schedule", "status": "applied", "schedule": {}},
+            )
+        )
+        factory = CountingFactory(
+            [("tool_requested", ("call_1", "schedule_create", {"title": "开会"}))]
+        )
+
+        await RealtimeAgent(
+            factory,
+            RecordingSink(),
+            tools_factory=_stub_factory(tools),  # type: ignore[arg-type]
+        ).handle_audio(_chunks(b"a" * 3200), _Stream())
+
+        assert factory.opened[0].responds_asked == [True]
+
+    asyncio.run(scenario())
+
+
+def test_a_tool_call_that_does_not_end_the_conversation_sends_nothing_extra() -> None:
+    """An ordinary tool call leaves session_end off the wire entirely."""
+
+    async def scenario() -> None:
+        tools = StubToolBox(
+            ToolResult(
+                output=json.dumps({"status": "applied"}),
+                outcome={"operation": "create_schedule", "status": "applied", "schedule": {}},
+            )
+        )
+        sink = RecordingSink()
+        factory = CountingFactory(
+            [("tool_requested", ("call_1", "schedule_create", {"title": "开会"}))]
+        )
+
+        await RealtimeAgent(
+            factory,
+            sink,
+            tools_factory=_stub_factory(tools),  # type: ignore[arg-type]
+        ).handle_audio(_chunks(b"a" * 3200), _Stream())
+
+        assert "session_end" not in sink.kinds()
 
     asyncio.run(scenario())

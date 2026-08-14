@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
+from timeflow.intelligence.location import ClientLocation, Coordinate
 from timeflow.intelligence.ports import (
     AudioReply,
     CommandResult,
@@ -20,10 +21,15 @@ class _Stream:
     """Identifiers of the audio stream a turn answers."""
 
     account_id: str = "acc_test"
+    timezone: str = "Asia/Shanghai"
+    voice_mode: str = "push_to_talk"
     session_id: str = "ws_session_test"
     stream_id: str = "stream_test"
     conversation_id: str = "conversation_test"
     request_id: str | None = "req_voice_001"
+    latitude: float | None = None
+    longitude: float | None = None
+    coordinate_system: str | None = None
 
 
 @dataclass
@@ -57,6 +63,14 @@ class RecordingSink:
             self.calls.append(("audio", chunk))
         self.calls.append(("audio_end", reply.audio_id))
 
+    async def deliver_canceled(self, canceled: Any, stream: Any) -> None:
+        """Record that a reply was cut short."""
+        self.calls.append(("canceled", canceled))
+
+    async def deliver_session_end(self, stream: Any) -> None:
+        """Record that the client was told to hang up."""
+        self.calls.append(("session_end", None))
+
     def kinds(self) -> list[str]:
         """Return just the kind of each recorded call."""
         return [kind for kind, _ in self.calls]
@@ -72,6 +86,8 @@ class ScriptedSession:
         self.finished = False
         self.closed = False
         self.tool_results: list[tuple[str, str]] = []
+        self.responds_asked: list[bool] = []
+        self.cancel_response_calls = 0
 
     async def send_audio(self, chunk: bytes) -> None:
         """Record one chunk of the user's speech."""
@@ -81,9 +97,14 @@ class ScriptedSession:
         """Record that the input was closed."""
         self.finished = True
 
-    async def send_tool_result(self, call_id: str, output: str) -> None:
-        """Record a tool result written back."""
+    async def send_tool_result(self, call_id: str, output: str, *, respond: bool = True) -> None:
+        """Record a tool result written back, and whether a reply was asked for."""
         self.tool_results.append((call_id, output))
+        self.responds_asked.append(respond)
+
+    async def cancel_response(self) -> None:
+        """Record that the in-flight reply was told to stop."""
+        self.cancel_response_calls += 1
 
     async def close(self) -> None:
         """Record that the session was released."""
@@ -103,7 +124,9 @@ class ScriptedFactory:
         self._session = session
         self.instructions: str | None = None
 
-    async def open(self, instructions: str, tools: list[dict[str, Any]]) -> ScriptedSession:
+    async def open(
+        self, instructions: str, tools: list[dict[str, Any]], voice_mode: str
+    ) -> ScriptedSession:
         """Record the configuration and return the scripted session."""
         self.instructions = instructions
         return self._session
@@ -112,7 +135,9 @@ class ScriptedFactory:
 class FailingFactory:
     """A factory that cannot reach the model."""
 
-    async def open(self, instructions: str, tools: list[dict[str, Any]]) -> ScriptedSession:
+    async def open(
+        self, instructions: str, tools: list[dict[str, Any]], voice_mode: str
+    ) -> ScriptedSession:
         """Fail as an unreachable model would."""
         raise ConnectionRefusedError
 
@@ -121,6 +146,29 @@ async def _chunks(*payloads: bytes) -> AsyncIterator[bytes]:
     """Yield the given chunks with no delay."""
     for payload in payloads:
         yield payload
+
+
+class _FakeToolBox:
+    """Stand in for a ToolBox when a test only cares what the factory was called with."""
+
+    def tools(self) -> list[dict[str, Any]]:
+        """Register nothing."""
+        return []
+
+
+class _RecordingToolsFactory:
+    """Record the ClientLocation each call received, and hand back an empty ToolBox."""
+
+    def __init__(self) -> None:
+        """Start with nothing recorded."""
+        self.received: list[ClientLocation | None] = []
+
+    async def __call__(
+        self, account_id: str, timezone: str, client_location: ClientLocation | None
+    ) -> _FakeToolBox:
+        """Record the location this open received."""
+        self.received.append(client_location)
+        return _FakeToolBox()
 
 
 def test_a_turn_pushes_the_transcript_then_the_spoken_reply() -> None:
@@ -262,7 +310,7 @@ def test_the_instructions_are_applied_when_the_session_opens() -> None:
         factory = ScriptedFactory(ScriptedSession([]))
 
         await RealtimeAgent(
-            factory, RecordingSink(), instructions=lambda: "你是日程助手"
+            factory, RecordingSink(), instructions=lambda _timezone: "你是日程助手"
         ).handle_audio(_chunks(b"a"), _Stream())
 
         assert factory.instructions == "你是日程助手"
@@ -407,5 +455,233 @@ def test_a_failure_while_sending_audio_does_not_leave_the_pump_running() -> None
 
         assert session.pump_cancelled is True
         assert session.closed is True
+
+    asyncio.run(scenario())
+
+
+async def _open_mic() -> AsyncIterator[bytes]:
+    """Hold the microphone open forever, as a continuous-mode client does.
+
+    A scripted continuous-mode pump finishes by exhausting its script rather than by a
+    real vendor ending the stream, so the microphone must be the one left open here --
+    otherwise closing it first races the pump to decide the turn's outcome, and the pump
+    can get cancelled mid-script before its later steps run.
+    """
+    yield b"a"
+    await asyncio.Event().wait()
+
+
+def test_a_barge_in_while_speaking_tells_the_client_which_audio_to_stop() -> None:
+    """interrupted() while a reply's audio is still queued here names that reply."""
+
+    async def scenario() -> None:
+        sink = RecordingSink()
+        session = ScriptedSession([("spoke", ("好",)), ("audio", (b"pcm",)), ("interrupted", ())])
+
+        await RealtimeAgent(ScriptedFactory(session), sink).handle_audio(
+            _open_mic(), _Stream(voice_mode="continuous")
+        )
+
+        (canceled,) = [payload for kind, payload in sink.calls if kind == "canceled"]
+        assert canceled.audio_id != ""
+
+    asyncio.run(scenario())
+
+
+def test_a_barge_in_after_the_reply_already_finished_sending_still_tells_the_client() -> None:
+    """interrupted() with nothing left tracked here still reaches the client.
+
+    Found on a real device: the realtime model generates audio faster than it plays
+    back, so a reply can finish sending -- turn_completed() already settled it -- while
+    the phone is still sounding it out. The session only calls interrupted() this late
+    when its own playable-until estimate says that is still plausible, so the client
+    must still be told to stop even though this turn's own bookkeeping has nothing left
+    to name; there is no reply id left here to attach to it, hence the empty audio_id.
+    """
+
+    async def scenario() -> None:
+        sink = RecordingSink()
+        session = ScriptedSession(
+            [
+                ("spoke", ("好",)),
+                ("audio", (b"pcm",)),
+                ("turn_completed", ()),
+                ("interrupted", ()),
+            ]
+        )
+
+        await RealtimeAgent(ScriptedFactory(session), sink).handle_audio(
+            _open_mic(), _Stream(voice_mode="continuous")
+        )
+
+        (canceled,) = [payload for kind, payload in sink.calls if kind == "canceled"]
+        assert canceled.audio_id == ""
+
+    asyncio.run(scenario())
+
+
+def test_a_continuous_pump_that_fails_does_not_wait_on_a_microphone_nobody_reads() -> None:
+    """A vendor failure ends the turn even though the client's microphone stays open.
+
+    Found on a real device: the pump returns on a vendor error, but in continuous mode the
+    client holds its microphone open until it is told to hang up -- so waiting on the audio
+    stream deadlocks the two sides against each other. The call UI stayed up and speaking
+    to it did nothing, because nothing was reading the vendor any more. The failure has to
+    reach the client as a session end, which is what its call UI already listens for.
+    """
+
+    class FailingPumpSession(ScriptedSession):
+        """A session whose pump reports one failure and returns."""
+
+        async def pump(self, observer: Any) -> None:
+            """Fail the way a vendor error event does."""
+            await observer.failed("realtime session reported an error")
+
+    async def never_ending_chunks() -> AsyncIterator[bytes]:
+        """Hold the microphone open forever, as a continuous-mode client does."""
+        yield b"a"
+        await asyncio.Event().wait()
+        yield b"unreachable"
+
+    async def scenario() -> None:
+        """Run a continuous turn whose pump dies while the microphone is still open."""
+        sink = RecordingSink()
+
+        async with asyncio.timeout(2):
+            await RealtimeAgent(ScriptedFactory(FailingPumpSession([])), sink).handle_audio(
+                never_ending_chunks(), _Stream(voice_mode="continuous")
+            )
+
+        assert sink.kinds() == ["session_end"]
+
+    asyncio.run(scenario())
+
+
+def test_a_push_to_talk_failure_does_not_tell_the_client_to_hang_up() -> None:
+    """Push-to-talk has no call to end, so a failure sends no session_end.
+
+    Its stream finishes on its own either way; a hang-up message would be about a
+    full-screen call that only continuous mode ever puts on screen.
+    """
+
+    async def scenario() -> None:
+        """Run a push-to-talk turn whose session fails."""
+        sink = RecordingSink()
+
+        await RealtimeAgent(
+            ScriptedFactory(ScriptedSession([("failed", ("quota exceeded",))])), sink
+        ).handle_audio(_chunks(b"a"), _Stream())
+
+        assert "session_end" not in sink.kinds()
+
+    asyncio.run(scenario())
+
+
+def test_continuous_mode_cancels_the_response_before_cancelling_the_pump() -> None:
+    """Ending a continuous stream mid-reply tells the vendor to stop before dropping the pump.
+
+    Cancelling the pump task first would stop us from reading the vendor's stream, but the
+    vendor keeps generating into the same socket -- and since the session is reused across
+    turns, those frames would bleed into the next turn's pump instead of being discarded
+    with this one. cancel_response() must be awaited first.
+    """
+
+    class BlockingSession(ScriptedSession):
+        """A continuous-mode session whose pump waits forever unless cancelled."""
+
+        def __init__(self) -> None:
+            """Start with nothing scripted and an empty ordering record."""
+            super().__init__([])
+            self.order: list[str] = []
+
+        async def cancel_response(self) -> None:
+            """Record that the reply was cancelled before recording the base call."""
+            self.order.append("cancel_response")
+            await super().cancel_response()
+
+        async def pump(self, observer: Any) -> None:
+            """Wait to be cancelled, recording that it was."""
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.order.append("pump_cancelled")
+                raise
+
+    async def yielding_chunks() -> AsyncIterator[bytes]:
+        """Yield one chunk, then cede control so the pump task actually starts.
+
+        A task's first step never runs until something really suspends -- the ScriptedSession
+        stand-ins below have no genuine await in them, so without this the pump task would
+        still be sitting unstarted in the ready queue when it gets cancelled, and its except
+        block would never run at all (confirmed against a bare CPython repro).
+        """
+        yield b"a"
+        await asyncio.sleep(0)
+
+    async def scenario() -> None:
+        """Run a continuous-mode turn and inspect the shutdown order."""
+        session = BlockingSession()
+
+        await RealtimeAgent(ScriptedFactory(session), RecordingSink()).handle_audio(
+            yielding_chunks(), _Stream(voice_mode="continuous")
+        )
+
+        assert session.order == ["cancel_response", "pump_cancelled"]
+        assert session.cancel_response_calls == 1
+
+    asyncio.run(scenario())
+
+
+def test_tools_factory_receives_a_client_location_built_from_the_stream() -> None:
+    """A stream reporting a position hands the factory a validated ClientLocation."""
+
+    async def scenario() -> None:
+        factory = _RecordingToolsFactory()
+
+        await RealtimeAgent(
+            ScriptedFactory(ScriptedSession([])), RecordingSink(), tools_factory=factory
+        ).handle_audio(
+            _chunks(b"a"),
+            _Stream(latitude=31.2304, longitude=121.4737, coordinate_system="WGS84"),
+        )
+
+        assert factory.received == [ClientLocation(Coordinate(31.2304, 121.4737, "wgs84"))]
+
+    asyncio.run(scenario())
+
+
+def test_tools_factory_receives_none_when_the_stream_has_no_location() -> None:
+    """No permission granted at handshake -- all three fields default to None -- degrades
+    to no location rather than a half-built one.
+    """
+
+    async def scenario() -> None:
+        factory = _RecordingToolsFactory()
+
+        await RealtimeAgent(
+            ScriptedFactory(ScriptedSession([])), RecordingSink(), tools_factory=factory
+        ).handle_audio(_chunks(b"a"), _Stream())
+
+        assert factory.received == [None]
+
+    asyncio.run(scenario())
+
+
+def test_tools_factory_receives_none_for_a_malformed_stream_location() -> None:
+    """Out-of-range coordinates or an unrecognized reference system degrade to no
+    location rather than raising out of session open.
+    """
+
+    async def scenario() -> None:
+        factory = _RecordingToolsFactory()
+
+        await RealtimeAgent(
+            ScriptedFactory(ScriptedSession([])), RecordingSink(), tools_factory=factory
+        ).handle_audio(
+            _chunks(b"a"),
+            _Stream(latitude=999.0, longitude=121.4737, coordinate_system="WGS84"),
+        )
+
+        assert factory.received == [None]
 
     asyncio.run(scenario())

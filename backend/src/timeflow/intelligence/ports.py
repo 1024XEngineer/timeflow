@@ -14,6 +14,16 @@ class StreamInfo(Protocol):
         ...
 
     @property
+    def timezone(self) -> str:
+        """IANA zone the session resolved, client-reported or the deployment default."""
+        ...
+
+    @property
+    def voice_mode(self) -> str:
+        """push_to_talk or continuous, resolved at handshake."""
+        ...
+
+    @property
     def session_id(self) -> str:
         """Session the stream belongs to."""
         ...
@@ -31,6 +41,21 @@ class StreamInfo(Protocol):
     @property
     def request_id(self) -> str | None:
         """Request that opened the stream, when the client supplied one."""
+        ...
+
+    @property
+    def latitude(self) -> float | None:
+        """Client latitude reported at handshake, if any."""
+        ...
+
+    @property
+    def longitude(self) -> float | None:
+        """Client longitude reported at handshake, if any."""
+        ...
+
+    @property
+    def coordinate_system(self) -> str | None:
+        """Reference system the client's coordinates are expressed in, if any."""
         ...
 
 
@@ -85,6 +110,13 @@ class CommandResult:
     schedules: list[dict[str, Any]] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class AudioCanceled:
+    """A spoken reply was interrupted before it finished; continuous mode only."""
+
+    audio_id: str
+
+
 class ResultSink(Protocol):
     """Push results back to the client, one method per protocol message."""
 
@@ -108,6 +140,18 @@ class ResultSink(Protocol):
         self, reply: AudioReply, chunks: AsyncIterator[bytes], stream: StreamInfo
     ) -> None:
         """Speak a reply, forwarding chunks as they are produced."""
+        ...
+
+    async def deliver_canceled(self, canceled: AudioCanceled, stream: StreamInfo) -> None:
+        """Tell the client a reply it may already be hearing was cut short."""
+        ...
+
+    async def deliver_session_end(self, stream: StreamInfo) -> None:
+        """Tell the client this voice session should end now.
+
+        No payload beyond the stream itself -- unlike the other deliver_* methods, there
+        is nothing else to report.
+        """
         ...
 
 

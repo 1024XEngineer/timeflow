@@ -1,3 +1,4 @@
+import type { VoiceMode } from '../../../../contracts/authWebSocket';
 import type { AssistantServerMessage } from '../../../../contracts/conversation';
 import type { AuthenticatedWebSocketClient } from '../../../../infrastructure/websocket';
 import type { LocationSample } from '../../../reminder/domain';
@@ -15,13 +16,20 @@ import type {
  *
  * close() 只解绑这一路监听，不关共享连接——连接的生命周期归认证系统管
  * （token 失效时 AuthInvalidationCoordinator 会关），语音只是众多使用方之一。
+ *
+ * voiceMode 绑定在实例上而不是每次 connect() 传：按住说话和连续对话各自持有
+ * 一个固定 voiceMode 的实例，构造之后不会中途变化。
  */
 export class AuthenticatedVoiceTransport implements VoiceTransportPort {
-  constructor(private readonly client: AuthenticatedWebSocketClient) {}
+  constructor(
+    private readonly client: AuthenticatedWebSocketClient,
+    private readonly voiceMode: VoiceMode = 'push_to_talk',
+  ) {}
 
   async connect(location?: LocationSample | null): Promise<VoiceTransportConnection> {
     await this.client.connect(
       location ? { latitude: location.latitude, longitude: location.longitude } : undefined,
+      this.voiceMode,
     );
 
     const messageHandlers = new Set<(message: AssistantServerMessage) => void>();

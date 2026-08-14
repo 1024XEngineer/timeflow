@@ -40,5 +40,6 @@ export function useAssistantConversation(application: AssistantApplicationPort) 
     soundLevel,
     startTurn: () => application.startTurn(),
     state,
+    togglePause: () => application.togglePause?.(),
   };
 }

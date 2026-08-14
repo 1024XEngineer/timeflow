@@ -4,6 +4,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import Engine
@@ -35,6 +36,7 @@ from timeflow.gateway.websocket.handlers.session import SessionHandshake
 from timeflow.gateway.websocket.handlers.voice_stream import VoiceStreamHandlers
 from timeflow.gateway.websocket.ports import AudioSink
 from timeflow.gateway.websocket.router import MessageRouter
+from timeflow.infrastructure.external.location.tencent_maps import TencentMapsLocationPort
 from timeflow.infrastructure.external.realtime.qwen_audio import (
     QwenAudioConfig,
     QwenAudioSessionFactory,
@@ -42,6 +44,7 @@ from timeflow.infrastructure.external.realtime.qwen_audio import (
 from timeflow.infrastructure.security import Argon2PasswordHasher, JwtAccessTokenService
 from timeflow.infrastructure.settings import Settings, get_settings
 from timeflow.intelligence.fake_agent import FakeAgent
+from timeflow.intelligence.location import ClientLocation, LocationSearchService
 from timeflow.intelligence.realtime.agent import RealtimeAgent
 from timeflow.intelligence.realtime.instructions import build_instructions
 from timeflow.intelligence.realtime.schedule_tools import ToolBox
@@ -66,6 +69,7 @@ def create_app(
     access_tokens = access_token_service or _build_access_token_service(settings)
     owned_engine: Engine | None = None
     session_factory: sessionmaker[Session] | None = None
+    owned_http_client: httpx.AsyncClient | None = None
 
     # 认证仓储和实时日程工具共用同一个数据库会话工厂，避免两套连接池分裂。
     if engine is None and (auth_access is None or audio_sink is None):
@@ -82,6 +86,22 @@ def create_app(
             access_tokens,
         )
 
+    # Gated on mode "1": mode "2" never reaches a live turn (see _build_agent below), so
+    # building this client for it would just leak a connection nobody ever closes -- the
+    # mode-2 branch raises before create_app() returns, so lifespan's finally never runs.
+    location_service: LocationSearchService | None = None
+    if (
+        audio_sink is None
+        and settings.voice_agent_mode == "1"
+        and settings.tencent_maps_is_configured()
+    ):
+        owned_http_client = httpx.AsyncClient(timeout=settings.tencent_map_timeout_seconds)
+        location_service = LocationSearchService(
+            TencentMapsLocationPort(
+                owned_http_client, settings.tencent_map_api_key, settings.tencent_map_base_url
+            )
+        )
+
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
         try:
@@ -89,6 +109,8 @@ def create_app(
         finally:
             if owned_engine is not None:
                 owned_engine.dispose()
+            if owned_http_client is not None:
+                await owned_http_client.aclose()
 
     application = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
     if settings.cors_allowed_origins:
@@ -109,12 +131,15 @@ def create_app(
     if audio_sink is None:
         assert session_factory is not None
         audio_sink = AgentAudioSink(
-            _build_agent(settings, WebSocketResultSink(connections), session_factory)
+            _build_agent(
+                settings, WebSocketResultSink(connections), session_factory, location_service
+            )
         )
 
     voice_streams = VoiceStreamHandlers(
         audio_sink,
         max_audio_duration_ms=settings.ws_max_audio_duration_ms,
+        max_continuous_audio_duration_ms=settings.ws_max_continuous_audio_duration_ms,
         queue_max_chunks=settings.ws_audio_queue_max_chunks,
     )
     router = MessageRouter()
@@ -164,10 +189,11 @@ def _build_agent(
     settings: Settings,
     result_sink: WebSocketResultSink,
     session_factory: sessionmaker[Session],
+    location_service: LocationSearchService | None,
 ) -> Agent:
     """Dispatch on TIMEFLOW_VOICE_AGENT_MODE to the agent backend it selects."""
     if settings.voice_agent_mode == "1":
-        return _build_realtime_agent(settings, result_sink, session_factory)
+        return _build_realtime_agent(settings, result_sink, session_factory, location_service)
     if settings.voice_agent_mode == "2":
         raise RuntimeError(
             "TIMEFLOW_VOICE_AGENT_MODE=2 selects the LLM+ASR+TTS conversation agent, "
@@ -182,6 +208,7 @@ def _build_realtime_agent(
     settings: Settings,
     result_sink: WebSocketResultSink,
     session_factory: sessionmaker[Session],
+    location_service: LocationSearchService | None,
 ) -> Agent:
     """Return the realtime agent when it is configured, otherwise the stand-in.
 
@@ -196,8 +223,19 @@ def _build_realtime_agent(
             lambda: SqlAlchemyScheduleUnitOfWork(session_factory)
         )
 
-        def bind_account(account_id: str) -> ToolBox:
-            return ToolBox(account_id, schedule_service)
+        async def bind_account(
+            account_id: str, timezone: str, client_location: ClientLocation | None
+        ) -> ToolBox:
+            # Preparing a LocationSearchContext from client_location -- and retrying it
+            # if the provider is briefly unreachable -- is ToolBox's job, not this
+            # factory's; see its docstring.
+            return ToolBox(
+                account_id,
+                schedule_service,
+                timezone,
+                location_service=location_service,
+                client_location=client_location,
+            )
 
         return RealtimeAgent(
             QwenAudioSessionFactory(
@@ -207,6 +245,9 @@ def _build_realtime_agent(
                     model=settings.aliyun_audio_model,
                     region=settings.aliyun_audio_region,
                     voice=settings.aliyun_audio_voice,
+                    turn_detection=settings.aliyun_audio_turn_detection,
+                    vad_threshold=settings.aliyun_audio_vad_threshold,
+                    vad_silence_duration_ms=settings.aliyun_audio_vad_silence_duration_ms,
                 )
             ),
             result_sink,

@@ -21,7 +21,61 @@ from timeflow.business.calendar import (
     ScheduleStatus,
     ScheduleType,
 )
+from timeflow.intelligence.location import (
+    ClientLocation,
+    Coordinate,
+    CurrentArea,
+    LocationConnectionError,
+    LocationSearchContext,
+    LocationSearchService,
+    ProviderLocationCandidate,
+)
 from timeflow.intelligence.realtime.schedule_tools import ToolBox
+
+
+class _FakeLocationPort:
+    """Return scripted provider candidates, mirroring tests/intelligence/location's fake.
+
+    reverse_failures counts down: that many reverse() calls raise before one succeeds,
+    for exercising ToolBox's retry-on-the-next-call behavior.
+    """
+
+    def __init__(
+        self,
+        candidates: tuple[ProviderLocationCandidate, ...] = (),
+        *,
+        reverse_failures: int = 0,
+    ) -> None:
+        self.candidates = candidates
+        self.queries: list[str] = []
+        self._reverse_failures = reverse_failures
+        self.reverse_calls = 0
+
+    async def reverse(self, coordinate: Coordinate) -> CurrentArea:
+        self.reverse_calls += 1
+        if self._reverse_failures > 0:
+            self._reverse_failures -= 1
+            raise LocationConnectionError("provider briefly unreachable")
+        return CurrentArea("上海市", "上海市")
+
+    async def search(
+        self, query: str, context: LocationSearchContext
+    ) -> tuple[ProviderLocationCandidate, ...]:
+        self.queries.append(query)
+        return self.candidates
+
+
+def _location_context() -> LocationSearchContext:
+    return LocationSearchContext(
+        CurrentArea("上海市", "上海市"),
+        Coordinate(31.22846, 121.47822, "gcj02"),
+        "gcj02",
+    )
+
+
+def _client_location() -> ClientLocation:
+    return ClientLocation(Coordinate(31.22846, 121.47822, "wgs84"))
+
 
 SNAPSHOT = ScheduleSnapshot(
     id="sch_1",
@@ -322,3 +376,117 @@ def test_a_blank_required_response_is_reported_as_absent() -> None:
     )
     assert result.question is not None
     assert result.question["required_response"] is None
+
+
+def test_ending_the_conversation_reaches_the_client_and_not_the_calendar() -> None:
+    result = run("end_conversation", {})
+    assert json.loads(result.output) == {"status": "ok"}
+    assert result.ends_conversation is True
+    assert result.outcome is None
+    assert result.question is None
+
+
+def test_every_other_tool_leaves_the_conversation_running() -> None:
+    for tool in refusing_toolbox().tools():
+        name = tool["function"]["name"]
+        if name == "end_conversation":
+            continue
+        result = run(name, {})
+        assert result.ends_conversation is False
+
+
+def test_location_search_is_registered_alongside_the_schedule_tools() -> None:
+    names = {tool["function"]["name"] for tool in refusing_toolbox().tools()}
+    assert names == {
+        "schedule_create",
+        "schedule_query",
+        "schedule_update",
+        "schedule_delete",
+        "request_user_input",
+        "end_conversation",
+        "location_search",
+    }
+
+
+def test_location_search_degrades_to_provider_unavailable_without_a_location_context() -> None:
+    """No location_service/location_context given -- refusing_toolbox() supplies neither
+    -- so location_search reports itself unavailable rather than being withheld from the
+    schema (the model can always call it; it just may not always do anything).
+    """
+    result = run("location_search", {"query": "万达广场"})
+    assert json.loads(result.output) == {"status": "provider_unavailable", "candidates": []}
+    assert result.outcome is None
+
+
+def test_location_search_returns_real_candidates_when_configured() -> None:
+    candidate = ProviderLocationCandidate(
+        "poi-1",
+        "万达广场",
+        "银川路 100 号",
+        "商场",
+        Coordinate(31.23, 121.48, "gcj02"),
+        "上海市",
+        "上海市",
+        "闵行区",
+    )
+    box = ToolBox(
+        "acc_test",
+        RecordingService(),
+        location_service=LocationSearchService(_FakeLocationPort((candidate,))),
+        client_location=_client_location(),
+    )
+
+    result = run("location_search", {"query": "万达广场"}, box)
+
+    payload = json.loads(result.output)
+    assert payload["status"] == "ok"
+    assert [item["name"] for item in payload["candidates"]] == ["万达广场"]
+
+
+def test_location_search_bypasses_datetime_normalization() -> None:
+    """A query containing a 'T'-like substring must reach the tool unmangled -- proving
+    location_search is dispatched before normalize_datetime_args, unlike the schedule tools.
+    """
+    box = ToolBox(
+        "acc_test",
+        RecordingService(),
+        location_service=LocationSearchService(_FakeLocationPort(())),
+        client_location=_client_location(),
+    )
+
+    result = run("location_search", {"query": "2026-09-08T15:00 咖啡馆"}, box)
+
+    payload = json.loads(result.output)
+    assert payload["status"] == "ok"
+
+
+def test_location_search_retries_a_failed_prepare_on_the_next_call() -> None:
+    """A provider outage when the context is first needed must not disable
+    location_search for the rest of a session that can hold for minutes -- unlike a
+    successfully prepared context, a failed one is never remembered.
+    """
+    candidate = ProviderLocationCandidate(
+        "poi-1",
+        "万达广场",
+        "银川路 100 号",
+        "商场",
+        Coordinate(31.23, 121.48, "gcj02"),
+        "上海市",
+        "上海市",
+        "闵行区",
+    )
+    port = _FakeLocationPort((candidate,), reverse_failures=1)
+    box = ToolBox(
+        "acc_test",
+        RecordingService(),
+        location_service=LocationSearchService(port),
+        client_location=_client_location(),
+    )
+
+    first = json.loads(run("location_search", {"query": "万达广场"}, box).output)
+    second = json.loads(run("location_search", {"query": "万达广场"}, box).output)
+
+    assert first == {"status": "provider_unavailable", "candidates": []}
+    assert second["status"] == "ok"
+    assert [item["name"] for item in second["candidates"]] == ["万达广场"]
+    assert port.reverse_calls == 2

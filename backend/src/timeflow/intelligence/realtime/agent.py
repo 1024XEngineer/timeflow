@@ -4,12 +4,14 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
+from timeflow.intelligence.location import ClientLocation, Coordinate, LocationInputError
 from timeflow.intelligence.ports import (
+    AudioCanceled,
     AudioReply,
     CommandResult,
     DialogueQuestion,
@@ -65,6 +67,24 @@ def new_question_id() -> str:
     return f"question_{uuid4().hex}"
 
 
+def _client_location_from_stream(stream: StreamInfo) -> ClientLocation | None:
+    """Build a validated client position from the stream's raw wire fields, or None.
+
+    None covers every reason location_search should degrade rather than the turn
+    failing: no permission granted (all three fields unset), an unrecognized reference
+    system, or coordinates the location module itself rejects as out of range.
+    """
+    if stream.latitude is None or stream.longitude is None or stream.coordinate_system is None:
+        return None
+    system = stream.coordinate_system.lower()
+    if system not in ("wgs84", "gcj02"):
+        return None
+    try:
+        return ClientLocation(Coordinate(stream.latitude, stream.longitude, system))  # type: ignore[arg-type]
+    except LocationInputError:
+        return None
+
+
 @dataclass(slots=True)
 class _Held:
     """A session kept open past its turn, so the next turn remembers this one."""
@@ -72,6 +92,7 @@ class _Held:
     session: RealtimeSession
     tools: ToolBox | None
     opened_at: float
+    voice_mode: str
     turns: int = 0
 
 
@@ -83,8 +104,9 @@ class RealtimeAgent:
         sessions: RealtimeSessionFactory,
         result_sink: ResultSink,
         *,
-        tools_factory: Callable[[str], ToolBox] | None = None,
-        instructions: Callable[[], str] | None = None,
+        tools_factory: Callable[[str, str, ClientLocation | None], Awaitable[ToolBox]]
+        | None = None,
+        instructions: Callable[[str], str] | None = None,
         audio_id_factory: Callable[[], str] | None = None,
         reply_id_factory: Callable[[], str] | None = None,
         message_id_factory: Callable[[], str] | None = None,
@@ -96,7 +118,7 @@ class RealtimeAgent:
         self._result_sink = result_sink
         self._tools_factory = tools_factory
         # Called per session, so a long-running server keeps saying what day it is now.
-        self._instructions = instructions or (lambda: "")
+        self._instructions = instructions or (lambda _timezone: "")
         self._audio_id_factory = audio_id_factory or new_audio_id
         self._reply_id_factory = reply_id_factory or new_reply_id
         self._message_id_factory = message_id_factory or new_message_id
@@ -108,45 +130,68 @@ class RealtimeAgent:
         self._locks: dict[tuple[str, str], asyncio.Lock] = {}
 
     async def handle_audio(self, chunks: AsyncIterator[bytes], stream: StreamInfo) -> None:
-        """Run one turn on the conversation's session, keeping it for the next turn."""
+        """Run the conversation's session for this stream, keeping it for the next one.
+
+        Push-to-talk: one stream is one reply, and this returns once the reply is done.
+        Continuous mode: one stream may carry many replies, each bounded by the vendor's
+        own turn detection; this returns once the client closes its microphone.
+        """
         key = (stream.account_id, stream.conversation_id)
         await self._close_spent()
         self._forget_idle_locks()
 
         async with self._lock_for(key):
-            held = await self._session_for(key)
+            held = await self._session_for(key, stream)
             if held is None:
                 return
 
             turn = _Turn(
                 self._result_sink,
                 stream,
-                self._audio_id_factory(),
-                self._reply_id_factory(),
                 session=held.session,
                 tools=held.tools,
+                audio_id_factory=self._audio_id_factory,
+                reply_id_factory=self._reply_id_factory,
                 message_id_factory=self._message_id_factory,
                 question_id_factory=self._question_id_factory,
             )
+            # Feeding starts before listening, matching the real causal order: the model
+            # cannot transcribe audio it has not been sent, so a transcript's reported
+            # duration is counted against the audio that actually produced it. Nothing is
+            # missed by reading a moment later -- frames that arrive first are buffered.
+            forwarding = asyncio.create_task(self._forward_audio(chunks, held.session, turn))
             pumping = asyncio.create_task(held.session.pump(turn))
             reusable = False
             try:
-                sent_bytes = 0
-                async for chunk in chunks:
-                    await held.session.send_audio(chunk)
-                    sent_bytes += len(chunk)
-                await held.session.finish_input()
-                turn.note_input(sent_bytes)
-                await pumping
+                # Both sides are watched, because either can end the turn. In continuous
+                # mode the microphone stays open until the user hangs up, so a pump that
+                # exited early -- a vendor error ends it -- would otherwise go unnoticed
+                # and leave this waiting on a client that is itself waiting to be told the
+                # session is over.
+                await asyncio.wait({forwarding, pumping}, return_when=asyncio.FIRST_COMPLETED)
+                if forwarding.done():
+                    # Re-raised rather than swallowed: a broken input stream is the
+                    # caller's to hear about.
+                    await forwarding
+                    if held.voice_mode == "push_to_talk":
+                        await pumping
+                    elif not pumping.done():
+                        # The vendor decides when each reply starts and ends, so pump()
+                        # never returns on its own; once the microphone closes there is
+                        # nothing further for it to report. Telling the vendor to stop
+                        # first matters: cancelling the pump alone stops us from reading
+                        # while it keeps generating into the same socket, and since this
+                        # session gets reused those frames would bleed into the next turn.
+                        await held.session.cancel_response()
                 reusable = turn.failure is None
-            except BaseException:
-                # Cancelled on every exit, not just the caller's: an orphaned pump sits
-                # in recv().
-                pumping.cancel()
-                with contextlib.suppress(BaseException):
-                    await pumping
-                raise
             finally:
+                # Cancelled on every exit, not just the caller's: an orphaned pump sits in
+                # recv(), and an orphaned forwarder sits on the client's stream.
+                forwarding.cancel()
+                pumping.cancel()
+                for task in (forwarding, pumping):
+                    with contextlib.suppress(BaseException):
+                        await task
                 await turn.close()
                 # Kept only after a turn it survived. A failure, an exception, or a client
                 # that hung up mid-turn leaves state nobody has reasoned about, and
@@ -156,21 +201,46 @@ class RealtimeAgent:
                 else:
                     await self._discard(key)
 
-    async def _session_for(self, key: tuple[str, str]) -> _Held | None:
-        """Return the conversation's open session, opening one when there is none."""
+    async def _forward_audio(
+        self, chunks: AsyncIterator[bytes], session: RealtimeSession, turn: "_Turn"
+    ) -> None:
+        """Feed the client's audio to the model until the stream ends."""
+        async for chunk in chunks:
+            await session.send_audio(chunk)
+            turn.note_input_chunk(len(chunk))
+        await session.finish_input()
+
+    async def _session_for(self, key: tuple[str, str], stream: StreamInfo) -> _Held | None:
+        """Return the conversation's open session, opening one when there is none.
+
+        The timezone and location only matter for a session opened fresh here -- a held
+        session keeps whatever zone and location were live when it opened. A conversation
+        crossing zones or moving mid-flight is not handled; it is replaced the ordinary way
+        once its budget runs out. A voice mode change is handled at once instead: the vendor
+        only accepts turn_detection at connect time, so a held session in the wrong mode is
+        discarded and reopened.
+        """
         held = self._held.get(key)
         if held is not None:
-            return held
+            if held.voice_mode == stream.voice_mode:
+                return held
+            await self._discard(key)
 
         account_id, _ = key
-        tools = self._tools_factory(account_id) if self._tools_factory is not None else None
+        timezone = stream.timezone
+        voice_mode = stream.voice_mode
+        tools = (
+            await self._tools_factory(account_id, timezone, _client_location_from_stream(stream))
+            if self._tools_factory is not None
+            else None
+        )
         schemas = tools.tools() if tools is not None else []
         try:
-            session = await self._sessions.open(self._instructions(), schemas)
+            session = await self._sessions.open(self._instructions(timezone), schemas, voice_mode)
         except Exception:
             logger.exception("could not open a realtime session")
             return None
-        fresh = _Held(session=session, tools=tools, opened_at=self._clock())
+        fresh = _Held(session=session, tools=tools, opened_at=self._clock(), voice_mode=voice_mode)
         self._held[key] = fresh
         return fresh
 
@@ -225,44 +295,60 @@ class RealtimeAgent:
 
 
 class _Turn:
-    """One turn's model output, translated into ResultSink calls as it arrives."""
+    """One conversation stream's model output, translated into ResultSink calls.
+
+    Push-to-talk gets exactly one reply per stream. Continuous mode may get many: each
+    turn_completed() or interrupted() settles the current reply and resets state so ids
+    and accumulated text start fresh for the next one -- the two modes need no separate
+    code path here, since push-to-talk's single reply is just the n=1 case of the same
+    settle-then-reset cycle.
+    """
 
     def __init__(
         self,
         result_sink: ResultSink,
         stream: StreamInfo,
-        audio_id: str,
-        reply_id: str,
         *,
         session: RealtimeSession,
         tools: ToolBox | None,
+        audio_id_factory: Callable[[], str],
+        reply_id_factory: Callable[[], str],
         message_id_factory: Callable[[], str],
         question_id_factory: Callable[[], str],
     ) -> None:
-        """Start a turn that has heard nothing and said nothing."""
+        """Start a stream that has heard nothing and said nothing yet."""
         self._result_sink = result_sink
         self._stream = stream
-        self._audio_id = audio_id
-        self._reply_id = reply_id
         self._session = session
         self._tools = tools
+        self._audio_id_factory = audio_id_factory
+        self._reply_id_factory = reply_id_factory
         self._message_id_factory = message_id_factory
         self._question_id_factory = question_id_factory
+        # None between replies; assigned on first use so each reply gets a fresh id.
+        self._audio_id: str | None = None
+        self._reply_id: str | None = None
         self._spoken = ""
         self._purpose = REPLY_PURPOSE
         self._input_bytes = 0
         self._audio: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._speaking: asyncio.Task[None] | None = None
+        self._ends_conversation = False
         self.failure: str | None = None
 
-    def note_input(self, sent_bytes: int) -> None:
-        """Record how much audio the user sent, for the transcript's duration."""
-        self._input_bytes = sent_bytes
+    def note_input_chunk(self, chunk_bytes: int) -> None:
+        """Accumulate audio sent since the last transcript, for its reported duration.
+
+        Continuous mode hears many transcripts per stream; each one's duration must
+        reflect only the audio sent since the previous one, not the whole stream.
+        """
+        self._input_bytes += chunk_bytes
 
     async def heard(self, text: str) -> None:
         """Push what the user was heard to say."""
         if not text:
             logger.info("realtime model returned an empty transcript")
+            self._input_bytes = 0
             return
         await self._result_sink.deliver_transcript(
             HeardSpeech(
@@ -272,9 +358,12 @@ class _Turn:
             ),
             self._stream,
         )
+        self._input_bytes = 0
 
     async def spoke(self, text: str) -> None:
         """Push the reply's wording so far, and keep it for the audio's opening message."""
+        if self._reply_id is None:
+            self._reply_id = self._reply_id_factory()
         self._spoken = text
         await self._result_sink.deliver_reply_text(
             ReplyText(reply_id=self._reply_id, speech_text=text), self._stream
@@ -283,6 +372,7 @@ class _Turn:
     async def audio(self, data: bytes) -> None:
         """Queue one chunk, starting the delivery on the first one."""
         if self._speaking is None:
+            self._audio_id = self._audio_id_factory()
             self._speaking = asyncio.create_task(self._speak())
         await self._audio.put(data)
 
@@ -314,7 +404,14 @@ class _Turn:
             )
         if result.question is not None:
             await self._ask(result.question)
-        await self._session.send_tool_result(call_id, result.output)
+        if result.ends_conversation:
+            self._ends_conversation = True
+        # A tool that ends the conversation gets no follow-up reply: the model said its
+        # goodbye in the response that called the tool, and asking for another one only
+        # produces a second one -- which the vendor may start by cutting the first short.
+        await self._session.send_tool_result(
+            call_id, result.output, respond=not result.ends_conversation
+        )
 
     async def _ask(self, question: dict[str, Any]) -> None:
         """Push a question and mark the reply as one, so the audio says which it is."""
@@ -330,25 +427,73 @@ class _Turn:
             self._stream,
         )
 
+    async def turn_completed(self) -> None:
+        """One reply on this stream finished normally; continuous mode only."""
+        await self._finish_reply(canceled=False)
+
+    async def interrupted(self) -> None:
+        """The user spoke over this reply; the session has already cancelled it."""
+        await self._finish_reply(canceled=True)
+
     async def failed(self, message: str) -> None:
-        """Record that the model could not finish this turn."""
+        """Record that the session could not continue."""
         self.failure = message
-        logger.warning("realtime session failed", extra={"reason": message})
+        # The reason is interpolated into the message rather than passed via extra=:
+        # this project's configured log format string does not reference extra fields,
+        # so extra={"reason": message} alone would silently print no reason at all.
+        logger.warning("realtime session failed: %s", message)
+        # Continuous mode holds a full-screen call open until it is told the session
+        # ended, and a failure ends it as surely as end_conversation does. Saying nothing
+        # would leave that call up around a microphone nobody is reading any more.
+        # Push-to-talk needs no such message: its stream ends on its own either way.
+        if self._stream.voice_mode != "push_to_talk":
+            self._ends_conversation = True
 
     async def close(self) -> None:
-        """Settle the wording, then finish the audio -- in that order; see close's test."""
+        """Settle whatever reply is in flight; a no-op if the last one already was."""
+        await self._finish_reply(canceled=False)
+
+    async def _finish_reply(self, *, canceled: bool) -> None:
+        """Settle the current reply's wording, then its audio -- in that order; see
+        close's test -- then reset so the next reply on this stream starts fresh.
+        """
         if self._spoken:
+            assert self._reply_id is not None
             await self._result_sink.deliver_reply_text(
                 ReplyText(reply_id=self._reply_id, speech_text=self._spoken, done=True),
                 self._stream,
             )
-        if self._speaking is None:
-            return
-        await self._audio.put(None)
-        await self._speaking
+        if self._speaking is not None:
+            if canceled:
+                assert self._audio_id is not None
+                await self._result_sink.deliver_canceled(
+                    AudioCanceled(audio_id=self._audio_id), self._stream
+                )
+            await self._audio.put(None)
+            await self._speaking
+        elif canceled:
+            # This reply's bytes were already all sent -- self._speaking settled on its
+            # own before the barge-in arrived -- but the model generates audio faster
+            # than it plays back, so the phone can still be sounding it out. The session
+            # only calls interrupted() this late when its own playable-until estimate
+            # says that's still plausible, so the client is told to stop regardless of
+            # what this turn still has queued locally. audio_id is empty because there
+            # is no reply left here to name; the client's handler does not read it.
+            await self._result_sink.deliver_canceled(AudioCanceled(audio_id=""), self._stream)
+        self._spoken = ""
+        self._reply_id = None
+        self._audio_id = None
+        self._speaking = None
+        self._purpose = REPLY_PURPOSE
+        if self._ends_conversation:
+            # Only after the settling above -- any farewell this reply spoke has already
+            # gone out in full, so telling the client to hang up here never cuts it short.
+            self._ends_conversation = False
+            await self._result_sink.deliver_session_end(self._stream)
 
     async def _speak(self) -> None:
         """Hand the queued audio to the sink as one continuous reply."""
+        assert self._audio_id is not None
         reply = AudioReply(
             audio_id=self._audio_id,
             audio_format=REPLY_AUDIO_FORMAT,

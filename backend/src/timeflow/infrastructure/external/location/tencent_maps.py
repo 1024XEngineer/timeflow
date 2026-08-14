@@ -115,6 +115,14 @@ class TencentMapsLocationPort:
             raise LocationProtocolError("Tencent Maps returned an invalid response")
         status = payload.get("status")
         if isinstance(status, bool) or not isinstance(status, int) or status != 0:
+            # Tencent's status/message say why (quota, auth, bad params, ...); neither
+            # contains user data, so logging them is safe and is the only way to tell
+            # these apart later -- LocationProtocolError itself carries no detail on.
+            logger.warning(
+                "Tencent Maps rejected the request: status=%s message=%s",
+                status,
+                payload.get("message"),
+            )
             raise LocationProtocolError("Tencent Maps rejected the request")
         return payload
 

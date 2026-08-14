@@ -1,3 +1,6 @@
+/** push_to_talk | continuous；决定服务端 vendor 的 turn detection 行为。 */
+export type VoiceMode = 'push_to_talk' | 'continuous';
+
 /** WebSocket 会话握手的唯一线上契约，避免基础设施自行猜测服务端响应。 */
 export interface SessionHello {
   readonly type: 'session.hello';
@@ -10,6 +13,8 @@ export interface SessionHello {
     readonly longitude?: number;
     /** 标注 latitude/longitude 的坐标系；设备定位给的是原始值，不做转换。 */
     readonly coordinate_system?: 'WGS84';
+    /** 不带时服务端按 push_to_talk 处理。 */
+    readonly voice_mode?: VoiceMode;
   };
 }
 
@@ -47,6 +52,8 @@ export function createSessionHello(options: {
   readonly timezone?: string;
   /** 拿不到定位就不带；原始 WGS84，不做坐标系转换，由消费方自己决定要不要转。 */
   readonly location?: { readonly latitude: number; readonly longitude: number };
+  /** 不带时服务端按 push_to_talk 处理。 */
+  readonly voiceMode?: VoiceMode;
 }): SessionHello {
   return {
     payload: {
@@ -56,6 +63,7 @@ export function createSessionHello(options: {
       latitude: options.location?.latitude,
       longitude: options.location?.longitude,
       timezone: options.timezone,
+      voice_mode: options.voiceMode,
     },
     request_id: options.requestId,
     type: 'session.hello',

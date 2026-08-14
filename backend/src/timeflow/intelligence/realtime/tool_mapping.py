@@ -23,14 +23,13 @@ from timeflow.business.calendar import (
 )
 
 _EnumT = TypeVar("_EnumT", bound=StrEnum)
-LOCAL = ZoneInfo("Asia/Shanghai")
 
 
 class ToolInputError(ValueError):
     """A tool payload cannot be mapped to the business contract."""
 
 
-def normalize_datetime_args(arguments: dict[str, object]) -> dict[str, object]:
+def normalize_datetime_args(arguments: dict[str, object], tz: ZoneInfo) -> dict[str, object]:
     """Add local timezone offset to datetime strings that lack one.
 
     Mutates and returns the input dict for chaining.
@@ -42,16 +41,18 @@ def normalize_datetime_args(arguments: dict[str, object]) -> dict[str, object]:
             except ValueError:
                 continue
             # A "+" or "Z" check alone misses negative offsets like "-05:00", which
-            # fromisoformat parses as already aware -- reattaching LOCAL to those would
+            # fromisoformat parses as already aware -- reattaching tz to those would
             # silently shift the instant by the difference between the two zones.
             if parsed.tzinfo is None or parsed.utcoffset() is None:
-                arguments[key] = parsed.replace(tzinfo=LOCAL).isoformat()
+                arguments[key] = parsed.replace(tzinfo=tz).isoformat()
         elif isinstance(value, dict):
-            normalize_datetime_args(value)
+            normalize_datetime_args(value, tz)
     return arguments
 
 
-def map_create_schedule_command(arguments: Mapping[str, object]) -> CreateScheduleCommand:
+def map_create_schedule_command(
+    arguments: Mapping[str, object], tz: ZoneInfo
+) -> CreateScheduleCommand:
     """Map model arguments into the stable create business command."""
     allowed = {"schedule_type", "schedule_kind", *ScheduleUpdatePatch.__optional_keys__}
     _reject_unknown(arguments, allowed)
@@ -61,7 +62,7 @@ def map_create_schedule_command(arguments: Mapping[str, object]) -> CreateSchedu
         title=_required_string(arguments, "title"),
         # Both default rather than being asked of the model: one deployment, one zone, and
         # a model made to state them every call is a model that eventually invents them.
-        timezone=_optional_string(arguments, "timezone") or str(LOCAL.key),
+        timezone=_optional_string(arguments, "timezone") or str(tz.key),
         is_all_day=_optional_bool(arguments, "is_all_day", default=False),
         start_time=_optional_datetime(arguments, "start_time"),
         end_time=_optional_datetime(arguments, "end_time"),
@@ -208,19 +209,39 @@ def _optional_bool(arguments: Mapping[str, object], field: str, *, default: bool
 
 
 def _required_int(arguments: Mapping[str, object], field: str, *, minimum: int) -> int:
-    value = arguments.get(field)
-    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+    value = _coerce_int(arguments.get(field), field)
+    if value is None or value < minimum:
         raise ToolInputError(f"{field} must be an integer greater than or equal to {minimum}")
     return value
 
 
 def _optional_int(arguments: Mapping[str, object], field: str, *, minimum: int) -> int | None:
-    value = arguments.get(field)
-    if value is None:
+    raw = arguments.get(field)
+    if raw is None:
         return None
-    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+    value = _coerce_int(raw, field)
+    if value is None or value < minimum:
         raise ToolInputError(f"{field} must be an integer greater than or equal to {minimum}")
     return value
+
+
+def _coerce_int(value: object, field: str) -> int | None:
+    """Accept a native int or an integer-valued numeric string.
+
+    Same reasoning as _optional_float: a value copied verbatim from a previous tool's
+    JSON output (e.g. reminder_offset_minutes) sometimes arrives quoted, and the model
+    does not reliably self-correct on retry.
+    """
+    if isinstance(value, bool):
+        raise ToolInputError(f"{field} must be an integer")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            raise ToolInputError(f"{field} must be an integer") from None
+    raise ToolInputError(f"{field} must be an integer")
 
 
 def _optional_float(
@@ -233,7 +254,20 @@ def _optional_float(
     value = arguments.get(field)
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool):
+        raise ToolInputError(f"{field} must be a number or null")
+    if isinstance(value, str):
+        # A location_search candidate's own latitude/longitude are real JSON numbers,
+        # but the model sometimes quotes a long-precision one when copying it verbatim
+        # into schedule_create's arguments -- found retrying the exact same schedule_create
+        # four times with a quoted value and never self-correcting. A numeric string this
+        # well-formed is worth accepting rather than failing a turn the model already got
+        # the value right for.
+        try:
+            value = float(value)
+        except ValueError:
+            raise ToolInputError(f"{field} must be a number or null") from None
+    elif not isinstance(value, (int, float)):
         raise ToolInputError(f"{field} must be a number or null")
     result = float(value)
     if not minimum <= result <= maximum:

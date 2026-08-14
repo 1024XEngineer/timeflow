@@ -23,7 +23,11 @@ jest.mock('../../../src/features/schedule/presentation/ScheduleCalendarScreen', 
 // native module 注册，AppRoot 一 import 到就会在模块加载阶段直接抛错；跟上面的
 // SQLite/日历屏一样，只测装配逻辑，不需要真实实现。
 jest.mock('../../../src/features/assistant/data/audio/ExpoAudioCapture', () => ({
-  ExpoAudioCapture: jest.fn(),
+  ExpoAudioCapture: jest.fn().mockImplementation(() => ({
+    requestPermission: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
+    start: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    stop: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+  })),
 }));
 jest.mock('../../../src/features/assistant/data/audio/ExpoAudioPlayback', () => ({
   ExpoAudioPlayback: jest.fn(),

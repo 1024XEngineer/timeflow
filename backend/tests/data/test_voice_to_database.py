@@ -80,9 +80,12 @@ class ToolCallingSession:
     async def finish_input(self) -> None:
         """Accept the end of the user's turn."""
 
-    async def send_tool_result(self, call_id: str, output: str) -> None:
+    async def send_tool_result(self, call_id: str, output: str, *, respond: bool = True) -> None:
         """Record what the tool answered, which is what the model would read."""
         self.tool_results.append((call_id, output))
+
+    async def cancel_response(self) -> None:
+        """Push-to-talk never calls this; present only to satisfy the protocol."""
 
     async def close(self) -> None:
         """Record release."""
@@ -104,7 +107,9 @@ class OneSessionFactory:
         self._session = session
         self.tools: list[dict[str, Any]] = []
 
-    async def open(self, instructions: str, tools: list[dict[str, Any]]) -> ToolCallingSession:
+    async def open(
+        self, instructions: str, tools: list[dict[str, Any]], voice_mode: str
+    ) -> ToolCallingSession:
         """Record the registered tools and return the scripted session."""
         self.tools = tools
         return self._session
@@ -165,8 +170,8 @@ def _build_app(engine: Engine, session: ToolCallingSession) -> tuple[FastAPI, On
         lambda: SqlAlchemyScheduleUnitOfWork(session_factory)
     )
 
-    def bind_account(account_id: str) -> ToolBox:
-        return ToolBox(account_id, schedule_service)
+    def bind_account(account_id: str, timezone: str) -> ToolBox:
+        return ToolBox(account_id, schedule_service, timezone)
 
     agent = RealtimeAgent(
         factory,

@@ -1,60 +1,179 @@
+import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, spacing } from '../../../shared/ui/theme';
 import type { AssistantApplicationPort } from '../application/AssistantApplication';
+import type { ConversationTurnState } from '../domain/ConversationTurn';
 
+import { PhoneCallIcon } from './PhoneCallIcon';
+import { PushToTalkBar } from './PushToTalkBar';
 import { useAssistantConversation } from './useAssistantConversation';
-import { VoiceTalkButton } from './VoiceTalkButton';
+import { VoiceCallScreen } from './VoiceCallScreen';
+
+export type CallStatus = 'off' | 'listening' | 'speaking' | 'interrupted' | 'paused' | 'busy';
 
 interface AssistantVoiceOverlayProps {
-  application: AssistantApplicationPort;
+  pushToTalkApplication: AssistantApplicationPort;
+  continuousApplication: AssistantApplicationPort;
+}
+
+function callStatusFor(phase: ConversationTurnState['phase']): CallStatus {
+  switch (phase) {
+    case 'connecting':
+      return 'busy';
+    case 'listening':
+      return 'listening';
+    case 'speaking':
+    case 'asking':
+      return 'speaking';
+    case 'interrupted':
+      return 'interrupted';
+    case 'paused':
+      return 'paused';
+    default:
+      return 'off';
+  }
+}
+
+const CALL_ACTIVE_PHASES: ReadonlySet<ConversationTurnState['phase']> = new Set([
+  'connecting',
+  'listening',
+  'speaking',
+  'asking',
+  'interrupted',
+  'paused',
+]);
+
+const PTT_BUSY_PHASES: ReadonlySet<ConversationTurnState['phase']> = new Set([
+  'connecting',
+  'recording',
+  'awaiting_result',
+]);
+
+function titleFor(state: ConversationTurnState, replyText: string | null): string {
+  if (state.phase === 'asking') return state.speechText;
+  if (state.phase === 'error') return state.message;
+  if (replyText !== null) return replyText;
+  switch (state.phase) {
+    case 'connecting':
+      return '连接中…';
+    case 'listening':
+      return '聆听中…';
+    case 'interrupted':
+      return '已打断';
+    case 'speaking':
+      return '正在回复…';
+    case 'paused':
+      return '已暂停，点击圆圈继续';
+    default:
+      return '';
+  }
 }
 
 /**
- * 叠在日历屏上的语音入口：底部居中按住说话按钮，说完话上方冒出流式文字气泡
- * （voice.dialogue.reply）。外层 pointerEvents="box-none" 让按钮和气泡之外的
- * 区域穿透给下面的日历，不挡滚动和点日期。
+ * 叠在日历屏上的语音入口：底部一条长条状控件，左边一个圆形电话按钮进入免提
+ * 通话（沉浸式全屏层，仿豆包语音模式），右边一条长按说话的语音条——两条编排
+ * 路径（AssistantConversationService/AssistantContinuousConversationService）
+ * 各自独立连接（各自绑定不同 voiceMode 的 AuthenticatedVoiceTransport 实例，
+ * 共用同一个 AuthenticatedWebSocketClient），不共享一个 application 实例，
+ * 所以这里同时订阅两边的状态。没有模式切换的概念：用哪边完全看用户点了哪个
+ * 控件，另一边在对方进行中时置灰，不能同时抢麦克风。
  *
- * 气泡出现时会多铺一层全屏蒙层（"box-none" 让位给它），点气泡本身不关闭
- * （包了一层自己的 Pressable 吃掉点击），点气泡以外的任何地方——包括蒙层本身
- * 覆盖的日历区域——都会关掉气泡并打断正在播放的 TTS。按钮渲染在蒙层之后，
- * 层级更高，蒙层出现时按钮仍能正常按。
+ * 免提通话进行中会展开 VoiceCallScreen 铺满全屏；左上角收起只是把它降级回
+ * 长条状入口，连接和麦克风不受影响，真正挂断走全屏层里的"结束对话"。
  */
-export function AssistantVoiceOverlay({ application }: AssistantVoiceOverlayProps) {
-  const { dismissReply, endTurn, replyText, soundLevel, startTurn, state } =
-    useAssistantConversation(application);
-  const isRecording = state.phase === 'recording';
+export function AssistantVoiceOverlay({
+  pushToTalkApplication,
+  continuousApplication,
+}: AssistantVoiceOverlayProps) {
+  const ptt = useAssistantConversation(pushToTalkApplication);
+  const call = useAssistantConversation(continuousApplication);
+  const [expanded, setExpanded] = useState(false);
+
+  const isCallActive = CALL_ACTIVE_PHASES.has(call.state.phase);
+  const isPttBusy = PTT_BUSY_PHASES.has(ptt.state.phase);
+
+  // 通话挂断（回到 idle）之后全屏层跟着收起——渲染期间同步，不用 effect，
+  // 避免多触发一轮 commit（跟 useAssistantConversation 里 trackedApplication
+  // 的处理是同一个原因）。
+  const [trackedCallPhase, setTrackedCallPhase] = useState(call.state.phase);
+  if (trackedCallPhase !== call.state.phase) {
+    setTrackedCallPhase(call.state.phase);
+    if (call.state.phase === 'idle' && expanded) {
+      setExpanded(false);
+    }
+  }
+
+  if (expanded) {
+    return (
+      <VoiceCallScreen
+        onCollapse={() => setExpanded(false)}
+        onEnd={() => void call.endTurn()}
+        onInterrupt={() => void call.dismissReply()}
+        onTogglePause={() => call.togglePause()}
+        status={callStatusFor(call.state.phase)}
+        title={titleFor(call.state, call.replyText)}
+      />
+    );
+  }
 
   return (
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
-      {/* 铺满全屏的蒙层：点气泡和按钮以外的任何地方（包括上面的日历区域）都会
-          命中这层，因为它渲染在 overlay 内容之前、又是 box-none 容器唯一会
-          拦截"空白处"点击的兜底。 */}
-      {replyText ? (
+      {/* 铺满全屏的蒙层：点气泡和长条以外的任何地方（包括上面的日历区域）都会
+          命中这层，因为它渲染在长条之前、又是 box-none 容器唯一会拦截"空白处"
+          点击的兜底。 */}
+      {ptt.replyText ? (
         <Pressable
           accessibilityLabel="关闭回复"
-          onPress={dismissReply}
+          onPress={ptt.dismissReply}
           style={StyleSheet.absoluteFill}
         />
       ) : null}
       <View pointerEvents="box-none" style={styles.overlay}>
-        {replyText ? (
+        {ptt.replyText ? (
           <Pressable onPress={() => {}} style={styles.bubble}>
-            <Text style={styles.bubbleText}>{replyText}</Text>
+            <Text style={styles.bubbleText}>{ptt.replyText}</Text>
           </Pressable>
         ) : null}
-        <VoiceTalkButton
-          isRecording={isRecording}
-          onPressIn={startTurn}
-          onPressOut={endTurn}
-          soundLevel={soundLevel}
-        />
+        <View style={styles.bar}>
+          <Pressable
+            accessibilityLabel="进入免提通话"
+            accessibilityRole="button"
+            disabled={isPttBusy}
+            onPress={() => {
+              setExpanded(true);
+              if (call.state.phase === 'idle' || call.state.phase === 'error') {
+                void call.startTurn();
+              }
+            }}
+            style={({ pressed }) => [
+              styles.callButton,
+              isPttBusy && styles.callButtonDisabled,
+              pressed && styles.callButtonPressed,
+            ]}
+          >
+            <PhoneCallIcon color={colors.onPrimary} size={20} />
+          </Pressable>
+          <PushToTalkBar
+            disabled={isCallActive}
+            isRecording={ptt.state.phase === 'recording'}
+            onPressIn={ptt.startTurn}
+            onPressOut={ptt.endTurn}
+            soundLevel={ptt.soundLevel}
+          />
+        </View>
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  bar: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.sm,
+    width: '100%',
+  },
   bubble: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
@@ -68,10 +187,25 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 15,
   },
+  callButton: {
+    alignItems: 'center',
+    backgroundColor: colors.text,
+    borderRadius: 999,
+    height: 52,
+    justifyContent: 'center',
+    width: 52,
+  },
+  callButtonDisabled: {
+    opacity: 0.4,
+  },
+  callButtonPressed: {
+    opacity: 0.86,
+  },
   overlay: {
     alignItems: 'center',
     bottom: spacing.xl,
     left: 0,
+    paddingHorizontal: spacing.lg,
     position: 'absolute',
     right: 0,
   },

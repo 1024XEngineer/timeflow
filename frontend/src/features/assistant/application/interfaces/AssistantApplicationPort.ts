@@ -8,6 +8,8 @@ export type AssistantApplicationDependencies = {
   location: import('../../../../infrastructure/location/LocationProvider').LocationProvider;
   /** voice.command.result 落地后写本地日历存储，供日历刷新读到。 */
   localScheduleWriter: import('./LocalScheduleWriterPort').LocalScheduleWriterPort;
+  /** 前后台切换通知；连续模式用它触发切后台自动静音。 */
+  appState: import('../../../../infrastructure/appState/AppStateProvider').AppStateProvider;
 };
 
 export interface AssistantApplicationOptions {
@@ -31,5 +33,7 @@ export interface AssistantApplicationPort {
   endTurn(): Promise<void>;
   /** 用户主动关掉回复气泡：清空气泡内容并打断正在播放的 TTS。 */
   dismissReply(): Promise<void>;
+  /** 连续模式独有：暂停/恢复麦克风推流，不挂断连接。按住说话不实现这个方法。 */
+  togglePause?(): void;
   dispose(): void;
 }
