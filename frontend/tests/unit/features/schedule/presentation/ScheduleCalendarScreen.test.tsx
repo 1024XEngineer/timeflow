@@ -29,6 +29,21 @@ function createService(): ScheduleCalendarReadService {
 }
 
 describe('ScheduleCalendarScreen location schedules', () => {
+  it('keeps accountId in the calendar data flow without rendering it', async () => {
+    const service = createService();
+    const accountId = 'internal-account-id-not-for-display';
+    render(
+      <ScheduleCalendarScreen accountId={accountId} service={service} timezone="Asia/Shanghai" />,
+    );
+
+    await waitFor(() => expect(service.getSchedulesByRange).toHaveBeenCalled());
+    expect(service.getSchedulesByRange).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId }),
+    );
+    expect(service.getLocationSchedules).toHaveBeenCalledWith({ accountId });
+    expect(screen.queryByText(accountId)).toBeNull();
+  });
+
   it('shows a location section that stays visible after selecting a day and changing month', async () => {
     const service = createService();
     render(
