@@ -118,20 +118,10 @@ export function AssistantVoiceOverlay({
   }
 
   return (
-    <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
-      {/* 铺满全屏的蒙层：点气泡和长条以外的任何地方（包括上面的日历区域）都会
-          命中这层，因为它渲染在长条之前、又是 box-none 容器唯一会拦截"空白处"
-          点击的兜底。 */}
-      {ptt.replyText ? (
-        <Pressable
-          accessibilityLabel="关闭回复"
-          onPress={ptt.dismissReply}
-          style={StyleSheet.absoluteFill}
-        />
-      ) : null}
+    <View style={styles.container}>
       <View pointerEvents="box-none" style={styles.overlay}>
         {ptt.replyText ? (
-          <Pressable onPress={() => {}} style={styles.bubble}>
+          <Pressable onPress={ptt.dismissReply} style={styles.bubble}>
             <Text style={styles.bubbleText}>{ptt.replyText}</Text>
           </Pressable>
         ) : null}
@@ -174,6 +164,15 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     width: '100%',
   },
+  container: {
+    backgroundColor: colors.surface,
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingBottom: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    width: '100%',
+  },
   bubble: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
@@ -203,10 +202,6 @@ const styles = StyleSheet.create({
   },
   overlay: {
     alignItems: 'center',
-    bottom: spacing.xl,
-    left: 0,
-    paddingHorizontal: spacing.lg,
-    position: 'absolute',
-    right: 0,
+    width: '100%',
   },
 });
