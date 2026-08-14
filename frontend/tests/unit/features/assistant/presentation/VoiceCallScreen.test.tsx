@@ -1,0 +1,62 @@
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { fireEvent, render, screen } from '@testing-library/react-native';
+
+import { VoiceCallScreen } from '../../../../../src/features/assistant/presentation/VoiceCallScreen';
+
+function renderScreen(overrides: Partial<Parameters<typeof VoiceCallScreen>[0]> = {}) {
+  const props = {
+    onCollapse: jest.fn(),
+    onEnd: jest.fn(),
+    onInterrupt: jest.fn(),
+    onTogglePause: jest.fn(),
+    status: 'listening' as const,
+    title: '正在听',
+    ...overrides,
+  };
+  render(<VoiceCallScreen {...props} />);
+  return props;
+}
+
+describe('VoiceCallScreen', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('shows the status title', () => {
+    renderScreen({ title: '正在说话' });
+    expect(screen.getByText('正在说话')).toBeTruthy();
+  });
+
+  it('collapses back to the bottom bar without ending the call', () => {
+    const props = renderScreen();
+    fireEvent.press(screen.getByLabelText('收起通话'));
+    expect(props.onCollapse).toHaveBeenCalledTimes(1);
+    expect(props.onEnd).not.toHaveBeenCalled();
+  });
+
+  it('interrupts only the current reply, not the whole call', () => {
+    const props = renderScreen();
+    fireEvent.press(screen.getByLabelText('打断当前对话'));
+    expect(props.onInterrupt).toHaveBeenCalledTimes(1);
+    expect(props.onEnd).not.toHaveBeenCalled();
+  });
+
+  it('ends the call', () => {
+    const props = renderScreen();
+    fireEvent.press(screen.getByLabelText('结束对话'));
+    expect(props.onEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('labels the center circle "暂停" while active and toggles pause on press', () => {
+    const props = renderScreen({ status: 'listening' });
+    const circle = screen.getByLabelText('暂停');
+    fireEvent.press(circle);
+    expect(props.onTogglePause).toHaveBeenCalledTimes(1);
+  });
+
+  it('labels the center circle "继续" once paused', () => {
+    renderScreen({ status: 'paused' });
+    expect(screen.getByLabelText('继续')).toBeTruthy();
+    expect(screen.queryByLabelText('暂停')).toBeNull();
+  });
+});
