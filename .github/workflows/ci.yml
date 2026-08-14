@@ -138,5 +138,8 @@ jobs:
       - name: Checks (lint, format, typecheck)
         run: npm run check
 
-      - name: Export build
+      - name: Export Android build
         run: npx expo export --platform android --output-dir dist
+
+      - name: Export Web build
+        run: npx expo export --platform web --output-dir dist-web && test -f dist-web/index.html
