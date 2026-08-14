@@ -93,6 +93,7 @@ export class ExpoAudioPlayback implements AudioPlaybackPort {
     const expoAudio = loadExpoAudio();
     if (expoAudio == null) return false;
 
+    let cancelWait: (() => void) | undefined;
     try {
       const modeOk = await this.ensureAudioMode(expoAudio);
       if (!modeOk) return false;
@@ -105,12 +106,14 @@ export class ExpoAudioPlayback implements AudioPlaybackPort {
       this.player.replace(buildAudioDataUri(data, format));
       this.player.volume = 1;
       this.activeScheduleId = scheduleId;
-      const started = this.waitUntilPlaying(this.player);
+      const wait = this.waitUntilPlaying(this.player);
+      cancelWait = wait.cancel;
       this.player.play();
-      const played = await started;
+      const played = await wait.promise;
       if (this.activeScheduleId !== scheduleId) return false;
       return played;
     } catch {
+      cancelWait?.();
       if (this.activeScheduleId === scheduleId) {
         this.activeScheduleId = null;
       }
@@ -137,8 +140,12 @@ export class ExpoAudioPlayback implements AudioPlaybackPort {
     }
   }
 
-  private waitUntilPlaying(player: AudioPlayerLike): Promise<boolean> {
-    return new Promise((resolve) => {
+  private waitUntilPlaying(player: AudioPlayerLike): {
+    promise: Promise<boolean>;
+    cancel: () => void;
+  } {
+    let cancel = (): void => undefined;
+    const promise = new Promise<boolean>((resolve) => {
       let settled = false;
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
       let subscription: AudioPlayerSubscription | undefined;
@@ -149,6 +156,7 @@ export class ExpoAudioPlayback implements AudioPlaybackPort {
         subscription?.remove();
         resolve(value);
       };
+      cancel = () => finish(false);
       if (player.playing === true) {
         finish(true);
         return;
@@ -168,6 +176,7 @@ export class ExpoAudioPlayback implements AudioPlaybackPort {
         }
       });
     });
+    return { promise, cancel };
   }
 }
 

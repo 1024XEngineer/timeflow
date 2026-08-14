@@ -46,9 +46,9 @@ function createPlayer(overrides: Partial<AudioPlayerMock> = {}): AudioPlayerMock
     addListener: jest.fn((_eventName, listener) => {
       listeners.add(listener);
       return {
-        remove: () => {
+        remove: jest.fn(() => {
           listeners.delete(listener);
-        },
+        }),
       };
     }),
     ...overrides,
@@ -169,6 +169,8 @@ describe('ExpoAudioPlayback', () => {
       played: false,
       used_local_fallback: false,
     });
+    const subscription = player.addListener.mock.results[0]?.value as { remove: jest.Mock };
+    expect(subscription.remove).toHaveBeenCalled();
   });
 
   it('reports unplayed when playback never enters playing', async () => {
