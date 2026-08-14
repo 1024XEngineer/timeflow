@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { describe, expect, it, jest } from '@jest/globals';
+import { StyleSheet } from 'react-native';
 
 import type { ScheduleCalendarReadService } from '../../../../../src/features/schedule/application';
 import { ScheduleCalendarScreen } from '../../../../../src/features/schedule/presentation/ScheduleCalendarScreen';
@@ -33,7 +34,13 @@ describe('ScheduleCalendarScreen location schedules', () => {
     const service = createService();
     const accountId = 'internal-account-id-not-for-display';
     render(
-      <ScheduleCalendarScreen accountId={accountId} service={service} timezone="Asia/Shanghai" />,
+      <ScheduleCalendarScreen
+        accountId={accountId}
+        onSignOut={() => {}}
+        service={service}
+        timezone="Asia/Shanghai"
+        username="Sarah"
+      />,
     );
 
     await waitFor(() => expect(service.getSchedulesByRange).toHaveBeenCalled());
@@ -44,10 +51,74 @@ describe('ScheduleCalendarScreen location schedules', () => {
     expect(screen.queryByText(accountId)).toBeNull();
   });
 
+  it('reloads calendar queries when refreshSignal changes', async () => {
+    const service = createService();
+    const props = {
+      accountId: 'account-a',
+      onSignOut: () => {},
+      service,
+      timezone: 'Asia/Shanghai',
+      username: 'Sarah',
+    };
+    const view = render(<ScheduleCalendarScreen {...props} refreshSignal={0} />);
+
+    await waitFor(() => expect(service.getSchedulesByRange).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(service.getLocationSchedules).toHaveBeenCalledTimes(1));
+
+    view.rerender(<ScheduleCalendarScreen {...props} refreshSignal={1} />);
+
+    await waitFor(() => expect(service.getSchedulesByRange).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(service.getLocationSchedules).toHaveBeenCalledTimes(2));
+    expect(service.getSchedulesByRange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ accountId: 'account-a' }),
+    );
+    expect(service.getLocationSchedules).toHaveBeenLastCalledWith({ accountId: 'account-a' });
+  });
+
+  it('renders compact account controls, truncates a long username, and signs out', async () => {
+    const service = createService();
+    const onSignOut = jest.fn<() => void>();
+    const username = 'zhangsan-with-an-extremely-long-account-name';
+    render(
+      <ScheduleCalendarScreen
+        accountId="account-a"
+        onSignOut={onSignOut}
+        service={service}
+        timezone="Asia/Shanghai"
+        username={username}
+      />,
+    );
+
+    await waitFor(() => expect(service.getSchedulesByRange).toHaveBeenCalled());
+    expect(screen.getByText('我的日程')).toBeTruthy();
+    expect(screen.getByText('Z')).toBeTruthy();
+    expect(screen.getByText(username)).toBeTruthy();
+    expect(screen.queryByText(/账号：/)).toBeNull();
+    expect(screen.getByTestId('schedule-account-username').props).toMatchObject({
+      ellipsizeMode: 'tail',
+      numberOfLines: 1,
+    });
+    expect(
+      StyleSheet.flatten(screen.getByTestId('schedule-account-username').props.style),
+    ).toMatchObject({ flexShrink: 1, minWidth: 0 });
+    expect(
+      StyleSheet.flatten(screen.getByTestId('schedule-account-actions').props.style),
+    ).toMatchObject({ maxWidth: 240, minWidth: 0 });
+
+    fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
+    expect(onSignOut).toHaveBeenCalledTimes(1);
+  });
+
   it('shows a location section that stays visible after selecting a day and changing month', async () => {
     const service = createService();
     render(
-      <ScheduleCalendarScreen accountId="account-a" service={service} timezone="Asia/Shanghai" />,
+      <ScheduleCalendarScreen
+        accountId="account-a"
+        onSignOut={() => {}}
+        service={service}
+        timezone="Asia/Shanghai"
+        username="Sarah"
+      />,
     );
 
     await waitFor(() => expect(screen.getByText('地点提醒')).toBeTruthy());
@@ -70,7 +141,13 @@ describe('ScheduleCalendarScreen location schedules', () => {
   it('opens a read-only location detail with the configured fields', async () => {
     const service = createService();
     render(
-      <ScheduleCalendarScreen accountId="account-a" service={service} timezone="Asia/Shanghai" />,
+      <ScheduleCalendarScreen
+        accountId="account-a"
+        onSignOut={() => {}}
+        service={service}
+        timezone="Asia/Shanghai"
+        username="Sarah"
+      />,
     );
 
     await waitFor(() => expect(screen.getByLabelText('公司 到公司提醒我打卡')).toBeTruthy());

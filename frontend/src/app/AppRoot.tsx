@@ -210,67 +210,50 @@ function AuthenticatedScheduleRoute({
 
   return (
     <View style={styles.authenticatedRoute}>
-      <View style={styles.accountBar}>
-        <Text numberOfLines={1} style={styles.accountIdentity}>
-          账号：{username}
-        </Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ disabled: isSigningOut }}
-          disabled={isSigningOut}
-          onPress={() => void handleSignOut()}
-          style={({ pressed }) => [
-            styles.signOutButton,
-            pressed && !isSigningOut && styles.signOutButtonPressed,
-          ]}
-        >
-          <Text style={styles.signOutText}>{isSigningOut ? '正在退出…' : '退出登录'}</Text>
-        </Pressable>
-      </View>
-      <View style={styles.authenticatedContent}>
-        {currentLoadState?.status === 'ready' &&
-        scheduleService &&
-        pushToTalkApplication &&
-        continuousApplication ? (
-          <HomeScreen
-            accountId={accountId}
-            continuousApplication={continuousApplication}
-            pushToTalkApplication={pushToTalkApplication}
-            scheduleService={scheduleService}
-            timezone={Intl.DateTimeFormat().resolvedOptions().timeZone}
-          />
-        ) : (
-          <View style={styles.authenticatedScreen}>
-            <Text style={styles.title}>
-              {currentLoadState?.status === 'error' ? '本地日程存储初始化失败' : '正在准备日程'}
+      {currentLoadState?.status === 'ready' &&
+      scheduleService &&
+      pushToTalkApplication &&
+      continuousApplication ? (
+        <HomeScreen
+          accountId={accountId}
+          continuousApplication={continuousApplication}
+          isSigningOut={isSigningOut}
+          onSignOut={handleSignOut}
+          pushToTalkApplication={pushToTalkApplication}
+          scheduleService={scheduleService}
+          timezone={Intl.DateTimeFormat().resolvedOptions().timeZone}
+          username={username}
+        />
+      ) : (
+        <View style={styles.authenticatedScreen}>
+          <Text style={styles.title}>
+            {currentLoadState?.status === 'error' ? '本地日程存储初始化失败' : '正在准备日程'}
+          </Text>
+          {currentLoadState?.status === 'error' ? (
+            <Pressable accessibilityRole="button" onPress={retryDatabase} style={styles.retry}>
+              <Text style={styles.retryText}>重试</Text>
+            </Pressable>
+          ) : null}
+          <Pressable
+            accessibilityLabel="退出登录"
+            accessibilityRole="button"
+            accessibilityState={{ disabled: isSigningOut }}
+            disabled={isSigningOut}
+            onPress={() => void handleSignOut()}
+            style={styles.loadStateSignOut}
+          >
+            <Text style={styles.loadStateSignOutText}>
+              {isSigningOut ? '正在退出…' : '退出登录'}
             </Text>
-            {currentLoadState?.status === 'error' ? (
-              <Pressable accessibilityRole="button" onPress={retryDatabase} style={styles.retry}>
-                <Text style={styles.retryText}>重试</Text>
-              </Pressable>
-            ) : null}
-          </View>
-        )}
-      </View>
+          </Pressable>
+        </View>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   account: { color: colors.mutedText, fontSize: 16, marginTop: spacing.sm },
-  accountBar: {
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderBottomColor: colors.border,
-    borderBottomWidth: 1,
-    flexDirection: 'row',
-    gap: spacing.md,
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-  },
-  accountIdentity: { color: colors.mutedText, flex: 1, fontSize: 14 },
-  authenticatedContent: { flex: 1 },
   authenticatedRoute: { backgroundColor: colors.background, flex: 1 },
   authenticatedScreen: {
     alignItems: 'center',
@@ -279,6 +262,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: spacing.xl,
   },
+  loadStateSignOut: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  loadStateSignOutText: { color: colors.mutedText, fontWeight: '600' },
   retry: {
     backgroundColor: colors.text,
     borderRadius: 8,
@@ -287,14 +280,5 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   retryText: { color: colors.onPrimary, fontWeight: '700' },
-  signOutButton: {
-    borderColor: colors.border,
-    borderRadius: 8,
-    borderWidth: 1,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  signOutButtonPressed: { opacity: 0.7 },
-  signOutText: { color: colors.text, fontSize: 14, fontWeight: '600' },
   title: { color: colors.text, fontSize: 22, fontWeight: '700' },
 });
