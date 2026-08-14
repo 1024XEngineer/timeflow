@@ -83,6 +83,51 @@ public final class AlarmScheduler {
                 false
         );
 
+        rearm(context, alarmManager, record);
+
+        alarms.add(record);
+        saveAlarms(context, alarms);
+        return alarmId;
+    }
+
+    /** @deprecated 请改用 {@link #schedule(Context, long, String, String)}。 */
+    @Deprecated
+    public static String schedule(Context context, long triggerAtMillis, String title) {
+        return schedule(context, triggerAtMillis, title, "");
+    }
+
+    /**
+     * 系统重启 / 应用更新后重新挂上所有还没过期的持久化闹钟。
+     * AlarmManager 的注册在这两种情况下都会被系统清空，但 SharedPreferences 里的记录还在；
+     * 不重新挂，用户在下次自己打开 App 之前不会再收到任何提醒。
+     * <p>
+     * 已经过期的记录直接从持久化列表里丢弃，不在这里补响——JS 侧
+     * {@code LocalReminderApplication} 自己会在下次 rebuild 时把错过的提醒当到点处理，
+     * 这里再触发一次会导致同一条提醒响两次。
+     */
+    public static void rescheduleAfterBoot(Context context) {
+        AlarmManager alarmManager =
+                (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+        if (alarmManager == null) {
+            return;
+        }
+        boolean canScheduleExact = android.os.Build.VERSION.SDK_INT
+                < android.os.Build.VERSION_CODES.S
+                || alarmManager.canScheduleExactAlarms();
+
+        long now = System.currentTimeMillis();
+        List<AlarmRecord> survivors = new ArrayList<>();
+        for (AlarmRecord record : loadAlarms(context)) {
+            if (record.triggerAtMillis <= now || !canScheduleExact) {
+                continue;
+            }
+            rearm(context, alarmManager, record);
+            survivors.add(record);
+        }
+        saveAlarms(context, survivors);
+    }
+
+    private static void rearm(Context context, AlarmManager alarmManager, AlarmRecord record) {
         PendingIntent operation = buildAlarmBroadcastPendingIntent(
                 context,
                 record,
@@ -110,16 +155,6 @@ public final class AlarmScheduler {
                 new AlarmManager.AlarmClockInfo(record.triggerAtMillis, showPendingIntent),
                 operation
         );
-
-        alarms.add(record);
-        saveAlarms(context, alarms);
-        return alarmId;
-    }
-
-    /** @deprecated 请改用 {@link #schedule(Context, long, String, String)}。 */
-    @Deprecated
-    public static String schedule(Context context, long triggerAtMillis, String title) {
-        return schedule(context, triggerAtMillis, title, "");
     }
 
     public static boolean cancel(Context context, String alarmId) {

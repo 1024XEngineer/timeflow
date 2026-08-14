@@ -7,6 +7,7 @@
   <uses-permission android:name="android.permission.VIBRATE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
   <application>
     <activity
@@ -21,6 +22,15 @@
       android:name="com.timeflow.alarm.AlarmReceiver"
       android:exported="false"
       android:enabled="true"/>
+    <receiver
+      android:name="com.timeflow.alarm.BootReceiver"
+      android:exported="false"
+      android:enabled="true">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED"/>
+        <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+      </intent-filter>
+    </receiver>
     <service
       android:name="com.timeflow.alarm.AlarmSoundService"
       android:exported="false"
