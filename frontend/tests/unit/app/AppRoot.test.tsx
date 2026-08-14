@@ -14,9 +14,30 @@ jest.mock('../../../src/features/schedule/application', () => ({
   SqliteScheduleClientService: jest.fn(),
 }));
 jest.mock('../../../src/features/schedule/presentation/ScheduleCalendarScreen', () => ({
-  ScheduleCalendarScreen: () => {
-    const { Text } = jest.requireActual('react-native') as typeof import('react-native');
-    return <Text>日程日历</Text>;
+  ScheduleCalendarScreen: ({
+    isSigningOut,
+    onSignOut,
+    username,
+  }: {
+    isSigningOut: boolean;
+    onSignOut: () => Promise<void>;
+    username: string;
+  }) => {
+    const { Pressable, Text, View } = jest.requireActual(
+      'react-native',
+    ) as typeof import('react-native');
+    return (
+      <View>
+        <Text>日程日历</Text>
+        <Text>{username}</Text>
+        <Pressable
+          accessibilityLabel="退出登录"
+          accessibilityRole="button"
+          disabled={isSigningOut}
+          onPress={() => void onSignOut()}
+        />
+      </View>
+    );
   },
 }));
 // 语音助手这几个真实实现都要接原生模块（麦克风/播放/定位），测试环境没有对应的
@@ -95,7 +116,8 @@ describe('AppRoot', () => {
     });
 
     await waitFor(() => expect(screen.getByText('日程日历')).toBeTruthy());
-    expect(screen.getByText('账号：timeflow_user')).toBeTruthy();
+    expect(screen.getByText('timeflow_user')).toBeTruthy();
+    expect(screen.queryByText(/账号：/)).toBeNull();
     expect(screen.queryByText(/acc_001/)).toBeNull();
     expect(screen.queryByText('登录或注册')).toBeNull();
     expect(screen.queryByText('opaque-token')).toBeNull();
@@ -110,7 +132,8 @@ describe('AppRoot', () => {
     });
     render(<AppRoot authController={controller} />);
 
-    await screen.findByText('账号：restored_user');
+    await screen.findByText('restored_user');
+    expect(screen.queryByText(/账号：/)).toBeNull();
     expect(screen.queryByText(/acc_internal_001/)).toBeNull();
     expect(screen.queryByText('opaque-token')).toBeNull();
   });

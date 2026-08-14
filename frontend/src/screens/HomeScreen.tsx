@@ -12,7 +12,10 @@ interface HomeScreenProps {
   continuousApplication: AssistantApplicationPort;
   scheduleService: ScheduleCalendarReadService;
   accountId: string;
+  isSigningOut: boolean;
+  onSignOut: () => Promise<void>;
   timezone: string;
+  username: string;
 }
 
 /**
@@ -25,7 +28,10 @@ export function HomeScreen({
   continuousApplication,
   scheduleService,
   accountId,
+  isSigningOut,
+  onSignOut,
   timezone,
+  username,
 }: HomeScreenProps) {
   const { lastAppliedCommand: pttCommand } = useAssistantConversation(pushToTalkApplication);
   const { lastAppliedCommand: callCommand } = useAssistantConversation(continuousApplication);
@@ -54,9 +60,12 @@ export function HomeScreen({
     <View style={styles.screen}>
       <ScheduleCalendarScreen
         accountId={accountId}
+        isSigningOut={isSigningOut}
+        onSignOut={onSignOut}
         refreshSignal={refreshSignal}
         service={scheduleService}
         timezone={timezone}
+        username={username}
       />
       <AssistantVoiceOverlay
         continuousApplication={continuousApplication}

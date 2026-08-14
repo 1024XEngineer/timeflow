@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import Svg, { Path } from 'react-native-svg';
 
 import { colors, spacing } from '../../../shared/ui/theme';
 import type {
@@ -20,22 +21,32 @@ const SELECTED_DATE_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
   weekday: 'long',
 });
 
+interface ScheduleCalendarScreenProps {
+  service: ScheduleCalendarReadService;
+  accountId: string;
+  timezone: string;
+  username: string;
+  onSignOut: () => void | Promise<void>;
+  isSigningOut?: boolean;
+  /** 外部触发刷新用（比如语音写完一条日程）；变化即重取，不用管具体数值。 */
+  refreshSignal?: number;
+}
+
 export function ScheduleCalendarScreen({
   service,
   accountId,
   timezone,
+  username,
+  onSignOut,
+  isSigningOut = false,
   refreshSignal,
-}: {
-  service: ScheduleCalendarReadService;
-  accountId: string;
-  timezone: string;
-  /** 外部触发刷新用（比如语音写完一条日程）；变化即重取，不用管具体数值。 */
-  refreshSignal?: number;
-}) {
+}: ScheduleCalendarScreenProps) {
   const calendar = useScheduleCalendar(service, accountId, timezone, undefined, refreshSignal);
   const [selectedOccurrence, setSelectedOccurrence] = useState<ScheduleOccurrenceView | null>(null);
   const [selectedLocation, setSelectedLocation] = useState<LocationScheduleView | null>(null);
   const selectedLabel = SELECTED_DATE_FORMATTER.format(calendar.selectedDate);
+  const displayUsername = username.trim() || '用户';
+  const avatarInitial = Array.from(displayUsername)[0]?.toLocaleUpperCase() ?? '用';
 
   return (
     <View style={styles.screen}>
@@ -46,8 +57,45 @@ export function ScheduleCalendarScreen({
       >
         <View style={styles.content}>
           <View style={styles.header}>
-            <Text style={styles.eyebrow}>我的日程</Text>
-            <Text style={styles.title}>{selectedLabel}</Text>
+            <View style={styles.headerTop}>
+              <Text style={styles.eyebrow}>我的日程</Text>
+              <View style={styles.accountActions} testID="schedule-account-actions">
+                <View accessibilityLabel={`当前用户 ${displayUsername}`} style={styles.userPill}>
+                  <View style={styles.avatar}>
+                    <Text style={styles.avatarText}>{avatarInitial}</Text>
+                  </View>
+                  <Text
+                    ellipsizeMode="tail"
+                    numberOfLines={1}
+                    style={styles.username}
+                    testID="schedule-account-username"
+                  >
+                    {displayUsername}
+                  </Text>
+                </View>
+                <Pressable
+                  accessibilityLabel="退出登录"
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: isSigningOut }}
+                  disabled={isSigningOut}
+                  hitSlop={6}
+                  onPress={() => void onSignOut()}
+                  style={({ pressed }) => [
+                    styles.signOutButton,
+                    pressed && !isSigningOut && styles.signOutButtonPressed,
+                  ]}
+                >
+                  {isSigningOut ? (
+                    <ActivityIndicator color={colors.text} size="small" />
+                  ) : (
+                    <LogoutIcon />
+                  )}
+                </Pressable>
+              </View>
+            </View>
+            <Text numberOfLines={1} style={styles.title}>
+              {selectedLabel}
+            </Text>
           </View>
 
           <MonthCalendar
@@ -135,8 +183,41 @@ export function ScheduleCalendarScreen({
   );
 }
 
+function LogoutIcon() {
+  return (
+    <Svg fill="none" height={18} viewBox="0 0 24 24" width={18}>
+      <Path
+        d="M10 5H6.8A1.8 1.8 0 0 0 5 6.8v10.4A1.8 1.8 0 0 0 6.8 19H10M14.5 8l4 4-4 4M18 12H9"
+        stroke={colors.text}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={1.8}
+      />
+    </Svg>
+  );
+}
+
 const styles = StyleSheet.create({
+  accountActions: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    justifyContent: 'flex-end',
+    marginLeft: spacing.sm,
+    maxWidth: 240,
+    minWidth: 0,
+  },
   agenda: { paddingHorizontal: spacing.md, paddingTop: spacing.xl },
+  avatar: {
+    alignItems: 'center',
+    backgroundColor: colors.accent,
+    borderRadius: 999,
+    height: 28,
+    justifyContent: 'center',
+    width: 28,
+  },
+  avatarText: { color: colors.text, fontSize: 12, fontWeight: '800' },
   center: {
     alignItems: 'center',
     backgroundColor: colors.surface,
@@ -175,6 +256,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.xl,
   },
+  headerTop: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minWidth: 0,
+  },
   locationSection: {
     borderTopColor: colors.border,
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -199,6 +286,34 @@ const styles = StyleSheet.create({
     paddingBottom: 14,
   },
   sectionTitle: { color: colors.text, fontSize: 20, fontWeight: '800' },
+  signOutButton: {
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: 18,
+    borderWidth: 1,
+    flexShrink: 0,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  signOutButtonPressed: { opacity: 0.62 },
   stateText: { color: colors.mutedText },
   title: { color: colors.text, fontSize: 28, fontWeight: '800', lineHeight: 34, marginTop: 4 },
+  userPill: {
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: 18,
+    borderWidth: 1,
+    flexDirection: 'row',
+    flexShrink: 1,
+    gap: spacing.sm,
+    maxWidth: 196,
+    minWidth: 0,
+    paddingHorizontal: 4,
+    paddingRight: 10,
+    paddingVertical: 3,
+  },
+  username: { color: colors.text, flexShrink: 1, fontSize: 13, fontWeight: '700', minWidth: 0 },
 });
