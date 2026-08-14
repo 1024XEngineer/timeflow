@@ -1,4 +1,19 @@
-import type { LocalReminderRuntimeUpdate, ScheduleLocalRepository } from '../../../schedule/data';
+import type {
+  LocalReminderRuntimeUpdate,
+  LocalScheduleRow,
+  ScheduleLocalRepository,
+} from '../../../schedule/data';
+import {
+  floatingDateToLocalParts,
+  instantToZonedParts,
+  isValidIanaTimezone,
+  localPartsToFloatingDate,
+  zonedPartsToInstant,
+} from '../../../schedule/domain/scheduleDateTime';
+import {
+  normalizeUtcUntilForFloatingRrule,
+  parseScheduleRrule,
+} from '../../../schedule/domain/scheduleRecurrence';
 import type { ReminderStateStore } from '../../application/interfaces';
 import type { ReminderDisposition, ReminderRuntimeState } from '../../domain';
 
@@ -27,6 +42,31 @@ export class SqliteReminderStateStore implements ReminderStateStore {
     if (this.target === null) return null;
     const row = await this.target.repository.getSchedule(this.target.accountId, scheduleId);
     if (row === null) return null;
+
+    // 重复日程的 occurrence 光标为空：要么是云端刚同步下来的新记录（从没落过库），
+    // 要么是上一次 occurrence 被 confirmInternal 消费后显式清空的（它就是靠置空
+    // next_trigger_at 触发"这条该往前挪一格了"）。resolveTimeTriggerAt() 对重复
+    // 日程光标为空时明确返回 null，不会回退到系列 start_time，所以这里必须补上
+    // 下一次发生时间，不然这条提醒永远不会再触发第二次。同时把上一轮的
+    // disposition 状态一起重置，否则 canDeliver() 会因为它还是 'confirmed' 继续
+    // 拦住这条全新的 occurrence。
+    if (row.schedule_kind === 'recurring' && row.next_trigger_at === null) {
+      const nextOccurrence = nextRecurringOccurrenceAtOrAfter(row, new Date());
+      if (nextOccurrence !== null) {
+        return {
+          reminder_disposition_state: null,
+          next_trigger_at: nextOccurrence,
+          snoozed_until: null,
+          geofence_armed: row.geofence_armed === 1,
+          disposition_updated_at: null,
+          sync_status: row.sync_status,
+          recorded_location: null,
+        };
+      }
+      // 系列已经结束（RRULE 的 UNTIL/COUNT 用完了）或规则本身有问题：没有下一次
+      // 发生时间可算，透传原始（空）状态，让上层照常按"这条排不上"处理。
+    }
+
     return {
       reminder_disposition_state: row.reminder_disposition_state,
       next_trigger_at: row.next_trigger_at,
@@ -59,6 +99,28 @@ export class SqliteReminderStateStore implements ReminderStateStore {
       disposition_updated_at: disposition.updated_at,
       sync_status: disposition.sync_status,
     });
+  }
+}
+
+/** 重复日程从 now 起（含 now 本身）的下一次发生时间；规则用完/无效时返回 null。 */
+function nextRecurringOccurrenceAtOrAfter(row: LocalScheduleRow, now: Date): string | null {
+  if (row.start_time === null || row.recurrence_rule === null) return null;
+  if (!isValidIanaTimezone(row.timezone)) return null;
+
+  try {
+    const floatingStart = localPartsToFloatingDate(
+      instantToZonedParts(new Date(row.start_time), row.timezone),
+    );
+    const rule = parseScheduleRrule(
+      normalizeUtcUntilForFloatingRrule(row.recurrence_rule, row.timezone),
+      floatingStart,
+    );
+    const floatingNow = localPartsToFloatingDate(instantToZonedParts(now, row.timezone));
+    const nextFloating = rule.after(floatingNow, true);
+    if (nextFloating === null) return null;
+    return zonedPartsToInstant(floatingDateToLocalParts(nextFloating), row.timezone).toISOString();
+  } catch {
+    return null;
   }
 }
 
