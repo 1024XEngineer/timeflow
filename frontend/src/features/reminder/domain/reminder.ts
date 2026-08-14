@@ -73,12 +73,7 @@ export type LocalReminderSchedule = {
 };
 
 export type ReminderTriggerReason =
-  | 'at_time'
-  | 'before_start'
-  | 'arrive_location'
-  | 'return_to_recorded_location'
-  | 'snooze_expired'
-  | 'mock';
+  'at_time' | 'before_start' | 'arrive_location' | 'return_to_recorded_location' | 'snooze_expired';
 
 export type ReminderTrigger = {
   reminder_id: string;

@@ -1,15 +1,20 @@
 import { useEffect, useRef } from 'react';
-import { Alert, AppState, type AppStateStatus, Platform } from 'react-native';
 
-import type { DeviceCapabilityPort, DevicePermission } from '../application/interfaces';
+import type {
+  AlertDialogPort,
+  DeviceCapabilityPort,
+  DevicePermission,
+} from '../application/interfaces';
 
-const PERMISSION_ORDER: DevicePermission[] = [
+const ANDROID_ALARM_ORDER: DevicePermission[] = [
   'notifications',
   'exact_alarm',
   'overlay',
   'full_screen',
   'battery_optimization',
 ];
+
+const LOCATION_ORDER: DevicePermission[] = ['location_foreground', 'location_background'];
 
 const PERMISSION_PROMPTS: Partial<Record<DevicePermission, { title: string; message: string }>> = {
   notifications: {
@@ -32,31 +37,49 @@ const PERMISSION_PROMPTS: Partial<Record<DevicePermission, { title: string; mess
     title: '需要忽略电池优化',
     message: '关闭电池优化可以减少系统清理闹钟进程的概率。',
   },
+  location_foreground: {
+    title: '需要定位权限',
+    message: '允许定位后，才能根据你是否到达或离开地点触发提醒。',
+  },
+  location_background: {
+    title: '需要后台定位权限',
+    message: '允许“始终允许”定位后，应用在后台也能接收地理围栏进出事件。',
+  },
 };
 
+/** 仅通知可在无前置说明时直接弹系统框；定位需先说明，且常要回落设置页。 */
+const DIRECT_REQUEST: ReadonlySet<DevicePermission> = new Set(['notifications']);
+
+/** 精确闹钟没有系统授权框，只能跳设置页；先弹说明框会多一步点击，直接跳过去。 */
+const DIRECT_SETTINGS: ReadonlySet<DevicePermission> = new Set(['exact_alarm']);
+
+const LOCATION_PERMISSIONS: ReadonlySet<DevicePermission> = new Set([
+  'location_foreground',
+  'location_background',
+]);
+
 /**
- * 启动时逐项申请提醒相关权限；通过 DeviceCapabilityPort 访问平台，
- * 不在 UI 层直接依赖 NativeModules。
+ * 启动时逐项申请提醒相关权限；通过 DeviceCapabilityPort / AlertDialogPort 访问平台，
+ * 不在 UI 层直接依赖 react-native。
+ *
+ * - Android（alarm 能力可用）：闹钟相关权限 + 定位权限
+ * - 其它平台 / alarm 不可用：仍申请定位权限，保证地点提醒链路可授权
+ *
+ * @param onPermissionsUpdated 某项权限刚授权成功时回调（用于重建围栏/闹钟）。
  */
-export function useReminderPermissionsOnLaunch(device: DeviceCapabilityPort | null): void {
+export function useReminderPermissionsOnLaunch(
+  device: DeviceCapabilityPort | null,
+  dialog: AlertDialogPort | null,
+  onPermissionsUpdated?: () => void,
+): void {
   const busyRef = useRef(false);
   const awaitingReturnRef = useRef(false);
   const skippedRef = useRef(new Set<DevicePermission>());
 
   useEffect(() => {
-    if (Platform.OS !== 'android' || device == null) return;
+    if (device == null || dialog == null) return;
 
     let cancelled = false;
-    const timeouts = new Set<ReturnType<typeof setTimeout>>();
-
-    const schedule = (fn: () => void, ms: number) => {
-      const id = setTimeout(() => {
-        timeouts.delete(id);
-        if (cancelled) return;
-        fn();
-      }, ms);
-      timeouts.add(id);
-    };
 
     const runPrompt = () => {
       if (cancelled) return;
@@ -66,90 +89,127 @@ export function useReminderPermissionsOnLaunch(device: DeviceCapabilityPort | nu
     };
 
     const promptNext = async () => {
-      if (cancelled || busyRef.current) return;
+      if (busyRef.current || cancelled || awaitingReturnRef.current) return;
       busyRef.current = true;
+      let queueNext = false;
 
       try {
         const status = await device.getStatus();
-        if (cancelled) return;
-        if (!status.supported) return;
+        if (status.platform === 'web' || status.platform === 'unknown') return;
 
-        const missing = PERMISSION_ORDER.find((permission) => {
-          if (skippedRef.current.has(permission)) return false;
-          return !status.permissions[permission];
-        });
+        const missing = nextMissingPermission(status);
         if (missing == null) return;
 
         const prompt = PERMISSION_PROMPTS[missing];
         if (prompt == null) {
           skippedRef.current.add(missing);
+          queueNext = true;
           return;
         }
 
-        if (missing === 'notifications') {
-          let granted = false;
-          try {
-            granted = await device.requestPermission('notifications');
-          } catch {
-            granted = false;
+        // 通知：直接系统授权框。
+        if (DIRECT_REQUEST.has(missing)) {
+          const granted = await device.requestPermission(missing);
+          if (!granted) {
+            skippedRef.current.add(missing);
+          } else {
+            onPermissionsUpdated?.();
           }
-          if (cancelled) return;
-          if (!granted) skippedRef.current.add('notifications');
-          busyRef.current = false;
-          schedule(runPrompt, 350);
+          queueNext = true;
           return;
         }
 
-        const shouldAuthorize = await confirmAsync(prompt.title, prompt.message);
-        if (cancelled) return;
+        // 精确闹钟没有系统授权框，只能跳设置页，先弹说明框只会多一次点击，直接跳过去。
+        if (DIRECT_SETTINGS.has(missing)) {
+          awaitingReturnRef.current = true;
+          const opened = await device.openSettings(missing);
+          if (!opened) {
+            awaitingReturnRef.current = false;
+            skippedRef.current.add(missing);
+            queueNext = true;
+          }
+          return;
+        }
+
+        const shouldAuthorize = await confirmAsync(dialog, prompt.title, prompt.message);
         if (!shouldAuthorize) {
           skippedRef.current.add(missing);
-        } else {
-          let opened = false;
-          try {
-            opened = await device.openSettings(missing);
-          } catch {
-            opened = false;
+          queueNext = true;
+          return;
+        }
+
+        // 定位：先等应用内说明框关掉，再申请系统权限；失败则跳转设置，避免“点了没反应还连弹”。
+        if (LOCATION_PERMISSIONS.has(missing)) {
+          await delay(350);
+          const granted = await device.requestPermission(missing);
+          if (granted) {
+            onPermissionsUpdated?.();
+            queueNext = true;
+            return;
           }
-          if (cancelled) return;
-          if (opened) {
-            awaitingReturnRef.current = true;
-          } else {
+          awaitingReturnRef.current = true;
+          const opened = await device.openSettings(missing);
+          if (!opened) {
+            awaitingReturnRef.current = false;
             skippedRef.current.add(missing);
+            queueNext = true;
           }
+          return;
+        }
+
+        // 精确闹钟 / 悬浮窗等：跳转系统设置，回来后再继续。
+        awaitingReturnRef.current = true;
+        const opened = await device.openSettings(missing);
+        if (!opened) {
+          awaitingReturnRef.current = false;
+          skippedRef.current.add(missing);
+          queueNext = true;
         }
       } finally {
         busyRef.current = false;
       }
 
-      if (!cancelled && !awaitingReturnRef.current) {
-        schedule(runPrompt, 200);
+      if (queueNext && !awaitingReturnRef.current) {
+        setTimeout(runPrompt, 250);
       }
     };
 
-    const onAppStateChange = (state: AppStateStatus) => {
-      if (cancelled) return;
-      if (state !== 'active') return;
+    const nextMissingPermission = (
+      status: Awaited<ReturnType<DeviceCapabilityPort['getStatus']>>,
+    ): DevicePermission | null => {
+      if (status.platform === 'android' && status.supported) {
+        const alarmMissing = ANDROID_ALARM_ORDER.find((permission) => {
+          if (skippedRef.current.has(permission)) return false;
+          return !status.permissions[permission];
+        });
+        if (alarmMissing != null) return alarmMissing;
+      }
+
+      return (
+        LOCATION_ORDER.find((permission) => {
+          if (skippedRef.current.has(permission)) return false;
+          return !status.permissions[permission];
+        }) ?? null
+      );
+    };
+
+    const unsubscribe = device.onAppActive(() => {
       if (!awaitingReturnRef.current) return;
       awaitingReturnRef.current = false;
-      schedule(runPrompt, 300);
-    };
+      onPermissionsUpdated?.();
+      setTimeout(runPrompt, 300);
+    });
 
-    schedule(runPrompt, 600);
-    const subscription = AppState.addEventListener('change', onAppStateChange);
+    const timer = setTimeout(runPrompt, 600);
     return () => {
       cancelled = true;
-      awaitingReturnRef.current = false;
-      for (const id of timeouts) {
-        clearTimeout(id);
-      }
-      timeouts.clear();
-      subscription.remove();
+      clearTimeout(timer);
+      unsubscribe();
     };
-  }, [device]);
+  }, [device, dialog, onPermissionsUpdated]);
 }
 
-function confirmAsync(title: string, message: string): Promise<boolean> {
+function confirmAsync(dialog: AlertDialogPort, title: string, message: string): Promise<boolean> {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (value: boolean) => {
@@ -157,14 +217,19 @@ function confirmAsync(title: string, message: string): Promise<boolean> {
       settled = true;
       resolve(value);
     };
-    Alert.alert(
+    void dialog.show({
       title,
       message,
-      [
+      cancelable: true,
+      onDismiss: () => finish(false),
+      buttons: [
         { text: '暂不', style: 'cancel', onPress: () => finish(false) },
         { text: '去授权', onPress: () => finish(true) },
       ],
-      { cancelable: true, onDismiss: () => finish(false) },
-    );
+    });
   });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

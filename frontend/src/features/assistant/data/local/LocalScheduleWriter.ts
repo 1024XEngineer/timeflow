@@ -1,3 +1,4 @@
+import type { SqliteLocalScheduleReader } from '../../../reminder';
 import type { CloudScheduleRow, ScheduleLocalRepository } from '../../../schedule/data';
 import type { LocalScheduleWriterPort } from '../../application/interfaces/LocalScheduleWriterPort';
 import type { AppliedCommand } from '../../domain/ConversationTurn';
@@ -23,13 +24,19 @@ import type { AppliedCommand } from '../../domain/ConversationTurn';
  * 同步，得等后端把 override 数据也传下来。
  */
 export class LocalScheduleWriter implements LocalScheduleWriterPort {
-  public constructor(private readonly repository: ScheduleLocalRepository) {}
+  public constructor(
+    private readonly repository: ScheduleLocalRepository,
+    private readonly scheduleReader?: SqliteLocalScheduleReader,
+  ) {}
 
   public async applyCommandResult(accountId: string, command: AppliedCommand): Promise<void> {
     if (command.status !== 'applied' || !command.schedule) {
       return;
     }
     await this.repository.applyCloudSchedule(toCloudScheduleRow(accountId, command.schedule));
+    // 提醒引擎读的是 SqliteLocalScheduleReader 的投影，不是这个仓储本身；写完
+    // 必须主动刷新一次，不然新建/改动的日程要等下次 rebuild 才会被提醒引擎看到。
+    await this.scheduleReader?.refresh();
   }
 }
 

@@ -18,9 +18,27 @@ export type {
   ReminderTrigger,
   ReminderTriggerReason,
   ReminderType,
+  GeofenceTransition,
+  GeofenceWatchMode,
+  StrengthDeliveryPlan,
 } from './domain';
-export { DEFAULT_SNOOZE_MINUTES } from './domain';
+export {
+  DEFAULT_SNOOZE_MINUTES,
+  distanceMeters,
+  evaluateGeofence,
+  isSnoozeActive,
+  isSnoozeExpired,
+  isTimeWindowReached,
+  resolveEffectiveTriggerAt,
+  resolveGeofenceCenter,
+  resolveSnoozeUntil,
+  resolveStrengthDeliveryPlan,
+  resolveTimeTriggerAt,
+  resolveWatchMode,
+} from './domain';
 export type {
+  AlarmNativeDisposition,
+  AlarmNativeEvent,
   AlarmScheduleReceipt,
   AlarmScheduleRequest,
   AlarmSchedulerPort,
@@ -34,9 +52,13 @@ export type {
   LocalTimeTick,
   LocationMonitorEvent,
   LocationMonitorPort,
+  LocationRebuildTarget,
   LocationWatchHandle,
   LocationWatchMode,
   LocationWatchRequest,
+  AlertDialogButton,
+  AlertDialogPort,
+  AlertDialogRequest,
   PopupPort,
   PopupReceipt,
   PopupRequest,
@@ -64,11 +86,15 @@ export type {
 } from './application';
 export { LocalReminderApplication } from './application';
 export {
-  MockLocalScheduleReader,
-  MockReminderApplication,
-  MockReminderDispositionSync,
-  MockReminderStateStore,
-  MOCK_REMINDER_SCHEDULES,
   MemoryReminderStateStore,
+  InMemoryLocalScheduleReader,
+  SqliteLocalScheduleReader,
+  SqliteReminderStateStore,
+  LocalReminderDelivery,
+  LocalReminderDispositionSync,
+  LocalReminderRecovery,
+  LocalSystemNotification,
+  NoopPopup,
 } from './data/local';
-export { MockReminderPresenter, useReminderPermissionsOnLaunch } from './presentation';
+export { AlertReminderPresenter, useReminderPermissionsOnLaunch } from './presentation';
+export type { ReminderActionHandler, ReminderViewModel } from './presentation';

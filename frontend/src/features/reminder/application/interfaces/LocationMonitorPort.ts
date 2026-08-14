@@ -1,6 +1,18 @@
-import type { GeoPoint, LocalReminderSchedule, LocationSample } from '../../domain';
+import type { GeoPoint, LocationSample } from '../../domain';
 
 export type LocationWatchMode = 'arrive' | 'return';
+
+/**
+ * 围栏重建目标：携带 watch 所需几何参数，避免 infrastructure 依赖完整领域日程，
+ * 同时保证冷启动 rebuild 能重新挂上系统围栏。
+ */
+export type LocationRebuildTarget = {
+  schedule_id: string;
+  center: GeoPoint;
+  radius_meters: number;
+  mode: LocationWatchMode;
+  background: boolean;
+};
 
 export type LocationWatchRequest = {
   schedule_id: string;
@@ -29,7 +41,7 @@ export interface LocationMonitorPort {
   ): Promise<LocationWatchHandle>;
   unwatch(listenerId: string): Promise<void>;
   rebuild(
-    schedules: readonly LocalReminderSchedule[],
+    targets: readonly LocationRebuildTarget[],
     listener: (event: LocationMonitorEvent) => void,
   ): Promise<readonly LocationWatchHandle[]>;
   getLastSample(): Promise<LocationSample | null>;

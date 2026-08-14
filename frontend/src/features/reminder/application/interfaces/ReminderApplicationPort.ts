@@ -24,21 +24,11 @@ export type ReminderApplicationDependencies = {
   dispositionSync: import('./ReminderDispositionSyncPort').ReminderDispositionSyncPort;
 };
 
-/**
- * 贪睡必须且只能提供一种目标时刻表达：绝对时间或相对分钟。
- * 两种字段互斥，避免实现层自行决定优先级，也禁止无目标时刻的请求。
- */
-export type ReminderSnoozeRequest =
-  | {
-      schedule_id: string;
-      snooze_until: string;
-      snooze_minutes?: never;
-    }
-  | {
-      schedule_id: string;
-      snooze_minutes: number;
-      snooze_until?: never;
-    };
+export type ReminderSnoozeRequest = {
+  schedule_id: string;
+  snooze_until: string | null;
+  snooze_minutes?: number | null;
+};
 
 export type ReminderApplicationResult = {
   accepted: boolean;

@@ -1,29 +1,40 @@
 import { AppRuntime } from '../orchestration/AppRuntime';
 import { createAuthRuntime, type AuthRuntime, type CreateAuthRuntimeOptions } from '../authRuntime';
 import type {
+  AlertDialogPort,
   ReminderApplicationDependencies,
   ReminderApplicationPort,
 } from '../../features/reminder/application/interfaces';
+import { LocalReminderApplication } from '../../features/reminder/application';
 import {
-  MockLocalScheduleReader,
-  MockReminderApplication,
-  MockReminderDispositionSync,
-  MockReminderStateStore,
+  LocalReminderDelivery,
+  LocalReminderDispositionSync,
+  LocalReminderRecovery,
+  LocalSystemNotification,
+  NoopPopup,
+  SqliteLocalScheduleReader,
+  SqliteReminderStateStore,
 } from '../../features/reminder/data/local';
-import { MockAudioPlayback } from '../../infrastructure/audio';
-import { MockLocationMonitor } from '../../infrastructure/location';
+import { AlertReminderPresenter } from '../../features/reminder/presentation';
+import { ExpoAudioPlayback } from '../../infrastructure/audio';
+// NativeLocationMonitor（百度定位 SDK）保留在仓库里没删，只是这次没接进来——现在用的
+// 是 ExpoLocationMonitor（系统原生地理围栏），不依赖百度控制台那个 AK 注册。百度那个
+// Key 配置好之后如果想切回去，把下面这行 import 和 reminderPorts.location 换回来就行。
+import { ExpoLocationMonitor } from '../../infrastructure/location';
 import {
-  MockPopup,
-  MockReminderRecovery,
-  MockReminderDelivery,
-  MockSystemNotification,
-  MockVibration,
   NativeAlarmScheduler,
   NativeDeviceCapability,
+  ReactNativeAlertDialog,
+  ReactNativeVibration,
 } from '../../infrastructure/notifications';
-import { MockTimeListener } from '../../shared/time';
-import { MockReminderPresenter } from '../../features/reminder/presentation';
+import { IntervalTimeListener } from '../../infrastructure/time';
 import { ScheduleViewStore } from '../../features/schedule/presentation';
+
+export interface CreateAppServicesOptions {
+  readonly auth?: CreateAuthRuntimeOptions;
+  readonly schedules?: SqliteLocalScheduleReader;
+  readonly overrides?: Partial<ReminderApplicationDependencies>;
+}
 
 export type AppServices = {
   auth: AuthRuntime;
@@ -33,32 +44,47 @@ export type AppServices = {
   reminderPorts: ReminderApplicationDependencies;
   scheduleView: ScheduleViewStore;
   webSocketClient: AuthRuntime['webSocketClient'];
+  /** 需要 attach()/detach()/refresh() 时用这些具体类型；LocalReminderApplication 只经 reminderPorts 访问端口接口。 */
+  schedules: SqliteLocalScheduleReader;
+  reminderState: SqliteReminderStateStore;
+  alertDialog: AlertDialogPort;
 };
-
-export interface CreateAppServicesOptions {
-  readonly auth?: CreateAuthRuntimeOptions;
-}
 
 /** 应用唯一组合根：认证传输、功能服务、生命周期和账号内存清理在此接线。 */
 export function createAppServices(options: CreateAppServicesOptions = {}): AppServices {
   const auth = createAuthRuntime(options.auth);
+  const alertDialog = new ReactNativeAlertDialog();
+  const schedules = options.schedules ?? new SqliteLocalScheduleReader();
+  const reminderState = new SqliteReminderStateStore();
+  const presenter =
+    (options.overrides?.presenter as AlertReminderPresenter | undefined) ??
+    new AlertReminderPresenter(alertDialog);
+
+  const {
+    schedules: _ignoredSchedules,
+    presenter: _ignoredPresenter,
+    ...restOverrides
+  } = options.overrides ?? {};
+
   const reminderPorts: ReminderApplicationDependencies = {
-    schedules: new MockLocalScheduleReader(),
-    time: new MockTimeListener(),
-    location: new MockLocationMonitor(),
+    time: new IntervalTimeListener(),
+    location: new ExpoLocationMonitor(),
     alarms: new NativeAlarmScheduler(),
-    delivery: new MockReminderDelivery(),
-    audio: new MockAudioPlayback(),
+    delivery: new LocalReminderDelivery(),
+    audio: new ExpoAudioPlayback(),
     device: new NativeDeviceCapability(),
-    presenter: new MockReminderPresenter(),
-    systemNotification: new MockSystemNotification(),
-    popup: new MockPopup(),
-    vibration: new MockVibration(),
-    recovery: new MockReminderRecovery(),
-    state: new MockReminderStateStore(),
-    dispositionSync: new MockReminderDispositionSync(),
+    systemNotification: new LocalSystemNotification(),
+    popup: new NoopPopup(),
+    vibration: new ReactNativeVibration(),
+    recovery: new LocalReminderRecovery(),
+    state: reminderState,
+    dispositionSync: new LocalReminderDispositionSync(),
+    ...restOverrides,
+    schedules,
+    presenter,
   };
-  const reminder = new MockReminderApplication(reminderPorts);
+
+  const reminder = new LocalReminderApplication(reminderPorts);
   const scheduleView = new ScheduleViewStore();
   const runtime = new AppRuntime([
     {
@@ -78,5 +104,8 @@ export function createAppServices(options: CreateAppServicesOptions = {}): AppSe
     reminderPorts,
     scheduleView,
     webSocketClient: auth.webSocketClient,
+    schedules,
+    reminderState,
+    alertDialog,
   };
 }
