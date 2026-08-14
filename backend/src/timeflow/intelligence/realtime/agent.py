@@ -229,8 +229,19 @@ class RealtimeAgent:
         account_id, _ = key
         timezone = stream.timezone
         voice_mode = stream.voice_mode
+        client_location = _client_location_from_stream(stream)
+        logger.info(
+            "opening realtime session: voice_mode=%s location_fields_complete=%s "
+            "location_valid=%s coordinate_system=%s",
+            voice_mode,
+            stream.latitude is not None
+            and stream.longitude is not None
+            and stream.coordinate_system is not None,
+            client_location is not None,
+            stream.coordinate_system,
+        )
         tools = (
-            await self._tools_factory(account_id, timezone, _client_location_from_stream(stream))
+            await self._tools_factory(account_id, timezone, client_location)
             if self._tools_factory is not None
             else None
         )
@@ -389,6 +400,7 @@ class _Turn:
             )
             return
 
+        logger.info("realtime model requested tool: name=%s", name)
         result = await self._tools.run(name, arguments)
         if result.outcome is not None:
             outcome = result.outcome

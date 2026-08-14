@@ -286,13 +286,22 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     // (尤其冷启动 GPS)可能耗时数秒,放在连接之后拿会把这段时间算进握手预算,
     // 导致 hello 送达前就被服务端以 1008 断开。超时兜底,拿不到就不带,不阻塞握手。
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let locationTimedOut = false;
     const sample = await Promise.race([
       this.deps.location.getCurrentSample().catch(() => null),
       new Promise<null>((resolve) => {
-        timeoutId = setTimeout(() => resolve(null), LOCATION_TIMEOUT_MS);
+        timeoutId = setTimeout(() => {
+          locationTimedOut = true;
+          resolve(null);
+        }, LOCATION_TIMEOUT_MS);
       }),
     ]);
     clearTimeout(timeoutId);
+    if (sample === null) {
+      console.warn('[location-search] voice handshake has no location', {
+        reason: locationTimedOut ? 'timeout' : 'unavailable',
+      });
+    }
 
     // session.hello → session.ready 的握手已经在 transport.connect() 内部完成
     // （共享的 AuthenticatedWebSocketClient 负责，voice_mode 已经绑定在这个
