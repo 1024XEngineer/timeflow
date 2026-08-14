@@ -10,7 +10,6 @@ import {
   LocalReminderDelivery,
   LocalReminderDispositionSync,
   LocalReminderRecovery,
-  LocalSystemNotification,
   NoopPopup,
   SqliteLocalScheduleReader,
   SqliteReminderStateStore,
@@ -22,6 +21,7 @@ import { ExpoAudioPlayback } from '../../infrastructure/audio';
 // Key 配置好之后如果想切回去，把下面这行 import 和 reminderPorts.location 换回来就行。
 import { ExpoLocationMonitor } from '../../infrastructure/location';
 import {
+  ExpoSystemNotification,
   NativeAlarmScheduler,
   NativeDeviceCapability,
   ReactNativeAlertDialog,
@@ -73,7 +73,7 @@ export function createAppServices(options: CreateAppServicesOptions = {}): AppSe
     delivery: new LocalReminderDelivery(),
     audio: new ExpoAudioPlayback(),
     device: new NativeDeviceCapability(),
-    systemNotification: new LocalSystemNotification(),
+    systemNotification: new ExpoSystemNotification(),
     popup: new NoopPopup(),
     vibration: new ReactNativeVibration(),
     recovery: new LocalReminderRecovery(),
