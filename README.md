@@ -18,10 +18,48 @@ TimeFlow 是一款语音优先的个人日程助手，帮你用说话的方式�
 
 ```text
 说话
-  → 助手理解意图并调用日程工具
+  → 助手理解意图
+  → 调用日程工具
   → 云端写入安排
   → 本地同步备份
-  → 助手语音ui
+  → 助手语音回复
   → 日历立刻可见
-  → 到点或到达指定地点时提醒
+  → 按照要求提醒
 ```
+
+## 快速上手
+
+需要 Docker、Node.js 20。JWT 密钥至少 32 个 UTF-8 字节。
+
+```bash
+cp .env.example .env
+# 在 .env 中设置 TIMEFLOW_JWT_SECRET
+docker compose up -d --build
+
+cd frontend
+cp .env.example .env
+npm ci
+npm start
+```
+
+API 在 `http://127.0.0.1:8000`。Expo Web 请把 `EXPO_PUBLIC_API_URL` 设为 `http://127.0.0.1:8000/api/v1`。后端细节见 [backend/README.md](backend/README.md)。
+
+## 仓库结构
+
+```text
+TimeFlow/
+├── frontend/   # Expo / React Native 客户端：日历、语音、本地日程与提醒
+├── backend/    # FastAPI 服务：账号、日程、语音助手与地点检索
+└── README.md
+```
+
+## 技术栈
+
+- 客户端：Expo、React Native、TypeScript、SQLite
+- 服务端：Python 3.11、FastAPI、PostgreSQL
+- 语音与地点：通义实时语音、腾讯地图检索
+
+## 相关入口
+
+- 后端启动与检查：[backend/README.md](backend/README.md)
+- 需求与进度：[Issues](https://github.com/1024XEngineer/timeflow/issues)
