@@ -2,8 +2,7 @@ import type { LocalScheduleReader } from '../../application/interfaces';
 import type { LocalReminderSchedule } from '../../domain';
 
 /**
- * 进程内日程投影，供调用方写入后再由 LocalReminderApplication rebuild/start 接管。
- * 正式本地 DB 接入前作为默认 LocalScheduleReader。
+ * 进程内日程投影：启动时从 SQLite `local_schedules` 水合，再由 LocalReminderApplication 接管。
  */
 export class InMemoryLocalScheduleReader implements LocalScheduleReader {
   private readonly byId = new Map<string, LocalReminderSchedule>();

@@ -79,4 +79,9 @@ export {
   MemoryReminderStateStore,
   NoopPopup,
 } from './data/local';
+export {
+  hydrateInMemorySchedulesFromLocalDb,
+  isHydratableScheduleReader,
+} from './data/local/hydrateInMemorySchedulesFromLocalDb';
+export { toLocalReminderSchedule } from './data/local/toLocalReminderSchedule';
 export { MockReminderPresenter, useReminderPermissionsOnLaunch } from './presentation';

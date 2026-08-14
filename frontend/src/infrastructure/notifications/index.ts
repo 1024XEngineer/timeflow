@@ -9,8 +9,10 @@ export {
   isTimeflowAlarmAvailable,
   nativeAreAlarmPermissionsGranted,
   nativeCancelAlarm,
+  nativeConsumeAlarmDispositions,
   nativeGetAlarmPermissionStatus,
   nativeOpenAlarmPermissionSettings,
   nativeRequestNotificationPermission,
   nativeScheduleAlarm,
+  subscribeNativeAlarmEvents,
 } from './native/TimeflowAlarmBridge';

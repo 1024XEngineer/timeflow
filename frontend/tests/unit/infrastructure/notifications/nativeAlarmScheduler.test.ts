@@ -7,6 +7,7 @@ import {
   isTimeflowAlarmAvailable,
   nativeAreAlarmPermissionsGranted,
   nativeCancelAlarm,
+  nativeConsumeAlarmDispositions,
   nativeScheduleAlarm,
 } from '../../../../src/infrastructure/notifications/native/TimeflowAlarmBridge';
 
@@ -18,6 +19,9 @@ jest.mock('react-native', () => {
     getPermissionStatus: jest.fn(),
     openPermissionSettings: jest.fn(),
     requestNotificationPermission: jest.fn(),
+    consumeNativeDispositions: jest.fn(),
+    addListener: jest.fn(),
+    removeListeners: jest.fn(),
   };
   return RN;
 });
@@ -35,6 +39,9 @@ type NativeAlarmMock = {
       notifications: boolean;
       battery: boolean;
     }>
+  >;
+  consumeNativeDispositions: jest.MockedFunction<
+    () => Promise<{ scheduleId: string; alarmId: string; state: string; updatedAtMillis: number }[]>
   >;
 };
 
@@ -81,9 +88,11 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
     native.schedule.mockReset();
     native.cancel.mockReset();
     native.getPermissionStatus.mockReset();
+    native.consumeNativeDispositions.mockReset();
     grantPermissions();
     native.schedule.mockResolvedValue({ alarmId: 'alarm-1' });
     native.cancel.mockResolvedValue(true);
+    native.consumeNativeDispositions.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -253,5 +262,46 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
       Date.parse('2026-08-13T10:00:00.000Z'),
       '午会',
     );
+  });
+
+  it('maps native dispositions onto the scheduler port', async () => {
+    native.consumeNativeDispositions.mockResolvedValue([
+      {
+        scheduleId: 'schedule-1',
+        alarmId: 'alarm-1',
+        state: 'confirmed',
+        updatedAtMillis: Date.parse(NOW),
+      },
+      {
+        scheduleId: '',
+        alarmId: 'alarm-x',
+        state: 'pending',
+        updatedAtMillis: Date.parse(NOW),
+      },
+    ]);
+    const scheduler = new NativeAlarmScheduler();
+    await expect(scheduler.consumeNativeDispositions()).resolves.toEqual([
+      {
+        schedule_id: 'schedule-1',
+        alarm_id: 'alarm-1',
+        state: 'confirmed',
+        updated_at: NOW,
+      },
+    ]);
+  });
+
+  it('returns an empty disposition list when the native method is missing', async () => {
+    const module = NativeModules.TimeflowAlarm as { consumeNativeDispositions?: unknown };
+    const original = module.consumeNativeDispositions;
+    delete module.consumeNativeDispositions;
+    await expect(nativeConsumeAlarmDispositions()).resolves.toEqual([]);
+    module.consumeNativeDispositions = original;
+  });
+
+  it('subscribe returns an unsubscribe function when the native module exists', () => {
+    const scheduler = new NativeAlarmScheduler();
+    const unsubscribe = scheduler.subscribe(() => undefined);
+    expect(typeof unsubscribe).toBe('function');
+    unsubscribe();
   });
 });

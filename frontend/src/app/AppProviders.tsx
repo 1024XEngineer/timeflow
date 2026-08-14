@@ -3,7 +3,11 @@ import { AppState } from 'react-native';
 
 import type { AuthController, AuthInvalidationCoordinator } from '../features/auth/application';
 import { AuthProvider, useAuth } from '../features/auth/presentation/AuthProvider';
-import { useReminderPermissionsOnLaunch } from '../features/reminder';
+import {
+  hydrateInMemorySchedulesFromLocalDb,
+  isHydratableScheduleReader,
+  useReminderPermissionsOnLaunch,
+} from '../features/reminder';
 import { AppServicesProvider } from './composition/AppServicesProvider';
 import type { AppServices } from './composition/createAppServices';
 
@@ -22,46 +26,54 @@ export function AppProviders({
   return (
     <AuthProvider controller={authController} invalidationCoordinator={invalidationCoordinator}>
       <AppServicesProvider services={services}>
-        <AuthenticatedRuntime reminder={services.reminder} runtime={services.runtime} />
+        <AuthenticatedRuntime services={services} />
         {children}
       </AppServicesProvider>
     </AuthProvider>
   );
 }
 
-function AuthenticatedRuntime({
-  reminder,
-  runtime,
-}: {
-  readonly reminder: AppServices['reminder'];
-  readonly runtime: AppServices['runtime'];
-}) {
+function AuthenticatedRuntime({ services }: { readonly services: AppServices }) {
   const { viewState } = useAuth();
+  const { reminder, reminderPorts, runtime } = services;
+  const accountId = viewState.status === 'authenticated' ? viewState.accountId : null;
 
   useEffect(() => {
-    if (viewState.status !== 'authenticated') {
+    if (accountId == null) {
       return;
     }
-
-    void runtime.start();
+    let cancelled = false;
+    void (async () => {
+      if (isHydratableScheduleReader(reminderPorts.schedules)) {
+        await hydrateInMemorySchedulesFromLocalDb(reminderPorts.schedules, accountId);
+      }
+      if (!cancelled) {
+        await runtime.start();
+      }
+    })();
     return () => {
+      cancelled = true;
       void runtime.stop();
     };
-  }, [runtime, viewState.status]);
+  }, [accountId, reminderPorts.schedules, runtime]);
 
   useEffect(() => {
-    if (viewState.status !== 'authenticated') {
+    if (accountId == null) {
       return;
     }
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') {
-        void reminder.rebuild();
-      }
+      if (state !== 'active') return;
+      void (async () => {
+        if (isHydratableScheduleReader(reminderPorts.schedules)) {
+          await hydrateInMemorySchedulesFromLocalDb(reminderPorts.schedules, accountId);
+        }
+        await reminder.rebuild();
+      })();
     });
     return () => {
       subscription.remove();
     };
-  }, [reminder, viewState.status]);
+  }, [accountId, reminder, reminderPorts.schedules]);
 
   return null;
 }

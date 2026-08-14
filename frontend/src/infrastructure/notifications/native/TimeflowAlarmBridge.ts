@@ -1,4 +1,4 @@
-import { NativeModules, Platform } from 'react-native';
+import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 
 export type NativeAlarmPermissionStatus = {
   exactAlarm: boolean;
@@ -16,7 +16,27 @@ type TimeflowAlarmNative = {
     kind: 'exactAlarm' | 'overlay' | 'fullScreen' | 'battery' | 'app',
   ) => Promise<boolean>;
   requestNotificationPermission: () => Promise<boolean>;
+  consumeNativeDispositions?: () => Promise<NativeAlarmDispositionPayload[]>;
+  addListener?: (eventName: string) => void;
+  removeListeners?: (count: number) => void;
 };
+
+export type NativeAlarmEventPayload = {
+  type: 'fired' | 'dismissed' | 'snoozed';
+  scheduleId: string;
+  alarmId: string;
+  title: string;
+  atMillis: number;
+};
+
+export type NativeAlarmDispositionPayload = {
+  scheduleId: string;
+  alarmId: string;
+  state: string;
+  updatedAtMillis: number;
+};
+
+const EVENT_NAME = 'TimeflowAlarmEvent';
 
 const NativeAlarm = NativeModules.TimeflowAlarm as TimeflowAlarmNative | undefined;
 
@@ -70,4 +90,38 @@ export async function nativeAreAlarmPermissionsGranted(): Promise<boolean> {
   if (status == null) return false;
   // 挂闹钟的最低要求：精确闹钟 + 通知；悬浮窗/全屏/电池影响展示，不阻塞调度。
   return status.exactAlarm && status.notifications;
+}
+
+export async function nativeConsumeAlarmDispositions(): Promise<NativeAlarmDispositionPayload[]> {
+  if (!isTimeflowAlarmAvailable() || NativeAlarm == null) return [];
+  if (NativeAlarm.consumeNativeDispositions == null) return [];
+  try {
+    return await NativeAlarm.consumeNativeDispositions();
+  } catch {
+    return [];
+  }
+}
+
+export function subscribeNativeAlarmEvents(
+  listener: (event: NativeAlarmEventPayload) => void,
+): () => void {
+  if (!isTimeflowAlarmAvailable() || NativeAlarm == null) {
+    return () => undefined;
+  }
+  try {
+    const emitter = new NativeEventEmitter(NativeAlarm as never);
+    const subscription = emitter.addListener(EVENT_NAME, (payload: NativeAlarmEventPayload) => {
+      if (
+        payload?.type !== 'fired' &&
+        payload?.type !== 'dismissed' &&
+        payload?.type !== 'snoozed'
+      ) {
+        return;
+      }
+      listener(payload);
+    });
+    return () => subscription.remove();
+  } catch {
+    return () => undefined;
+  }
 }

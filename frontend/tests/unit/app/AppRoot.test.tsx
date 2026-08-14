@@ -114,6 +114,7 @@ describe('AppRoot', () => {
   it('can retry SQLite initialization after a failure', async () => {
     mockedOpenTimeflowDatabase
       .mockRejectedValueOnce(new Error('database unavailable'))
+      .mockRejectedValueOnce(new Error('database unavailable'))
       .mockResolvedValue({} as never);
     const controller = createController({
       accountId: 'acc_001',
@@ -126,7 +127,7 @@ describe('AppRoot', () => {
     await waitFor(() => expect(screen.getByText('本地日程存储初始化失败')).toBeTruthy());
     fireEvent.press(screen.getByText('重试'));
 
-    await waitFor(() => expect(mockedOpenTimeflowDatabase).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(mockedOpenTimeflowDatabase).toHaveBeenCalledTimes(3));
     await waitFor(() => expect(screen.getByText('日程日历')).toBeTruthy());
   });
 
