@@ -41,31 +41,50 @@ public final class AlarmSoundService extends Service {
     private String scheduleId;
     private String alarmTitle;
     private int requestCode;
-    private boolean firedNotified;
+    /** Last alarm that already emitted `fired`; overlapping starts replace this instance. */
+    private String notifiedAlarmId;
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        requestCode = intent == null
+        int nextRequestCode = intent == null
                 ? 0
                 : intent.getIntExtra(AlarmContract.EXTRA_REQUEST_CODE, 0);
-        alarmId = intent == null
+        String nextAlarmId = intent == null
                 ? null
                 : intent.getStringExtra(AlarmContract.EXTRA_ALARM_ID);
-        scheduleId = intent == null
+        String nextScheduleId = intent == null
                 ? null
                 : intent.getStringExtra(AlarmContract.EXTRA_SCHEDULE_ID);
-        alarmTitle = intent == null
+        String nextTitle = intent == null
                 ? null
                 : intent.getStringExtra(AlarmContract.EXTRA_TITLE);
-        if (alarmId == null || alarmId.isEmpty()) {
-            alarmId = "legacy-" + requestCode;
+        if (nextAlarmId == null || nextAlarmId.isEmpty()) {
+            nextAlarmId = "legacy-" + nextRequestCode;
         }
-        if (scheduleId == null || scheduleId.isEmpty()) {
-            scheduleId = AlarmScheduler.scheduleIdForAlarm(this, alarmId);
+        if (nextScheduleId == null || nextScheduleId.isEmpty()) {
+            nextScheduleId = AlarmScheduler.scheduleIdForAlarm(this, nextAlarmId);
         }
-        if (alarmTitle == null || alarmTitle.isEmpty()) {
-            alarmTitle = "日程提醒";
+        if (nextTitle == null || nextTitle.isEmpty()) {
+            nextTitle = "日程提醒";
         }
+
+        // Singleton service: overlapping alarms are serialized last-wins so each
+        // schedule still gets its own `fired` event and the previous UI/audio is torn down.
+        boolean isNewAlarm = notifiedAlarmId == null || !nextAlarmId.equals(notifiedAlarmId);
+        if (isNewAlarm && notifiedAlarmId != null) {
+            releaseMediaPlayer();
+            removeAlarmOverlay();
+            NotificationManager existing =
+                    (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (existing != null) {
+                existing.cancel(requestCode);
+            }
+        }
+
+        requestCode = nextRequestCode;
+        alarmId = nextAlarmId;
+        scheduleId = nextScheduleId;
+        alarmTitle = nextTitle;
 
         createNotificationChannel();
         Notification notification = buildNotification(alarmId, alarmTitle);
@@ -80,8 +99,8 @@ public final class AlarmSoundService extends Service {
                 startForeground(requestCode, notification);
             }
             removeFromSavedAlarms();
-            if (!firedNotified) {
-                firedNotified = true;
+            if (isNewAlarm) {
+                notifiedAlarmId = alarmId;
                 AlarmNativeBridge.notifyFired(this, scheduleId, alarmId, alarmTitle);
             }
             showAlarmOverlay(alarmTitle);
@@ -97,6 +116,7 @@ public final class AlarmSoundService extends Service {
     @Override
     public void onDestroy() {
         destroyed = true;
+        notifiedAlarmId = null;
         playbackHandler.removeCallbacksAndMessages(null);
         removeAlarmOverlay();
         releaseMediaPlayer();
