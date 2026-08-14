@@ -12,6 +12,7 @@ import type { LocationSample } from '../../features/reminder/domain';
 
 import {
   GEOFENCE_TASK_NAME,
+  drainPendingGeofenceEvents,
   subscribeGeofenceTaskEvents,
   type GeofenceTaskPayload,
 } from './geofenceTask';
@@ -71,6 +72,7 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
     if (sample != null) {
       listener({ schedule_id: request.schedule_id, sample, phase: 'inside' });
     }
+    await this.replayPendingEvents();
 
     return { listener_id, schedule_id: request.schedule_id };
   }
@@ -86,23 +88,41 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
     for (const listenerId of [...this.watches.keys()]) {
       await this.removeWatch(listenerId, false);
     }
-    await this.enqueueSync();
 
+    // 直接灌 Map，不逐个调用 watch()：watch() 自己的 enqueueSync()+getCurrentSample()
+    // 是为单条增量注册设计的，N 个 target 各跑一次会把 startGeofencingAsync 的区域
+    // 列表越注册越长（O(N²) 总区域数）、定位请求也打 N 次；这里全部灌完只同步一次、
+    // 取一次定位，再扇给每个刚注册的 watch。
     const handles: LocationWatchHandle[] = [];
     for (const target of targets) {
-      handles.push(
-        await this.watch(
-          {
-            schedule_id: target.schedule_id,
-            center: target.center,
-            radius_meters: target.radius_meters,
-            mode: target.mode,
-            background: target.background,
-          },
-          listener,
-        ),
-      );
+      const listener_id = `location-${target.schedule_id}`;
+      this.watches.set(listener_id, {
+        listener_id,
+        request: {
+          schedule_id: target.schedule_id,
+          center: target.center,
+          radius_meters: target.radius_meters,
+          mode: target.mode,
+          background: target.background,
+        },
+        listener,
+      });
+      this.scheduleToListener.set(target.schedule_id, listener_id);
+      handles.push({ listener_id, schedule_id: target.schedule_id });
     }
+    await this.enqueueSync();
+
+    const sample = await this.getCurrentSample();
+    if (sample != null) {
+      for (const handle of handles) {
+        listener({ schedule_id: handle.schedule_id, sample, phase: 'inside' });
+      }
+    }
+
+    // App 进程被杀掉期间，headless task 攒下的围栏事件在这里补上——watches/
+    // scheduleToListener 刚灌好，handleTaskEvent 才查得到对应的 watch。
+    await this.replayPendingEvents();
+
     return handles;
   }
 
@@ -136,6 +156,14 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
     if (state !== 'active' || this.watches.size === 0) return;
     void this.enqueueSync();
   };
+
+  /** 补上 headless task 期间（没有订阅者时）攒下的围栏事件，按正常路径重放一遍。 */
+  private async replayPendingEvents(): Promise<void> {
+    const pending = await drainPendingGeofenceEvents();
+    for (const payload of pending) {
+      this.handleTaskEvent(payload);
+    }
+  }
 
   private readonly handleTaskEvent = (payload: GeofenceTaskPayload): void => {
     const listenerId = this.scheduleToListener.get(payload.schedule_id);
