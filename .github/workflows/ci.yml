@@ -139,4 +139,8 @@ jobs:
         run: npm run check
 
       - name: Export build
+        env:
+          # 只是导出/校验配置，不产出真机可用的原生包；占位值够让百度定位插件的
+          # apiKey 校验通过，不需要在 CI 里存真的百度 Key。
+          TIMEFLOW_BAIDU_LOCATION_API_KEY: ci-placeholder
         run: npx expo export --platform android --output-dir dist

@@ -1,0 +1,12 @@
+{
+  "name": "timeflow-alarm",
+  "version": "1.0.0",
+  "description": "Native Android exact-alarm bridge for Timeflow",
+  "main": "index.js",
+  "license": "UNLICENSED",
+  "private": true,
+  "peerDependencies": {
+    "react": "*",
+    "react-native": "*"
+  }
+}

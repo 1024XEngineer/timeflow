@@ -1,0 +1,12 @@
+{
+  "name": "timeflow-baidu-location",
+  "version": "1.0.0",
+  "description": "Native Android Baidu LocationClient bridge for Timeflow (no Google geofencing)",
+  "main": "index.js",
+  "license": "UNLICENSED",
+  "private": true,
+  "peerDependencies": {
+    "react": "*",
+    "react-native": "*"
+  }
+}
