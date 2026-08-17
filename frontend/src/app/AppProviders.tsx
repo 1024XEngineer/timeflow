@@ -1,7 +1,8 @@
-import { type PropsWithChildren, useEffect } from 'react';
+import { type PropsWithChildren, useCallback, useEffect } from 'react';
 
 import type { AuthController, AuthInvalidationCoordinator } from '../features/auth/application';
 import { AuthProvider, useAuth } from '../features/auth/presentation/AuthProvider';
+import { useReminderPermissionsOnLaunch } from '../features/reminder';
 import { AppServicesProvider } from './composition/AppServicesProvider';
 import type { AppServices } from './composition/createAppServices';
 
@@ -19,26 +20,37 @@ export function AppProviders({
   return (
     <AuthProvider controller={authController} invalidationCoordinator={invalidationCoordinator}>
       <AppServicesProvider services={services}>
-        <AuthenticatedRuntime runtime={services.runtime} />
+        <AuthenticatedRuntime services={services} />
         {children}
       </AppServicesProvider>
     </AuthProvider>
   );
 }
 
-function AuthenticatedRuntime({ runtime }: { readonly runtime: AppServices['runtime'] }) {
+function AuthenticatedRuntime({ services }: { readonly services: AppServices }) {
   const { viewState } = useAuth();
+  const isAuthenticated = viewState.status === 'authenticated';
+
+  const onPermissionsUpdated = useCallback(() => {
+    void services.reminder.rebuild();
+  }, [services]);
+
+  useReminderPermissionsOnLaunch(
+    isAuthenticated ? services.reminderPorts.device : null,
+    isAuthenticated ? services.alertDialog : null,
+    onPermissionsUpdated,
+  );
 
   useEffect(() => {
-    if (viewState.status !== 'authenticated') {
+    if (!isAuthenticated) {
       return;
     }
 
-    void runtime.start();
+    void services.runtime.start();
     return () => {
-      void runtime.stop();
+      void services.runtime.stop();
     };
-  }, [runtime, viewState.status]);
+  }, [isAuthenticated, services]);
 
   return null;
 }
