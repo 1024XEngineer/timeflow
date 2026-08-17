@@ -38,6 +38,7 @@ final class AlarmRingUi {
     private static final long ENTER_MILLIS = 420L;
     private static final long ENTER_STAGGER_MILLIS = 60L;
     private static final float ENTER_OFFSET_DP = 10f;
+    private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("M月d日 EEEE", Locale.CHINA);
 
     private AlarmRingUi() {
     }
@@ -237,7 +238,7 @@ final class AlarmRingUi {
     }
 
     private static String formatDate() {
-        return new SimpleDateFormat("M月d日 EEEE", Locale.CHINA).format(new Date());
+        return DATE_FORMAT.format(new Date());
     }
 
     private static TextView text(Context context, String value, float sizeSp, int color, Typeface face) {
