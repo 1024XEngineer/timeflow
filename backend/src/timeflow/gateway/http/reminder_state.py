@@ -42,6 +42,8 @@ class ReminderStateRequest(BaseModel):
         schedule_id = value.strip()
         if not schedule_id:
             raise ValueError("schedule_id must not be blank")
+        if len(schedule_id) > 64:
+            raise ValueError("schedule_id must not exceed 64 characters")
         return schedule_id
 
 

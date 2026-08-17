@@ -125,6 +125,7 @@ def test_missing_or_invalid_token_never_calls_business_service() -> None:
         {"disposition_state": "confirmed"},
         {"schedule_id": "", "disposition_state": "confirmed"},
         {"schedule_id": "   ", "disposition_state": "confirmed"},
+        {"schedule_id": f" {'x' * 65} ", "disposition_state": "confirmed"},
         {"schedule_id": "schedule-001", "disposition_state": "dismissed"},
         {"schedule_id": "schedule-001", "disposition_state": True},
         {**VALID_BODY, "account_id": "account-b"},
