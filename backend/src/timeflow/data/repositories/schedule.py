@@ -181,6 +181,33 @@ class ScheduleRepository:
             )
         return None
 
+    def confirm_reminder_disposition(
+        self,
+        *,
+        account_id: str,
+        schedule_id: str,
+        confirmed_at: datetime,
+    ) -> ScheduleSnapshot | None:
+        """Atomically confirm one active, account-owned configured reminder."""
+        statement = (
+            update(Schedule)
+            .where(
+                Schedule.id == schedule_id,
+                Schedule.account_id == account_id,
+                Schedule.status == ScheduleStatus.ACTIVE.value,
+                Schedule.reminder_type.is_not(None),
+                Schedule.reminder_disposition_state.is_(None),
+            )
+            .values(
+                reminder_disposition_state=ReminderDispositionState.CONFIRMED.value,
+                updated_at=confirmed_at,
+                revision=Schedule.revision + 1,
+            )
+            .returning(Schedule)
+        )
+        model = self._session.scalars(statement).one_or_none()
+        return None if model is None else _to_schedule_snapshot(model)
+
     def add_occurrence_override(
         self,
         *,

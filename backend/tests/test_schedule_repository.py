@@ -10,6 +10,9 @@ from sqlalchemy.orm import Session
 
 from timeflow.business.calendar import (
     OccurrenceOverrideAction,
+    ReminderDispositionState,
+    ReminderStrength,
+    ReminderType,
     ScheduleKind,
     ScheduleOccurrenceOverrideSnapshot,
     ScheduleSnapshot,
@@ -302,6 +305,105 @@ def test_schedule_update_preserves_immutable_creation_time(session: Session) -> 
     assert persisted is not None
     assert persisted.created_at == original.created_at.replace(tzinfo=None)
     assert persisted.created_at != caller_created_at.replace(tzinfo=None)
+
+
+def test_reminder_confirmation_atomically_sets_state_time_and_revision(session: Session) -> None:
+    """The first confirmation performs the complete aggregate transition."""
+    repository = ScheduleRepository(session)
+    original = repository.add_schedule(
+        replace(
+            _schedule("schedule-a", "account-a", revision=5),
+            reminder_type=ReminderType.BEFORE_START,
+            reminder_offset_minutes=10,
+            reminder_strength=ReminderStrength.MEDIUM,
+        )
+    )
+    confirmed_at = datetime(2026, 8, 17, 4, tzinfo=UTC)
+
+    persisted = repository.confirm_reminder_disposition(
+        account_id="account-a",
+        schedule_id=original.id,
+        confirmed_at=confirmed_at,
+    )
+
+    assert persisted is not None
+    assert persisted.reminder_disposition_state is ReminderDispositionState.CONFIRMED
+    assert persisted.updated_at == confirmed_at.replace(tzinfo=None)
+    assert persisted.revision == 6
+
+
+def test_duplicate_reminder_confirmation_is_a_no_op(session: Session) -> None:
+    """An already-confirmed row is not updated a second time."""
+    repository = ScheduleRepository(session)
+    original = repository.add_schedule(
+        replace(
+            _schedule("schedule-a", "account-a", revision=5),
+            reminder_type=ReminderType.BEFORE_START,
+            reminder_offset_minutes=10,
+            reminder_strength=ReminderStrength.MEDIUM,
+        )
+    )
+    first_time = datetime(2026, 8, 17, 4, tzinfo=UTC)
+    first = repository.confirm_reminder_disposition(
+        account_id="account-a",
+        schedule_id=original.id,
+        confirmed_at=first_time,
+    )
+    assert first is not None
+
+    duplicate = repository.confirm_reminder_disposition(
+        account_id="account-a",
+        schedule_id=original.id,
+        confirmed_at=datetime(2026, 8, 17, 5, tzinfo=UTC),
+    )
+    persisted = repository.get_schedule(account_id="account-a", schedule_id=original.id)
+
+    assert duplicate is None
+    assert persisted is not None
+    assert persisted.updated_at == first_time.replace(tzinfo=None)
+    assert persisted.revision == 6
+
+
+@pytest.mark.parametrize("case", ["cross-account", "deleted", "no-reminder"])
+def test_reminder_confirmation_rejects_ineligible_rows(session: Session, case: str) -> None:
+    """Ownership, lifecycle, and reminder presence are enforced in the UPDATE."""
+    repository = ScheduleRepository(session)
+    original = replace(
+        _schedule("schedule-a", "account-a", revision=5),
+        reminder_type=ReminderType.BEFORE_START,
+        reminder_offset_minutes=10,
+        reminder_strength=ReminderStrength.MEDIUM,
+    )
+    if case == "deleted":
+        original = replace(
+            original,
+            status=ScheduleStatus.DELETED,
+            deleted_at=datetime(2026, 8, 17, 3, tzinfo=UTC),
+        )
+    if case == "no-reminder":
+        original = replace(
+            original,
+            reminder_type=None,
+            reminder_offset_minutes=None,
+            reminder_strength=None,
+        )
+    repository.add_schedule(original)
+
+    result = repository.confirm_reminder_disposition(
+        account_id="account-b" if case == "cross-account" else "account-a",
+        schedule_id=original.id,
+        confirmed_at=datetime(2026, 8, 17, 4, tzinfo=UTC),
+    )
+    persisted = repository.get_schedule(
+        account_id="account-a",
+        schedule_id=original.id,
+        include_deleted=True,
+    )
+
+    assert result is None
+    assert persisted is not None
+    assert persisted.reminder_disposition_state is None
+    assert persisted.revision == 5
 
 
 def test_deleted_schedules_are_hidden_by_default(session: Session) -> None:
