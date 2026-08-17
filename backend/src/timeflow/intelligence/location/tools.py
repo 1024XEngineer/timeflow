@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -18,6 +19,7 @@ from timeflow.intelligence.location.contracts import (
 from timeflow.intelligence.location.service import LocationSearchService
 
 LOCATION_SEARCH = "location_search"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,10 +35,13 @@ class LocationSearchTool:
         try:
             query = _query(arguments)
             candidates = await self.service.search(self.context, query)
-        except LocationInputError:
+        except LocationInputError as error:
+            logger.warning("location search rejected input: error_type=%s", type(error).__name__)
             return _json({"status": "invalid_input", "candidates": []})
-        except (LocationConfigurationError, LocationConnectionError, LocationProtocolError):
+        except (LocationConfigurationError, LocationConnectionError, LocationProtocolError) as error:
+            logger.warning("location search provider unavailable: error_type=%s", type(error).__name__)
             return _json({"status": "provider_unavailable", "candidates": []})
+        logger.info("location search completed: candidate_count=%s", len(candidates))
         return _json(
             {
                 "status": "ok",

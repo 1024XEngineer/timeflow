@@ -93,6 +93,7 @@ class TencentMapsLocationPort:
             candidate = _candidate(item)
             if candidate is not None:
                 candidates.append(candidate)
+        logger.info("Tencent Maps search succeeded: candidate_count=%s", len(candidates))
         return tuple(candidates)
 
     async def _get(
@@ -106,12 +107,26 @@ class TencentMapsLocationPort:
             response = await self._client.get(f"{self._base_url}{path}", params=params)
             response.raise_for_status()
             payload = response.json()
-        except (httpx.RequestError, httpx.HTTPStatusError):
-            logger.warning("Tencent Maps request failed", extra={"operation": operation})
+        except httpx.HTTPStatusError as error:
+            logger.warning(
+                "Tencent Maps request failed: operation=%s error_type=%s status_code=%s",
+                operation,
+                type(error).__name__,
+                error.response.status_code,
+            )
+            raise LocationConnectionError("Tencent Maps request failed") from None
+        except httpx.RequestError as error:
+            logger.warning(
+                "Tencent Maps request failed: operation=%s error_type=%s",
+                operation,
+                type(error).__name__,
+            )
             raise LocationConnectionError("Tencent Maps request failed") from None
         except ValueError:
+            logger.warning("Tencent Maps returned invalid JSON: operation=%s", operation)
             raise LocationProtocolError("Tencent Maps returned invalid JSON") from None
         if not isinstance(payload, dict):
+            logger.warning("Tencent Maps returned invalid response: operation=%s", operation)
             raise LocationProtocolError("Tencent Maps returned an invalid response")
         status = payload.get("status")
         if isinstance(status, bool) or not isinstance(status, int) or status != 0:
@@ -119,7 +134,8 @@ class TencentMapsLocationPort:
             # contains user data, so logging them is safe and is the only way to tell
             # these apart later -- LocationProtocolError itself carries no detail on.
             logger.warning(
-                "Tencent Maps rejected the request: status=%s message=%s",
+                "Tencent Maps rejected the request: operation=%s status=%s message=%s",
+                operation,
                 status,
                 payload.get("message"),
             )

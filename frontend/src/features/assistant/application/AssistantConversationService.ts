@@ -180,13 +180,22 @@ export class AssistantConversationService implements AssistantApplicationPort {
     // 清掉超时定时器，不然赢了比赛的那次调用还会留一个挂到 2s 之后才触发的
     // 空转定时器（无功能影响，但测试环境里会被当成没清理干净的异步句柄）。
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let locationTimedOut = false;
     const sample = await Promise.race([
       this.deps.location.getCurrentSample().catch(() => null),
       new Promise<null>((resolve) => {
-        timeoutId = setTimeout(() => resolve(null), LOCATION_TIMEOUT_MS);
+        timeoutId = setTimeout(() => {
+          locationTimedOut = true;
+          resolve(null);
+        }, LOCATION_TIMEOUT_MS);
       }),
     ]);
     clearTimeout(timeoutId);
+    if (sample === null) {
+      console.warn('[location-search] voice handshake has no location', {
+        reason: locationTimedOut ? 'timeout' : 'unavailable',
+      });
+    }
 
     // session.hello → session.ready 的握手已经在 transport.connect() 内部完成
     // （共享的 AuthenticatedWebSocketClient 负责），这里拿到的就是已经 ready 的连接。
@@ -288,6 +297,10 @@ export class AssistantConversationService implements AssistantApplicationPort {
   }
 
   private handleClose(event: { code: number; reason: string }): void {
+    // 从按住说话切到连续对话时，共享 WS 会因 voiceMode 不同而主动断开重连。
+    // 旧连接若只把 unsubscribeConnection 置空却不执行，旧服务仍会订阅新连接的
+    // TTS/PCM，并与连续对话服务把同一句话重复送进播放器。
+    this.unsubscribeConnection?.();
     this.connection = null;
     this.unsubscribeConnection = null;
     const message = event.reason || `连接已断开（${event.code}）`;

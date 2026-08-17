@@ -344,12 +344,23 @@ class ToolBox:
         provider recovers.
         """
         if self._location_service is None or self._client_location is None:
+            logger.warning(
+                "location search unavailable: provider_configured=%s client_location_available=%s",
+                self._location_service is not None,
+                self._client_location is not None,
+            )
             return ToolResult(output=PROVIDER_UNAVAILABLE_RESULT)
         if self._location_context is None:
             try:
+                logger.info("preparing location search context")
                 self._location_context = await self._location_service.prepare(self._client_location)
-            except LocationError:
+            except LocationError as error:
+                logger.warning(
+                    "location search context preparation failed: error_type=%s",
+                    type(error).__name__,
+                )
                 return ToolResult(output=PROVIDER_UNAVAILABLE_RESULT)
+            logger.info("location search context prepared")
         tool = build_location_search_tool(self._location_service, self._location_context)
         return ToolResult(output=await tool.execute(arguments))
 

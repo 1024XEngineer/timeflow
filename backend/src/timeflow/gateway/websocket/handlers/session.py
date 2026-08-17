@@ -1,5 +1,6 @@
 """The session.hello handshake that opens an authenticated session."""
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -25,6 +26,7 @@ from timeflow.gateway.websocket.ports import SessionContext
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 DEFAULT_VOICE_MODE = "push_to_talk"
 _VOICE_MODES = frozenset({"push_to_talk", "continuous"})
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +106,12 @@ class SessionHandshake:
             coordinate_system=hello.payload.coordinate_system,
             timezone=_resolved_timezone(hello.payload.timezone),
             voice_mode=_resolved_voice_mode(hello.payload.voice_mode),
+        )
+        logger.info(
+            "voice session authenticated: voice_mode=%s location_available=%s coordinate_system=%s",
+            session.voice_mode,
+            session.latitude is not None and session.longitude is not None,
+            session.coordinate_system,
         )
         reply = SessionReady(
             request_id=hello.request_id,

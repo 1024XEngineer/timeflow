@@ -101,6 +101,16 @@ def create_app(
                 owned_http_client, settings.tencent_map_api_key, settings.tencent_map_base_url
             )
         )
+        logger.info(
+            "location search configured: provider=tencent_maps timeout_seconds=%s",
+            settings.tencent_map_timeout_seconds,
+        )
+    elif audio_sink is None:
+        logger.warning(
+            "location search unavailable at startup: voice_agent_mode=%s tencent_maps_configured=%s",
+            settings.voice_agent_mode,
+            settings.tencent_maps_is_configured(),
+        )
 
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:

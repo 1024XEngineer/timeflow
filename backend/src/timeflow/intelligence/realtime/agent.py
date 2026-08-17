@@ -229,8 +229,19 @@ class RealtimeAgent:
         account_id, _ = key
         timezone = stream.timezone
         voice_mode = stream.voice_mode
+        client_location = _client_location_from_stream(stream)
+        logger.info(
+            "opening realtime session: voice_mode=%s location_fields_complete=%s "
+            "location_valid=%s coordinate_system=%s",
+            voice_mode,
+            stream.latitude is not None
+            and stream.longitude is not None
+            and stream.coordinate_system is not None,
+            client_location is not None,
+            stream.coordinate_system,
+        )
         tools = (
-            await self._tools_factory(account_id, timezone, _client_location_from_stream(stream))
+            await self._tools_factory(account_id, timezone, client_location)
             if self._tools_factory is not None
             else None
         )
@@ -327,6 +338,9 @@ class _Turn:
         self._question_id_factory = question_id_factory
         # None between replies; assigned on first use so each reply gets a fresh id.
         self._audio_id: str | None = None
+        # 保留最近一次已经交给客户端播放的 id。模型生成通常快于手机播放：等模型
+        # 侧交付完成后再发生的打断，仍必须准确指出需要停止的是哪条旧音频。
+        self._last_audio_id: str | None = None
         self._reply_id: str | None = None
         self._spoken = ""
         self._purpose = REPLY_PURPOSE
@@ -373,6 +387,7 @@ class _Turn:
         """Queue one chunk, starting the delivery on the first one."""
         if self._speaking is None:
             self._audio_id = self._audio_id_factory()
+            self._last_audio_id = self._audio_id
             self._speaking = asyncio.create_task(self._speak())
         await self._audio.put(data)
 
@@ -389,6 +404,7 @@ class _Turn:
             )
             return
 
+        logger.info("realtime model requested tool: name=%s", name)
         result = await self._tools.run(name, arguments)
         if result.outcome is not None:
             outcome = result.outcome
@@ -476,10 +492,12 @@ class _Turn:
             # own before the barge-in arrived -- but the model generates audio faster
             # than it plays back, so the phone can still be sounding it out. The session
             # only calls interrupted() this late when its own playable-until estimate
-            # says that's still plausible, so the client is told to stop regardless of
-            # what this turn still has queued locally. audio_id is empty because there
-            # is no reply left here to name; the client's handler does not read it.
-            await self._result_sink.deliver_canceled(AudioCanceled(audio_id=""), self._stream)
+            # says that's still plausible. Preserve the original id so the client can
+            # distinguish this old cancellation from a newer reply that has just begun.
+            if self._last_audio_id is not None:
+                await self._result_sink.deliver_canceled(
+                    AudioCanceled(audio_id=self._last_audio_id), self._stream
+                )
         self._spoken = ""
         self._reply_id = None
         self._audio_id = None
