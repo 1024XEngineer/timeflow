@@ -6,6 +6,5 @@ export {
   LocalReminderDelivery,
   LocalReminderDispositionSync,
   LocalReminderRecovery,
-  LocalSystemNotification,
   NoopPopup,
 } from './LocalReminderAdapters';

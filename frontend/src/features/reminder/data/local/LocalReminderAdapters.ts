@@ -9,9 +9,6 @@ import type {
   ReminderDispositionSyncReceipt,
   ReminderRecoveryPort,
   ReminderRecoveryReceipt,
-  SystemNotificationPort,
-  SystemNotificationReceipt,
-  SystemNotificationRequest,
   ReminderConfirmedDisposition,
 } from '../../application/interfaces';
 
@@ -43,16 +40,6 @@ export class NoopPopup implements PopupPort {
   }
 }
 
-/** 系统通知占位：接入 expo-notifications 前保持可替换端口。 */
-export class LocalSystemNotification implements SystemNotificationPort {
-  async show(request: SystemNotificationRequest): Promise<SystemNotificationReceipt> {
-    return { notification_id: request.notification_id, shown: true };
-  }
-
-  async cancel(_notificationId: string): Promise<void> {
-    return Promise.resolve();
-  }
-}
 
 /** 重启恢复占位：后续可接开机广播 / 精确闹钟重挂。 */
 export class LocalReminderRecovery implements ReminderRecoveryPort {
