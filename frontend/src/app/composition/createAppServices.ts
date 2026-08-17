@@ -6,9 +6,9 @@ import type {
 } from '../../features/reminder/application/interfaces';
 import { LocalReminderApplication } from '../../features/reminder/application';
 import {
-  MockLocalScheduleReader,
-  MockReminderDispositionSync,
-  MockReminderStateStore,
+  InMemoryLocalScheduleReader,
+  LocalReminderDispositionSync,
+  MemoryReminderStateStore,
 } from '../../features/reminder/data/local';
 import { ExpoAudioPlayback } from '../../infrastructure/audio';
 import { ExpoLocationMonitor } from '../../infrastructure/location';
@@ -43,7 +43,7 @@ export interface CreateAppServicesOptions {
 export function createAppServices(options: CreateAppServicesOptions = {}): AppServices {
   const auth = createAuthRuntime(options.auth);
   const reminderPorts: ReminderApplicationDependencies = {
-    schedules: new MockLocalScheduleReader(),
+    schedules: new InMemoryLocalScheduleReader(),
     time: new IntervalTimeListener(),
     location: new ExpoLocationMonitor(),
     alarms: new NativeAlarmScheduler(),
@@ -55,8 +55,8 @@ export function createAppServices(options: CreateAppServicesOptions = {}): AppSe
     popup: new MockPopup(),
     vibration: new MockVibration(),
     recovery: new MockReminderRecovery(),
-    state: new MockReminderStateStore(),
-    dispositionSync: new MockReminderDispositionSync(),
+    state: new MemoryReminderStateStore(),
+    dispositionSync: new LocalReminderDispositionSync(),
   };
   const reminder = new LocalReminderApplication(reminderPorts);
   const scheduleView = new ScheduleViewStore();

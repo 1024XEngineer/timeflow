@@ -64,11 +64,13 @@ export type {
 } from './application';
 export { LocalReminderApplication } from './application';
 export {
-  MockLocalScheduleReader,
-  MockReminderApplication,
-  MockReminderDispositionSync,
-  MockReminderStateStore,
-  MOCK_REMINDER_SCHEDULES,
+  InMemoryLocalScheduleReader,
+  LocalReminderDelivery,
+  LocalReminderDispositionSync,
+  LocalReminderRecovery,
   MemoryReminderStateStore,
+  NoopPopup,
+  SqliteLocalScheduleReader,
+  SqliteReminderStateStore,
 } from './data/local';
 export { MockReminderPresenter, useReminderPermissionsOnLaunch } from './presentation';
