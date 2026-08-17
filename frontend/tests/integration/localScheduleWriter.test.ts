@@ -52,6 +52,15 @@ describe('LocalScheduleWriter', () => {
     expect(stored?.title).toBe('Team sync');
   });
 
+  it('rejects a schedule payload missing a required field', async () => {
+    const writer = new LocalScheduleWriter(repository);
+    const command = appliedCommand({ schedule: { id: 'schedule-a' } });
+
+    await expect(writer.applyCommandResult('account-a', command)).rejects.toThrow(
+      'command.result.schedule.schedule_type must be a non-empty string',
+    );
+  });
+
   it('does not write when the command was not applied', async () => {
     const writer = new LocalScheduleWriter(repository);
     await writer.applyCommandResult('account-a', appliedCommand({ status: 'rejected' }));
