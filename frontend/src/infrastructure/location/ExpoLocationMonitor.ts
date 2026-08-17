@@ -133,12 +133,16 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
   async getCurrentSample(): Promise<LocationSample | null> {
     try {
       const { status } = await Location.getForegroundPermissionsAsync();
-      if (status !== 'granted') return this.lastSample;
+      if (status !== 'granted') {
+        console.warn('[geofence] getCurrentSample skipped: foreground permission not granted');
+        return this.lastSample;
+      }
       const position = await Location.getCurrentPositionAsync({});
       const sample = toSample(position);
       this.lastSample = sample;
       return sample;
-    } catch {
+    } catch (error) {
+      console.warn('[geofence] getCurrentSample failed', error);
       return this.lastSample;
     }
   }
@@ -222,9 +226,15 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
     }
 
     const { status: foreground } = await Location.getForegroundPermissionsAsync();
-    if (foreground !== 'granted') return;
+    if (foreground !== 'granted') {
+      console.warn('[geofence] syncRegions skipped: foreground permission not granted');
+      return;
+    }
     const { status: background } = await Location.getBackgroundPermissionsAsync();
-    if (background !== 'granted') return;
+    if (background !== 'granted') {
+      console.warn('[geofence] syncRegions skipped: background permission not granted');
+      return;
+    }
 
     const regions: Location.LocationRegion[] = [...this.watches.values()].map((watch) => ({
       identifier: watch.request.schedule_id,
@@ -237,8 +247,9 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
 
     try {
       await Location.startGeofencingAsync(GEOFENCE_TASK_NAME, regions);
-    } catch {
+    } catch (error) {
       // 系统围栏注册失败（比如权限被收回）；下次 watch()/rebuild() 会再重试。
+      console.warn('[geofence] startGeofencingAsync failed', error);
     }
   }
 }
