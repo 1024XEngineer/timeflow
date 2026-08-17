@@ -11,11 +11,13 @@ from typing import Any
 import pytest
 
 from timeflow.business.calendar import (
+    OccurrenceOverrideAction,
     ScheduleAgentService,
     ScheduleBusinessError,
     ScheduleErrorCode,
     ScheduleKind,
     ScheduleMutationResult,
+    ScheduleOccurrenceOverrideSnapshot,
     ScheduleSearchResult,
     ScheduleSnapshot,
     ScheduleStatus,
@@ -303,6 +305,48 @@ def test_a_delete_reaches_the_call_that_matches_the_kind(
         ToolBox("acc_test", service),
     )
     assert service.calls == [expected]
+
+
+OVERRIDE = ScheduleOccurrenceOverrideSnapshot(
+    id="ovr_1",
+    schedule_id="sch_1",
+    occurrence_start=datetime(2026, 9, 8, 7, 0, tzinfo=UTC),
+    action=OccurrenceOverrideAction.CANCEL,
+    created_at=datetime(2026, 9, 7, 1, 0, tzinfo=UTC),
+    updated_at=datetime(2026, 9, 7, 1, 0, tzinfo=UTC),
+)
+
+
+class OverrideProducingService(RecordingService):
+    """A this_occurrence delete that cancels rather than replaces: no new schedule, one override."""
+
+    def delete_recurring_schedule(self, *, account_id: str, command: Any) -> ScheduleMutationResult:
+        self.calls.append("delete_recurring")
+        return ScheduleMutationResult(schedules=(), occurrence_overrides=(OVERRIDE,))
+
+
+def test_a_this_occurrence_delete_reports_the_override_it_produced() -> None:
+    result = run(
+        "schedule_delete",
+        {
+            "schedule_id": "sch_1",
+            "expected_revision": 1,
+            "schedule_kind": "recurring",
+            "scope": "this_occurrence",
+        },
+        ToolBox("acc_test", OverrideProducingService()),
+    )
+    assert result.outcome is not None
+    assert result.outcome["schedule"] is None
+    assert result.outcome["occurrence_overrides"] == [
+        {
+            "id": "ovr_1",
+            "schedule_id": "sch_1",
+            "occurrence_start": "2026-09-08T07:00:00+00:00",
+            "action": "cancel",
+            "replacement_schedule_id": None,
+        }
+    ]
 
 
 def test_a_delete_with_nothing_left_to_report_still_says_it_applied() -> None:

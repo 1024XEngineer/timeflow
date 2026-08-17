@@ -78,9 +78,7 @@ function toCloudScheduleRow(accountId: string, raw: Record<string, unknown>): Cl
   };
 }
 
-function toOverrideRow(
-  override: AppliedOccurrenceOverride,
-): LocalScheduleOccurrenceOverrideRow {
+function toOverrideRow(override: AppliedOccurrenceOverride): LocalScheduleOccurrenceOverrideRow {
   return {
     id: override.id,
     schedule_id: override.schedule_id,
