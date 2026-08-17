@@ -199,14 +199,25 @@ class OpenAICompatibleLlm(LlmPort):
 class OpenAICompatibleJsonLlm(JsonLlmPort):
     """Complete one JSON-mode request through the configured compatible provider."""
 
-    def __init__(self, settings: Settings, client: _SyncClient | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        client: _SyncClient | None = None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> None:
         self._settings = settings
         self._client = client or cast(
             _SyncClient,
             OpenAI(
                 api_key=settings.openai_api_key or "not-configured",
                 base_url=settings.openai_base_url or None,
-                timeout=settings.openai_timeout_seconds,
+                timeout=(
+                    timeout_seconds
+                    if timeout_seconds is not None
+                    else settings.openai_timeout_seconds
+                ),
+                max_retries=0,
             ),
         )
 
@@ -218,7 +229,6 @@ class OpenAICompatibleJsonLlm(JsonLlmPort):
                 messages=[_message_payload(message) for message in messages],
                 response_format={"type": "json_object"},
                 stream=False,
-                extra_body={"enable_thinking": False},
             )
             choices = getattr(completion, "choices", None)
             if not isinstance(choices, list) or len(choices) != 1:

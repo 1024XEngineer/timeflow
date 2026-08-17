@@ -45,6 +45,7 @@ class Settings:
     openai_api_key: str = ""
     openai_model: str = "qwen-flash"
     openai_timeout_seconds: float = 30.0
+    schedule_category_timeout_seconds: float = 5.0
     agent_max_tool_rounds: int = 4
     aliyun_tts_ws_url: str = ""
     aliyun_tts_api_key: str = ""
@@ -87,6 +88,9 @@ class Settings:
         )
 
         openai_timeout_seconds = float(environ.get("TIMEFLOW_OPENAI_TIMEOUT_SECONDS", "30.0"))
+        schedule_category_timeout_seconds = float(
+            environ.get("TIMEFLOW_SCHEDULE_CATEGORY_TIMEOUT_SECONDS", "5.0")
+        )
         agent_max_tool_rounds = int(environ.get("TIMEFLOW_AGENT_MAX_TOOL_ROUNDS", "4"))
         tencent_map_timeout_seconds = float(
             environ.get("TIMEFLOW_TENCENT_MAP_TIMEOUT_SECONDS", "5.0")
@@ -121,6 +125,11 @@ class Settings:
             raise ValueError("ASR timeouts must be greater than zero")
         if openai_timeout_seconds <= 0:
             raise ValueError("TIMEFLOW_OPENAI_TIMEOUT_SECONDS must be greater than zero")
+        if (
+            not math.isfinite(schedule_category_timeout_seconds)
+            or schedule_category_timeout_seconds <= 0
+        ):
+            raise ValueError("TIMEFLOW_SCHEDULE_CATEGORY_TIMEOUT_SECONDS must be greater than zero")
         if agent_max_tool_rounds <= 0:
             raise ValueError("TIMEFLOW_AGENT_MAX_TOOL_ROUNDS must be a positive integer")
         if voice_agent_mode not in ("1", "2"):
@@ -185,6 +194,7 @@ class Settings:
             openai_api_key=environ.get("TIMEFLOW_OPENAI_API_KEY", ""),
             openai_model=environ.get("TIMEFLOW_OPENAI_MODEL", "qwen-flash"),
             openai_timeout_seconds=openai_timeout_seconds,
+            schedule_category_timeout_seconds=schedule_category_timeout_seconds,
             agent_max_tool_rounds=agent_max_tool_rounds,
             aliyun_tts_ws_url=environ.get("TIMEFLOW_ALIYUN_TTS_WS_URL", ""),
             aliyun_tts_api_key=environ.get("TIMEFLOW_ALIYUN_TTS_API_KEY", ""),
@@ -216,6 +226,10 @@ class Settings:
         that sets just these gets a working model rather than a puzzling half-configured one.
         """
         return bool(self.aliyun_audio_api_key and self.aliyun_audio_workspace_id)
+
+    def openai_is_configured(self) -> bool:
+        """Report whether OpenAI-compatible JSON requests have all required settings."""
+        return bool(self.openai_base_url and self.openai_api_key and self.openai_model)
 
     def tencent_maps_is_configured(self) -> bool:
         """Report whether the Tencent Maps adapter has a WebService credential."""

@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Sequence
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 
@@ -179,9 +180,20 @@ def test_json_completion_uses_the_existing_provider_configuration() -> None:
             "messages": [{"role": "user", "content": "classify"}],
             "response_format": {"type": "json_object"},
             "stream": False,
-            "extra_body": {"enable_thinking": False},
         }
     ]
+
+
+def test_json_client_uses_category_timeout_without_retries() -> None:
+    with mock.patch("timeflow.infrastructure.external.llm.openai_compatible.OpenAI") as factory:
+        OpenAICompatibleJsonLlm(settings(), timeout_seconds=5.0)
+
+    factory.assert_called_once_with(
+        api_key="test-secret-key",
+        base_url="https://example.invalid/v1",
+        timeout=5.0,
+        max_retries=0,
+    )
 
 
 @pytest.mark.parametrize(

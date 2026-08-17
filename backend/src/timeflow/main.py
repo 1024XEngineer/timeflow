@@ -221,9 +221,25 @@ def _build_realtime_agent(
     if settings.aliyun_audio_is_configured():
         logger.info("using the realtime model", extra={"model": settings.aliyun_audio_model})
 
+        if not settings.openai_is_configured():
+            logger.warning(
+                "schedule category classification is not configured; using other",
+                extra={
+                    "needs": (
+                        "TIMEFLOW_OPENAI_BASE_URL, TIMEFLOW_OPENAI_API_KEY, "
+                        "and TIMEFLOW_OPENAI_MODEL"
+                    )
+                },
+            )
+
         schedule_service = ScheduleApplicationService(
             lambda: SqlAlchemyScheduleUnitOfWork(session_factory),
-            category_classifier=LlmScheduleCategoryClassifier(OpenAICompatibleJsonLlm(settings)),
+            category_classifier=LlmScheduleCategoryClassifier(
+                OpenAICompatibleJsonLlm(
+                    settings,
+                    timeout_seconds=settings.schedule_category_timeout_seconds,
+                )
+            ),
         )
 
         async def bind_account(

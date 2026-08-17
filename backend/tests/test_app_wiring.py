@@ -217,6 +217,23 @@ def test_configured_realtime_model_lets_production_build() -> None:
     assert application is not None
 
 
+def test_missing_category_llm_configuration_logs_fallback_without_blocking_startup(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    missing_configuration = {
+        "TIMEFLOW_OPENAI_BASE_URL": "",
+        "TIMEFLOW_OPENAI_API_KEY": "",
+        "TIMEFLOW_OPENAI_MODEL": "",
+    }
+
+    with mock.patch.dict(os.environ, missing_configuration, clear=False):
+        application = _build_with_environment("production", audio_configured=True)
+
+    assert application is not None
+    assert "schedule category classification is not configured; using other" in caplog.text
+    assert "key-for-test" not in caplog.text
+
+
 def test_voice_agent_mode_two_fails_closed_until_conversation_agent_is_wired() -> None:
     """未实现 Agent 端口前，不能静默选择 LLM+ASR+TTS 模式。"""
     with pytest.raises(RuntimeError, match="TIMEFLOW_VOICE_AGENT_MODE=2"):

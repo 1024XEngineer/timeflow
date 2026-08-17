@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from itertools import count
-from types import TracebackType
+from types import SimpleNamespace, TracebackType
 
 import pytest
 
@@ -32,6 +32,8 @@ from timeflow.business.calendar import (
     UpdateScheduleCommand,
 )
 from timeflow.business.calendar.ports import ScheduleRevisionConflictError
+from timeflow.infrastructure.external.llm import OpenAICompatibleJsonLlm
+from timeflow.infrastructure.settings import Settings
 from timeflow.intelligence.conversation.llm import ChatMessage, LlmProviderError
 from timeflow.intelligence.schedule_category import LlmScheduleCategoryClassifier
 
@@ -381,6 +383,34 @@ def test_classification_failure_never_blocks_schedule_creation(
     assert snapshot.category is ScheduleCategory.OTHER
     assert store.schedules[snapshot.id] == snapshot
     assert llm.calls == 1
+
+
+@pytest.mark.parametrize("missing_field", ["openai_base_url", "openai_api_key", "openai_model"])
+def test_missing_category_llm_configuration_never_blocks_schedule_creation(
+    missing_field: str,
+) -> None:
+    settings = Settings(
+        app_name="Test API",
+        environment="test",
+        database_url="sqlite+pysqlite:///:memory:",
+        ws_handshake_timeout_seconds=5.0,
+        ws_max_unauthenticated_connections=100,
+        ws_audio_queue_max_chunks=32,
+        ws_max_audio_duration_ms=120000,
+        openai_base_url="https://example.invalid/v1",
+        openai_api_key="test-key",
+        openai_model="test-model",
+    )
+    unavailable_llm = OpenAICompatibleJsonLlm(
+        replace(settings, **{missing_field: ""}),
+        client=SimpleNamespace(),
+    )
+    service, store = _service(category_classifier=LlmScheduleCategoryClassifier(unavailable_llm))
+
+    snapshot = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert snapshot.category is ScheduleCategory.OTHER
+    assert store.schedules[snapshot.id] == snapshot
 
 
 def test_recurring_schedule_is_classified_once_on_creation() -> None:
