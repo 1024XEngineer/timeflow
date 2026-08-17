@@ -147,6 +147,33 @@ def test_account_snapshot_reads_schedules_and_overrides_with_one_statement(
     assert len(statements) == 1
 
 
+def test_account_snapshot_places_location_schedules_after_timed_schedules(
+    session: Session,
+) -> None:
+    """Schedules without a start time are ordered after timed schedules."""
+    repository = ScheduleRepository(session)
+    repository.add_schedule(
+        replace(
+            _schedule("location-a", "account-a"),
+            schedule_type=ScheduleType.LOCATION,
+            start_time=None,
+            location_name="Office",
+            latitude=31.2304,
+            longitude=121.4737,
+        )
+    )
+    repository.add_schedule(
+        replace(
+            _schedule("timed-a", "account-a"),
+            start_time=datetime(2026, 8, 17, 2, tzinfo=UTC),
+        )
+    )
+
+    snapshot = repository.get_account_snapshot(account_id="account-a")
+
+    assert [item.id for item in snapshot.schedules] == ["timed-a", "location-a"]
+
+
 def test_schedule_candidates_coarsely_filter_once_rows_and_keep_recurring_series(
     session: Session,
 ) -> None:

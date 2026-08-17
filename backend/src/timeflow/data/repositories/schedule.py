@@ -66,7 +66,11 @@ class ScheduleRepository:
                 ScheduleOccurrenceOverride.schedule_id == Schedule.id,
             )
             .where(Schedule.account_id == account_id)
-            .order_by(Schedule.start_time, Schedule.created_at, Schedule.id)
+            .order_by(
+                Schedule.start_time.asc().nullslast(),
+                Schedule.created_at,
+                Schedule.id,
+            )
         )
 
         schedules_by_id: dict[str, ScheduleSnapshot] = {}
