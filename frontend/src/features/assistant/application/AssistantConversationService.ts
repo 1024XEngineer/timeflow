@@ -274,9 +274,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
     }
     this.lastAppliedCommand = command;
     this.notifyListeners();
-    if (this.connection !== null) {
-      this.connection.send({ message_id: messageId, status: 'applied', type: 'message.ack' });
-    }
+    this.connection?.send({ message_id: messageId, status: 'applied', type: 'message.ack' });
   }
 
   private handleAudioFrame(chunk: ArrayBuffer): void {
