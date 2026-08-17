@@ -29,19 +29,11 @@ public final class RingActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         currentActivity = new WeakReference<>(this);
-        requestCode = getIntent().getIntExtra(AlarmContract.EXTRA_REQUEST_CODE, 0);
-        alarmId = getIntent().getStringExtra(AlarmContract.EXTRA_ALARM_ID);
-        scheduleId = getIntent().getStringExtra(AlarmContract.EXTRA_SCHEDULE_ID);
-        alarmTitle = getIntent().getStringExtra(AlarmContract.EXTRA_TITLE);
-        if (alarmId == null || alarmId.isEmpty()) {
-            alarmId = "legacy-" + requestCode;
-        }
-        if (scheduleId == null || scheduleId.isEmpty()) {
-            scheduleId = AlarmScheduler.scheduleIdForAlarm(this, alarmId);
-        }
-        if (alarmTitle == null || alarmTitle.isEmpty()) {
-            alarmTitle = "日程提醒";
-        }
+        AlarmContract.ExtractedExtras extras = AlarmContract.ExtractedExtras.from(this, getIntent());
+        requestCode = extras.requestCode;
+        alarmId = extras.alarmId;
+        scheduleId = extras.scheduleId;
+        alarmTitle = extras.title;
         makeVisibleOverLockScreen();
         matchSystemBarsToReminder();
         setContentView(buildContentView());

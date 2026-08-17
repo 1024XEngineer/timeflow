@@ -41,31 +41,16 @@ public final class AlarmSoundService extends Service {
     private String scheduleId;
     private String alarmTitle;
     private int requestCode;
-    private boolean firedNotified;
+    /** 上一次已经通知过 JS "fired" 的 alarmId；service 实例可能被多个不同闹钟复用。 */
+    private String firedNotifiedAlarmId;
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        requestCode = intent == null
-                ? 0
-                : intent.getIntExtra(AlarmContract.EXTRA_REQUEST_CODE, 0);
-        alarmId = intent == null
-                ? null
-                : intent.getStringExtra(AlarmContract.EXTRA_ALARM_ID);
-        scheduleId = intent == null
-                ? null
-                : intent.getStringExtra(AlarmContract.EXTRA_SCHEDULE_ID);
-        alarmTitle = intent == null
-                ? null
-                : intent.getStringExtra(AlarmContract.EXTRA_TITLE);
-        if (alarmId == null || alarmId.isEmpty()) {
-            alarmId = "legacy-" + requestCode;
-        }
-        if (scheduleId == null || scheduleId.isEmpty()) {
-            scheduleId = AlarmScheduler.scheduleIdForAlarm(this, alarmId);
-        }
-        if (alarmTitle == null || alarmTitle.isEmpty()) {
-            alarmTitle = "日程提醒";
-        }
+        AlarmContract.ExtractedExtras extras = AlarmContract.ExtractedExtras.from(this, intent);
+        requestCode = extras.requestCode;
+        alarmId = extras.alarmId;
+        scheduleId = extras.scheduleId;
+        alarmTitle = extras.title;
 
         createNotificationChannel();
         Notification notification = buildNotification(alarmId, alarmTitle);
@@ -80,8 +65,8 @@ public final class AlarmSoundService extends Service {
                 startForeground(requestCode, notification);
             }
             removeFromSavedAlarms();
-            if (!firedNotified) {
-                firedNotified = true;
+            if (!alarmId.equals(firedNotifiedAlarmId)) {
+                firedNotifiedAlarmId = alarmId;
                 AlarmNativeBridge.notifyFired(this, scheduleId, alarmId, alarmTitle);
             }
             showAlarmOverlay(alarmTitle);
