@@ -95,6 +95,7 @@ function createFakeConnection() {
 function createDeps(
   overrides: {
     applyCommandResult?: () => Promise<void>;
+    connect?: VoiceTransportPort['connect'];
     connection?: VoiceTransportConnection;
     requestPermission?: () => Promise<boolean>;
   } = {},
@@ -104,7 +105,9 @@ function createDeps(
   const unsubscribeAppState = jest.fn();
 
   const transport: VoiceTransportPort = {
-    connect: jest.fn(async () => overrides.connection ?? createFakeConnection().connection),
+    connect: jest.fn(
+      overrides.connect ?? (async () => overrides.connection ?? createFakeConnection().connection),
+    ),
   };
   const capture: AudioCapturePort = {
     requestPermission: jest.fn(overrides.requestPermission ?? (async () => true)),
@@ -163,6 +166,19 @@ async function startListening(
 describe('AssistantContinuousConversationService', () => {
   afterEach(() => {
     jest.useRealTimers();
+  });
+
+  it('reports a connection error when transport.connect() fails', async () => {
+    const deps = createDeps({
+      connect: async () => {
+        throw new Error('handshake rejected');
+      },
+    });
+    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+
+    await expect(service.startTurn()).rejects.toThrow('handshake rejected');
+    expect(service.getState()).toEqual({ message: '连接失败', phase: 'error' });
+    expect(deps.capture.requestPermission).not.toHaveBeenCalled();
   });
 
   it('ends the turn once the idle timeout elapses without further speech', async () => {

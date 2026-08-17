@@ -81,12 +81,15 @@ function createFakeConnection() {
 
 function createDeps(overrides: {
   applyCommandResult?: () => Promise<void>;
+  connect?: VoiceTransportPort['connect'];
   connection?: VoiceTransportConnection;
   requestPermission?: () => Promise<boolean>;
   startCapture?: () => Promise<void>;
 }) {
   const transport: VoiceTransportPort = {
-    connect: jest.fn(async () => overrides.connection ?? createFakeConnection().connection),
+    connect: jest.fn(
+      overrides.connect ?? (async () => overrides.connection ?? createFakeConnection().connection),
+    ),
   };
   const capture: AudioCapturePort = {
     requestPermission: jest.fn(overrides.requestPermission ?? (async () => true)),
@@ -138,6 +141,19 @@ describe('AssistantConversationService', () => {
     expect(fake.sent).toHaveLength(0);
     expect(deps.capture.start).not.toHaveBeenCalled();
     expect(service.getState()).toEqual({ message: '没有麦克风权限', phase: 'error' });
+  });
+
+  it('reports a connection error instead of hanging when transport.connect() fails', async () => {
+    const deps = createDeps({
+      connect: async () => {
+        throw new Error('handshake rejected');
+      },
+    });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    await expect(service.startTurn()).resolves.toBeUndefined();
+    expect(service.getState()).toEqual({ message: '连接失败', phase: 'error' });
+    expect(deps.capture.requestPermission).not.toHaveBeenCalled();
   });
 
   it('resolves startTurn instead of hanging when a transport error arrives before voice.stream.started', async () => {

@@ -178,6 +178,43 @@ describe('AuthController', () => {
     expect(controller.getViewState()).toBe(controller.getViewState());
     expect(controller.getViewState()).not.toHaveProperty('accessToken');
   });
+
+  it('enters a local preview session without calling the access API', async () => {
+    const store = new FakeAuthSessionStore();
+    let accessed = false;
+    const controller = new AuthController({
+      allowLocalPreview: true,
+      authAccess: async () => {
+        accessed = true;
+        return response;
+      },
+      now: () => 100_000,
+      store,
+    });
+
+    await controller.enterLocalPreview();
+
+    expect(accessed).toBe(false);
+    expect(controller.getViewState()).toEqual({
+      accountId: 'preview_local',
+      status: 'authenticated',
+      username: '本地预览',
+    });
+    expect(store.session).toMatchObject({ accountId: 'preview_local', username: '本地预览' });
+  });
+
+  it('refuses local preview when the composition root has not enabled it', async () => {
+    const controller = new AuthController({
+      authAccess: async () => response,
+      now: () => 100_000,
+      store: new FakeAuthSessionStore(),
+    });
+
+    await expect(controller.enterLocalPreview()).rejects.toMatchObject({
+      name: 'LocalPreviewAuthDisabledError',
+    });
+    expect(controller.getState().status).toBe('loading');
+  });
 });
 
 function createDeferred<T>() {

@@ -3,6 +3,7 @@ import { useRef, useState } from 'react';
 import {
   Image,
   KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,6 +13,7 @@ import {
   View,
 } from 'react-native';
 
+import { useAuth } from '../features/auth/presentation/AuthProvider';
 import { useAuthAccessForm } from '../features/auth/presentation/useAuthAccessForm';
 import { colors, spacing } from '../shared/ui/theme';
 
@@ -21,7 +23,25 @@ export function LoginScreen() {
   const passwordInputRef = useRef<TextInput>(null);
   const { width: windowWidth } = useWindowDimensions();
   const [focusedField, setFocusedField] = useState<FocusedField>(null);
+  const [isEnteringPreview, setIsEnteringPreview] = useState(false);
+  const [previewError, setPreviewError] = useState<string>();
+  const { allowLocalPreview, enterLocalPreview } = useAuth();
   const { errors, isSubmitting, submit, submitError, updateField, values } = useAuthAccessForm();
+  const busy = isSubmitting || isEnteringPreview;
+  const showLocalPreview = allowLocalPreview && Platform.OS === 'web';
+
+  async function handleLocalPreview() {
+    if (busy) return;
+    setPreviewError(undefined);
+    setIsEnteringPreview(true);
+    try {
+      await enterLocalPreview();
+    } catch {
+      setPreviewError('本地预览无法启动，请稍后重试');
+    } finally {
+      setIsEnteringPreview(false);
+    }
+  }
 
   return (
     <KeyboardAvoidingView
@@ -66,11 +86,14 @@ export function LoginScreen() {
                     autoCapitalize="none"
                     autoComplete="username"
                     autoCorrect={false}
-                    editable={!isSubmitting}
+                    editable={!busy}
                     enterKeyHint="next"
                     maxLength={128}
                     onBlur={() => setFocusedField(null)}
-                    onChangeText={(value) => updateField('username', value)}
+                    onChangeText={(value) => {
+                      setPreviewError(undefined);
+                      updateField('username', value);
+                    }}
                     onFocus={() => setFocusedField('username')}
                     onSubmitEditing={() => passwordInputRef.current?.focus()}
                     placeholder="输入用户名"
@@ -98,11 +121,14 @@ export function LoginScreen() {
                     accessibilityLabel="密码"
                     autoCapitalize="none"
                     autoComplete="current-password"
-                    editable={!isSubmitting}
+                    editable={!busy}
                     enterKeyHint="done"
                     maxLength={128}
                     onBlur={() => setFocusedField(null)}
-                    onChangeText={(value) => updateField('password', value)}
+                    onChangeText={(value) => {
+                      setPreviewError(undefined);
+                      updateField('password', value);
+                    }}
                     onFocus={() => setFocusedField('password')}
                     onSubmitEditing={submit}
                     placeholder="输入密码"
@@ -124,25 +150,42 @@ export function LoginScreen() {
                   ) : null}
                 </View>
 
-                {submitError ? (
+                {submitError || previewError ? (
                   <Text accessibilityLiveRegion="polite" style={styles.submitError}>
-                    {submitError}
+                    {submitError ?? previewError}
                   </Text>
                 ) : null}
 
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityState={{ disabled: isSubmitting }}
-                  disabled={isSubmitting}
+                  accessibilityState={{ disabled: busy }}
+                  disabled={busy}
                   onPress={submit}
                   style={({ pressed }) => [
                     styles.loginButton,
-                    isSubmitting && styles.loginButtonDisabled,
-                    pressed && !isSubmitting && styles.loginButtonPressed,
+                    busy && styles.loginButtonDisabled,
+                    pressed && !busy && styles.loginButtonPressed,
                   ]}
                 >
                   <Text style={styles.loginButtonText}>{isSubmitting ? '提交中…' : '继续'}</Text>
                 </Pressable>
+                {showLocalPreview ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: busy }}
+                    disabled={busy}
+                    onPress={() => void handleLocalPreview()}
+                    style={({ pressed }) => [
+                      styles.previewButton,
+                      busy && styles.loginButtonDisabled,
+                      pressed && !busy && styles.loginButtonPressed,
+                    ]}
+                  >
+                    <Text style={styles.previewButtonText}>
+                      {isEnteringPreview ? '正在进入预览…' : '进入本地预览'}
+                    </Text>
+                  </Pressable>
+                ) : null}
               </View>
             </View>
           </View>
@@ -249,6 +292,22 @@ const styles = StyleSheet.create({
   },
   loginButtonText: {
     color: colors.onPrimary,
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+  previewButton: {
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: 18,
+    borderWidth: 1,
+    height: 58,
+    justifyContent: 'center',
+    marginTop: spacing.md,
+  },
+  previewButtonText: {
+    color: colors.text,
     fontSize: 16,
     fontWeight: '700',
     letterSpacing: 0.2,

@@ -1,18 +1,25 @@
 import type { AuthAccess, AuthAccessRequest } from '../../../contracts/auth';
 import {
   createAuthSession,
+  createLocalPreviewSession,
   isObviouslyExpired,
+  type AuthSession,
   type AuthState,
   type AuthViewState,
 } from '../domain';
 import { AuthSessionDeletionRetrier } from './AuthSessionDeletionRetrier';
-import { AuthSessionPersistenceError, type AuthInvalidationReason } from './authErrors';
+import {
+  AuthSessionPersistenceError,
+  LocalPreviewAuthDisabledError,
+  type AuthInvalidationReason,
+} from './authErrors';
 import { AuthSessionCleanupRequiredError, type AuthSessionStore } from './interfaces';
 
 const INITIALIZATION_ERROR_MESSAGE = '无法恢复登录状态，请重试';
 
 /** 控制器依赖均由 app 组合，避免应用层触及具体网络和安全存储。 */
 export interface AuthControllerOptions {
+  readonly allowLocalPreview?: boolean;
   readonly authAccess: AuthAccess;
   readonly now: () => number;
   readonly retrier?: AuthSessionDeletionRetrier;
@@ -55,14 +62,14 @@ export class AuthController {
   async authenticate(credentials: AuthAccessRequest): Promise<void> {
     const response = await this.options.authAccess(credentials);
     const session = createAuthSession(response, credentials.username, this.options.now());
-    await this.retrier.cancel();
-    try {
-      await this.options.store.write(session);
-    } catch {
-      void this.retrier.clearOrRetry();
-      throw new AuthSessionPersistenceError();
+    await this.persistAuthenticatedSession(session);
+  }
+
+  async enterLocalPreview(): Promise<void> {
+    if (this.options.allowLocalPreview !== true) {
+      throw new LocalPreviewAuthDisabledError();
     }
-    this.publish({ session, status: 'authenticated' });
+    await this.persistAuthenticatedSession(createLocalPreviewSession(this.options.now()));
   }
 
   async invalidate(_reason: AuthInvalidationReason): Promise<void> {
@@ -71,6 +78,21 @@ export class AuthController {
 
   getAccessToken(): string | undefined {
     return this.state.status === 'authenticated' ? this.state.session.accessToken : undefined;
+  }
+
+  allowsLocalPreview(): boolean {
+    return this.options.allowLocalPreview === true;
+  }
+
+  private async persistAuthenticatedSession(session: AuthSession): Promise<void> {
+    await this.retrier.cancel();
+    try {
+      await this.options.store.write(session);
+    } catch {
+      void this.retrier.clearOrRetry();
+      throw new AuthSessionPersistenceError();
+    }
+    this.publish({ session, status: 'authenticated' });
   }
 
   private async restore(): Promise<void> {

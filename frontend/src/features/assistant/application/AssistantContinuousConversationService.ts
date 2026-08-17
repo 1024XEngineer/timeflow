@@ -129,7 +129,12 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       // UI 显示 listening 但麦克风帧全被吞掉。
       this.muted = false;
       this.setState({ phase: 'connecting' });
-      await this.connect();
+      try {
+        await this.connect();
+      } catch (error) {
+        this.setState({ message: '连接失败', phase: 'error' });
+        throw error;
+      }
       const connection = this.requireConnection();
 
       // 权限必须在 voice.stream.start 之前拿到并检查结果：这条消息一旦发出并被

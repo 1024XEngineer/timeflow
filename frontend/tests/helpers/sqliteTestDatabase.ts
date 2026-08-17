@@ -35,6 +35,17 @@ export class SqlJsExpoDatabase {
     }
   }
 
+  public async withTransactionAsync(task: () => Promise<void>): Promise<void> {
+    this.database.run('BEGIN');
+    try {
+      await task();
+      this.database.run('COMMIT');
+    } catch (error) {
+      this.database.run('ROLLBACK');
+      throw error;
+    }
+  }
+
   public async withExclusiveTransactionAsync(
     task: (transaction: SQLiteDatabase) => Promise<void>,
   ): Promise<void> {

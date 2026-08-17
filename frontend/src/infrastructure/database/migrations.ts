@@ -1,4 +1,5 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
+import { Platform } from 'react-native';
 
 export const CURRENT_DATABASE_VERSION = 1;
 
@@ -125,10 +126,28 @@ export async function migrateScheduleDatabase(database: SQLiteDatabase): Promise
     return;
   }
 
-  await database.withExclusiveTransactionAsync(async (transaction) => {
+  await runScheduleMigrationTransaction(database, async (transaction) => {
     if (currentVersion < 1) {
       await transaction.execAsync(CREATE_SCHEDULE_STORAGE_SQL);
       await transaction.execAsync('PRAGMA user_version = 1');
     }
+  });
+}
+
+async function runScheduleMigrationTransaction(
+  database: SQLiteDatabase,
+  task: (transaction: Pick<SQLiteDatabase, 'execAsync'>) => Promise<void>,
+): Promise<void> {
+  // expo-sqlite Web 没有 exclusive 事务：调用会直接抛
+  // "withExclusiveTransactionAsync is not supported on web"。
+  if (Platform.OS === 'web') {
+    await database.withTransactionAsync(async () => {
+      await task(database);
+    });
+    return;
+  }
+
+  await database.withExclusiveTransactionAsync(async (transaction) => {
+    await task(transaction);
   });
 }

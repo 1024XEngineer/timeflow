@@ -236,7 +236,10 @@ export class AuthenticatedWebSocketClient {
     }
 
     if (message.type === 'session.error') {
-      if (message.error.code === 'UNAUTHENTICATED') {
+      if (
+        message.error.code === 'UNAUTHENTICATED' &&
+        this.options.coordinator.shouldInvalidateOnUnauthenticated()
+      ) {
         void this.options.coordinator.invalidate('revoked');
       }
       this.disposeCurrent(new WebSocketConnectionError(), true, socket);

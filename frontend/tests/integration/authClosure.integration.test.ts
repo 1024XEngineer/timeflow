@@ -105,6 +105,24 @@ describe('authentication closure', () => {
     expect(harness.runtime.controller.getState()).toEqual({ status: 'unauthenticated' });
   });
 
+  it('keeps a local preview session when voice handshake and protected HTTP are unauthenticated', async () => {
+    const harness = createHarness({ allowLocalPreview: true });
+    await harness.runtime.controller.enterLocalPreview();
+    const { connection, hello, socket } = await openSocket(harness);
+    harness.transport.enqueueJson(401, httpInvalidToken);
+
+    socket.receive(JSON.stringify({ ...wsSessionUnauthenticated, request_id: hello.request_id }));
+
+    await expect(connection).rejects.toBeInstanceOf(WebSocketConnectionError);
+    await expect(harness.runtime.protectedClient('/schedules')).rejects.toBeInstanceOf(ApiError);
+    expect(harness.runtime.controller.getViewState()).toEqual({
+      accountId: 'preview_local',
+      status: 'authenticated',
+      username: '本地预览',
+    });
+    expect(harness.store.session?.accountId).toBe('preview_local');
+  });
+
   it('retains the session for non-401 errors and ordinary WebSocket failures', async () => {
     const harness = createHarness();
     await authenticate(harness);
@@ -223,7 +241,7 @@ interface AuthHarness {
   readonly transport: FakeAuthHttpTransport;
 }
 
-function createHarness(): AuthHarness {
+function createHarness(options: { readonly allowLocalPreview?: boolean } = {}): AuthHarness {
   const events: AuthDiagnosticEvent[] = [];
   const sockets: FakeWebSocket[] = [];
   const socketFactory = jest.fn((_: string) => {
@@ -234,6 +252,7 @@ function createHarness(): AuthHarness {
   const store = new FakeAuthSessionStore();
   const transport = new FakeAuthHttpTransport();
   const runtime = createAuthRuntime({
+    allowLocalPreview: options.allowLocalPreview,
     deviceId: 'device_001',
     diagnostics: { record: (event) => events.push(event) },
     fetch: transport.fetch,

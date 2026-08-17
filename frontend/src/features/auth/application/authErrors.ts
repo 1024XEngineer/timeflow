@@ -10,3 +10,11 @@ export class AuthSessionPersistenceError extends Error {
 
 /** 基础失效来源由调用方归类，控制器只负责安全退出当前会话。 */
 export type AuthInvalidationReason = 'expired' | 'revoked';
+
+/** 非 Web 预览环境禁止跳过线上认证。 */
+export class LocalPreviewAuthDisabledError extends Error {
+  constructor() {
+    super('Local preview authentication is disabled');
+    this.name = 'LocalPreviewAuthDisabledError';
+  }
+}

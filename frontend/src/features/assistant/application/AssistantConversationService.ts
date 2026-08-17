@@ -77,8 +77,8 @@ export class AssistantConversationService implements AssistantApplicationPort {
       await run;
     } catch {
       // 失败时的状态（error/message）已经在触发失败的地方设过了
-      // （handleMessage/handleClose，或者下面权限/采集失败的 catch）；这里
-      // 只是让 pendingStartTurn 收敛，调用方（onPressIn）本来就不关心这个
+      // （connect 失败、handleMessage/handleClose，或者权限/采集失败的 catch）；
+      // 这里只是让 pendingStartTurn 收敛，调用方（onPressIn）本来就不关心这个
       // promise 的结果，不需要再往外抛一次。
     } finally {
       if (this.pendingStartTurn === run) {
@@ -92,7 +92,12 @@ export class AssistantConversationService implements AssistantApplicationPort {
     this.soundLevel = null;
     if (this.connection === null) {
       this.setState({ phase: 'connecting' });
-      await this.connect();
+      try {
+        await this.connect();
+      } catch (error) {
+        this.setState({ message: '连接失败', phase: 'error' });
+        throw error;
+      }
     }
     const connection = this.requireConnection();
 

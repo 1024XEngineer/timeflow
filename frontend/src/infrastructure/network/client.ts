@@ -42,6 +42,7 @@ export interface AuthInvalidationPort {
   getAccessToken(): Promise<string | undefined>;
   invalidate(reason: 'expired' | 'revoked'): Promise<void>;
   isInvalidating(): boolean;
+  shouldInvalidateOnUnauthenticated(): boolean;
 }
 
 export interface CreateApiClientOptions {
@@ -74,8 +75,11 @@ export function createApiClient(options: CreateApiClientOptions = {}): ApiReques
       const body = await readJson(response);
       if (auth === 'protected' && response.status === 401) {
         const code = parseAuthErrorEnvelope(body)?.error.code;
-        if (isAuthAccessErrorCode(code)) {
-          await options.invalidationCoordinator?.invalidate('revoked');
+        if (
+          isAuthAccessErrorCode(code) &&
+          options.invalidationCoordinator?.shouldInvalidateOnUnauthenticated()
+        ) {
+          await options.invalidationCoordinator.invalidate('revoked');
         }
       }
       throw new ApiError(response.status, body);

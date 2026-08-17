@@ -77,6 +77,16 @@ describe('createApiClient', () => {
     expect(request.invalidate).toHaveBeenCalledTimes(shouldInvalidate ? 1 : 0);
   });
 
+  it('does not revoke when the coordinator suppresses unauthenticated cleanup', async () => {
+    const body = { error: { code: 'AUTH_INVALID_TOKEN', message: 'Expired' } };
+    const request = createRequest(401, body, 'opaque-token', false, false);
+
+    await expect(request.client('/resource', { auth: 'protected' })).rejects.toEqual(
+      new ApiError(401, body),
+    );
+    expect(request.invalidate).not.toHaveBeenCalled();
+  });
+
   it('does not issue protected requests without a token or while invalidating', async () => {
     for (const invalidating of [false, true]) {
       const request = createRequest(200, { ok: true }, undefined, invalidating);
@@ -93,6 +103,7 @@ function createRequest(
   body: unknown,
   token: string | undefined,
   invalidating = false,
+  shouldInvalidateOnUnauthenticated = true,
 ) {
   const fetch = jest.fn(async () => ({
     ok: status >= 200 && status < 300,
@@ -106,6 +117,7 @@ function createRequest(
       getAccessToken: async () => token,
       invalidate,
       isInvalidating: () => invalidating,
+      shouldInvalidateOnUnauthenticated: () => shouldInvalidateOnUnauthenticated,
     },
   });
   return { client, fetch, invalidate };

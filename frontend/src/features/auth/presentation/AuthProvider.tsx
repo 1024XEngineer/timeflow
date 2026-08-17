@@ -13,7 +13,9 @@ import type { AuthViewState } from '../domain';
 
 interface AuthContextValue {
   readonly viewState: AuthViewState;
+  readonly allowLocalPreview: boolean;
   readonly authenticate: (credentials: AuthAccessRequest) => Promise<void>;
+  readonly enterLocalPreview: () => Promise<void>;
   readonly retryInitialization: () => Promise<void>;
   readonly signOut: () => Promise<void>;
 }
@@ -41,7 +43,9 @@ export function AuthProvider({
 
   const value = useMemo<AuthContextValue>(
     () => ({
-      authenticate: (credentials) => controller.authenticate(credentials),
+        authenticate: (credentials) => controller.authenticate(credentials),
+        allowLocalPreview: controller.allowsLocalPreview(),
+        enterLocalPreview: () => controller.enterLocalPreview(),
       retryInitialization: () => controller.retryInitialization(),
       signOut: () =>
         invalidationCoordinator?.invalidate('revoked') ?? controller.invalidate('revoked'),
