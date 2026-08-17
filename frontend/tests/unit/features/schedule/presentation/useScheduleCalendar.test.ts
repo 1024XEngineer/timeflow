@@ -143,6 +143,61 @@ describe('useScheduleCalendar', () => {
     expect(result.current.selectedDate).toEqual(new Date(2026, 7, 14));
   });
 
+  it('retries a failed recurring focus lookup and applies the resolved date', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-08-14T00:00:00Z'));
+    const occurrence = {
+      scheduleId: 'yearly',
+      scheduleCategory: 'time' as const,
+      recurrenceMode: 'recurring' as const,
+      title: 'Yearly meeting',
+      isAllDay: false,
+      timezone: 'Asia/Shanghai',
+      locationName: null,
+      reminderType: null,
+      reminderStrength: null,
+      occurrenceStart: '2026-10-05T02:00:00Z',
+      occurrenceEnd: null,
+    };
+    const getSchedulesByRange = jest
+      .fn<ScheduleCalendarReadService['getSchedulesByRange']>()
+      .mockRejectedValueOnce(new Error('sqlite unavailable'))
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([occurrence])
+      .mockResolvedValue([]);
+    const service = {
+      getSchedulesByRange,
+      getSchedulesByDay: jest.fn(),
+      getLocationSchedules: jest
+        .fn<ScheduleCalendarReadService['getLocationSchedules']>()
+        .mockResolvedValue([]),
+    } as ScheduleCalendarReadService;
+    const target: CalendarFocusTarget = {
+      kind: 'time',
+      recurrenceMode: 'recurring',
+      recurrenceRule: 'FREQ=YEARLY;BYMONTH=10;BYMONTHDAY=5',
+      scheduleId: 'yearly',
+      startTime: '2025-10-05T02:00:00Z',
+      timezone: 'Asia/Shanghai',
+    };
+    const { result } = renderHook(() =>
+      useScheduleCalendar(service, 'account-a', 'Asia/Shanghai', new Date(2026, 7, 14), 1, target),
+    );
+
+    await waitFor(() => expect(result.current.error).toBe('日程加载失败，请重试'));
+    expect(result.current.selectedDate).toEqual(new Date(2026, 7, 14));
+
+    act(() => result.current.retry());
+
+    await waitFor(() => expect(result.current.selectedDate).toEqual(new Date(2026, 9, 5)));
+    expect(result.current.visibleMonth).toEqual(new Date(2026, 9, 1));
+    expect(result.current.error).toBeNull();
+    expect(
+      getSchedulesByRange.mock.calls.filter(([query]) => query.startDate === '2026-10-05'),
+    ).toHaveLength(2);
+    jest.useRealTimers();
+  });
+
   it('resolves a multi-year recurring interval without a one-year search cap', async () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date('2026-08-14T00:00:00Z'));

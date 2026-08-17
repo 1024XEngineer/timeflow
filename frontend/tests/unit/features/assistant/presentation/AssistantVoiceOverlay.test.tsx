@@ -1,5 +1,6 @@
-import { describe, expect, it, jest } from '@jest/globals';
+import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { fireEvent, render, screen } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
 
 import type { AssistantApplicationPort } from '../../../../../src/features/assistant/application/AssistantApplication';
 import { AssistantVoiceOverlay } from '../../../../../src/features/assistant/presentation/AssistantVoiceOverlay';
@@ -16,8 +17,12 @@ jest.mock('../../../../../src/features/assistant/presentation/useAssistantConver
     togglePause: () => {},
   }),
 }));
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ bottom: mockBottomInset, left: 0, right: 0, top: 0 }),
+}));
 
 let mockPttApplication: AssistantApplicationPort;
+let mockBottomInset = 0;
 const mockDismissReply = jest.fn<AssistantApplicationPort['dismissReply']>();
 
 function createApplication(): AssistantApplicationPort {
@@ -35,6 +40,11 @@ function createApplication(): AssistantApplicationPort {
 }
 
 describe('AssistantVoiceOverlay layout', () => {
+  beforeEach(() => {
+    mockBottomInset = 0;
+    mockDismissReply.mockClear();
+  });
+
   it('does not add a fullscreen reply dismiss target over the calendar', () => {
     mockPttApplication = createApplication();
     const continuousApplication = createApplication();
@@ -61,5 +71,24 @@ describe('AssistantVoiceOverlay layout', () => {
 
     fireEvent.press(screen.getByText('已创建'));
     expect(mockDismissReply).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['keeps the design spacing when the inset is smaller', 8, 16],
+    ['keeps the voice controls above the system navigation area', 34, 34],
+  ])('%s', (_name, bottomInset, expectedPadding) => {
+    mockBottomInset = bottomInset;
+    mockPttApplication = createApplication();
+    const continuousApplication = createApplication();
+    render(
+      <AssistantVoiceOverlay
+        continuousApplication={continuousApplication}
+        pushToTalkApplication={mockPttApplication}
+      />,
+    );
+
+    expect(
+      StyleSheet.flatten(screen.getByTestId('assistant-voice-overlay').props.style).paddingBottom,
+    ).toBe(expectedPadding);
   });
 });

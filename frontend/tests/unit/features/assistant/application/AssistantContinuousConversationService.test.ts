@@ -240,6 +240,57 @@ describe('AssistantContinuousConversationService', () => {
     expect(service.getState()).toEqual({ phase: 'idle' });
   });
 
+  it('keeps the last successfully persisted command when a later local write fails', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_success',
+      payload: {
+        operation: 'create_schedule',
+        schedule: { id: 'persisted' },
+        status: 'applied',
+      },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getLastAppliedCommand()).toEqual(
+      expect.objectContaining({ operation: 'create_schedule', schedule: { id: 'persisted' } }),
+    );
+    const applyCommandResult = deps.localScheduleWriter.applyCommandResult as jest.MockedFunction<
+      LocalScheduleWriterPort['applyCommandResult']
+    >;
+    applyCommandResult.mockRejectedValueOnce(new Error('disk full'));
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_failed',
+      payload: {
+        operation: 'create_schedule',
+        schedule: { id: 'not-persisted' },
+        status: 'applied',
+      },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getLastAppliedCommand()).toEqual(
+      expect.objectContaining({ operation: 'create_schedule', schedule: { id: 'persisted' } }),
+    );
+    expect(fake.sent).toContainEqual({
+      message_id: 'msg_success',
+      status: 'applied',
+      type: 'message.ack',
+    });
+    expect(fake.sent).not.toContainEqual(
+      expect.objectContaining({ message_id: 'msg_failed', type: 'message.ack' }),
+    );
+    service.dispose();
+  });
+
   it('stops forwarding microphone frames while paused, and resumes them after togglePause()', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });

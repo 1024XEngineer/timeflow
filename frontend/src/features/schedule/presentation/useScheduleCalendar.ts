@@ -62,6 +62,7 @@ export function useScheduleCalendar(
   const focusKey = focusTarget
     ? `${focusTarget.scheduleId}:${focusTarget.kind}:${focusTarget.recurrenceMode}:${focusTarget.startTime ?? ''}`
     : null;
+  const recurringFocusReloadToken = focusTarget?.recurrenceMode === 'recurring' ? reloadToken : 0;
 
   useEffect(() => {
     if (focusTarget === undefined || focusTarget === null || focusTarget.kind === 'location') {
@@ -96,7 +97,15 @@ export function useScheduleCalendar(
     return () => {
       cancelled = true;
     };
-  }, [accountId, focusKey, focusTarget, refreshSignal, service, timezone]);
+  }, [
+    accountId,
+    focusKey,
+    focusTarget,
+    recurringFocusReloadToken,
+    refreshSignal,
+    service,
+    timezone,
+  ]);
 
   useEffect(() => {
     let cancelled = false;

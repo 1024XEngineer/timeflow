@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, spacing } from '../../../shared/ui/theme';
 import type { AssistantApplicationPort } from '../application/AssistantApplication';
@@ -86,6 +87,7 @@ export function AssistantVoiceOverlay({
   pushToTalkApplication,
   continuousApplication,
 }: AssistantVoiceOverlayProps) {
+  const insets = useSafeAreaInsets();
   const ptt = useAssistantConversation(pushToTalkApplication);
   const call = useAssistantConversation(continuousApplication);
   const [expanded, setExpanded] = useState(false);
@@ -118,7 +120,10 @@ export function AssistantVoiceOverlay({
   }
 
   return (
-    <View style={styles.container}>
+    <View
+      style={[styles.container, { paddingBottom: Math.max(spacing.md, insets.bottom) }]}
+      testID="assistant-voice-overlay"
+    >
       <View pointerEvents="box-none" style={styles.overlay}>
         {ptt.replyText ? (
           <Pressable onPress={ptt.dismissReply} style={styles.bubble}>
@@ -168,7 +173,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderTopColor: colors.border,
     borderTopWidth: StyleSheet.hairlineWidth,
-    paddingBottom: spacing.md,
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
     width: '100%',
