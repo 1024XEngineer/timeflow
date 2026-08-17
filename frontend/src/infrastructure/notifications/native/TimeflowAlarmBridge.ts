@@ -121,7 +121,11 @@ export async function nativeAckAlarmDispositions(scheduleIds: readonly string[])
 export async function nativeGetAlarmPermissionStatus(): Promise<NativeAlarmPermissionStatus | null> {
   const native = getNativeAlarm();
   if (!isTimeflowAlarmAvailable() || native == null) return null;
-  return native.getPermissionStatus();
+  try {
+    return await native.getPermissionStatus();
+  } catch {
+    return null;
+  }
 }
 
 export async function nativeOpenAlarmPermissionSettings(
@@ -129,7 +133,11 @@ export async function nativeOpenAlarmPermissionSettings(
 ): Promise<boolean> {
   const native = getNativeAlarm();
   if (!isTimeflowAlarmAvailable() || native == null) return false;
-  return native.openPermissionSettings(kind);
+  try {
+    return await native.openPermissionSettings(kind);
+  } catch {
+    return false;
+  }
 }
 
 export async function nativeRequestNotificationPermission(): Promise<boolean> {

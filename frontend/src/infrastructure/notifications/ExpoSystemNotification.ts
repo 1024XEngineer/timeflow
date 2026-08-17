@@ -28,7 +28,12 @@ async function ensureAndroidChannel(Notifications: NotificationsModule): Promise
       vibrationPattern: [0, 180],
       lightColor: '#D7F36A',
     });
-  })();
+  })().catch((error) => {
+    // 失败别永久缓存住：清掉 channelReady，让下一条提醒重试，而不是这次失败
+    // 之后整个 App 生命周期里 show() 都跟着抛。
+    channelReady = null;
+    throw error;
+  });
   await channelReady;
 }
 
