@@ -1,5 +1,4 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
-import { Platform } from 'react-native';
 
 export const CURRENT_DATABASE_VERSION = 1;
 
@@ -138,16 +137,25 @@ async function runScheduleMigrationTransaction(
   database: SQLiteDatabase,
   task: (transaction: Pick<SQLiteDatabase, 'execAsync'>) => Promise<void>,
 ): Promise<void> {
-  // expo-sqlite Web 没有 exclusive 事务：调用会直接抛
-  // "withExclusiveTransactionAsync is not supported on web"。
-  if (Platform.OS === 'web') {
+  // expo-sqlite Web 没有 exclusive 事务，调用会抛固定错误。这里按能力回退，
+  // 避免 migrations 去 import react-native（Vitest 日程测试会跟着炸）。
+  try {
+    await database.withExclusiveTransactionAsync(async (transaction) => {
+      await task(transaction);
+    });
+  } catch (error) {
+    if (!isExclusiveTransactionUnsupported(error)) {
+      throw error;
+    }
     await database.withTransactionAsync(async () => {
       await task(database);
     });
-    return;
   }
+}
 
-  await database.withExclusiveTransactionAsync(async (transaction) => {
-    await task(transaction);
-  });
+function isExclusiveTransactionUnsupported(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes('withExclusiveTransactionAsync is not supported on web')
+  );
 }
