@@ -1,2 +1,10 @@
-export { MockLocationMonitor, MOCK_LOCATION_SAMPLE } from './MockLocationMonitor';
+export { NativeLocationMonitor } from './NativeLocationMonitor';
+export { ExpoLocationMonitor } from './ExpoLocationMonitor';
 export type { LocationProvider } from './LocationProvider';
+export {
+  isBaiduLocationAvailable,
+  baiduInit,
+  baiduStartUpdating,
+  baiduStopUpdating,
+  subscribeBaiduLocation,
+} from './native/BaiduLocationBridge';
