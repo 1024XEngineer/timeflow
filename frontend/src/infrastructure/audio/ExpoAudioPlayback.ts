@@ -130,7 +130,11 @@ export class ExpoAudioPlayback implements AudioPlaybackPort {
           shouldPlayInBackground: true,
           shouldRouteThroughEarpiece: false,
         })
-        .catch(() => undefined);
+        // 失败别永久缓存住：清掉 modeReady，让下一次响铃重试，而不是这次失败
+        // 之后整个 App 生命周期都跳过静音模式/后台播放配置。
+        .catch(() => {
+          this.modeReady = null;
+        });
     }
     await this.modeReady;
   }
