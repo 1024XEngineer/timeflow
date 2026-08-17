@@ -728,6 +728,13 @@ export class LocalReminderApplication implements ReminderApplicationPort {
    * handleTime 会因 pending / activeDeliveries 跳过，从而消除双通道连响。
    */
   private async acknowledgeNativeFire(scheduleId: string, firedAt: string): Promise<void> {
+    // handleTime 侧的 canDeliver() 检查 activeDeliveries 来跳过已经在原生响铃的日程，
+    // 但反过来这里原来只看持久化的 disposition_state——如果 handleTime 已经在跑（还没
+    // 来得及落盘 pending）而原生这时候也报了 fired，两条通道会一起响。加上这个检查堵住。
+    if (this.activeDeliveries.has(scheduleId)) {
+      this.nativePresented.add(scheduleId);
+      return;
+    }
     const runtime = (await this.readRuntime(scheduleId)) ?? emptyRuntime();
     if (
       runtime.reminder_disposition_state === 'confirmed' ||
