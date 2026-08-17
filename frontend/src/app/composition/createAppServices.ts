@@ -11,7 +11,7 @@ import {
   MockReminderStateStore,
 } from '../../features/reminder/data/local';
 import { ExpoAudioPlayback } from '../../infrastructure/audio';
-import { MockLocationMonitor } from '../../infrastructure/location';
+import { ExpoLocationMonitor } from '../../infrastructure/location';
 import {
   MockPopup,
   MockReminderRecovery,
@@ -45,7 +45,7 @@ export function createAppServices(options: CreateAppServicesOptions = {}): AppSe
   const reminderPorts: ReminderApplicationDependencies = {
     schedules: new MockLocalScheduleReader(),
     time: new IntervalTimeListener(),
-    location: new MockLocationMonitor(),
+    location: new ExpoLocationMonitor(),
     alarms: new NativeAlarmScheduler(),
     delivery: new MockReminderDelivery(),
     audio: new ExpoAudioPlayback(),
