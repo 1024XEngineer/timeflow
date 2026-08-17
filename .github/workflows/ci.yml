@@ -110,6 +110,8 @@ jobs:
           uv run pytest
           tests/test_postgres_schema.py
           tests/test_postgres_schedule_repository.py
+          tests/test_auth_integration.py::test_postgres_jwt_returns_only_its_committed_schedule_snapshot
+          tests/test_auth_integration.py::test_postgres_empty_account_returns_an_empty_schedule_snapshot
           --no-cov
 
       - name: Verify downgrade path (downgrade base)

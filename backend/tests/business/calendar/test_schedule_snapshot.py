@@ -9,6 +9,7 @@ from types import TracebackType
 import pytest
 
 from timeflow.business.calendar import (
+    AccountScheduleSnapshot,
     OccurrenceOverrideAction,
     ScheduleKind,
     ScheduleOccurrenceOverrideSnapshot,
@@ -23,28 +24,12 @@ NOW = datetime(2026, 8, 14, tzinfo=UTC)
 
 @dataclass
 class _RecordingRepository:
-    schedules_result: tuple[ScheduleSnapshot, ...] = ()
-    overrides_result: tuple[ScheduleOccurrenceOverrideSnapshot, ...] = ()
+    snapshot_result: AccountScheduleSnapshot = AccountScheduleSnapshot((), ())
     calls: list[tuple[str, dict[str, object]]] = field(default_factory=list)
 
-    def list_schedules(
-        self,
-        *,
-        account_id: str,
-        include_deleted: bool = False,
-    ) -> tuple[ScheduleSnapshot, ...]:
-        self.calls.append(
-            ("list_schedules", {"account_id": account_id, "include_deleted": include_deleted})
-        )
-        return self.schedules_result
-
-    def list_occurrence_overrides(
-        self,
-        *,
-        account_id: str,
-    ) -> tuple[ScheduleOccurrenceOverrideSnapshot, ...]:
-        self.calls.append(("list_occurrence_overrides", {"account_id": account_id}))
-        return self.overrides_result
+    def get_account_snapshot(self, *, account_id: str) -> AccountScheduleSnapshot:
+        self.calls.append(("get_account_snapshot", {"account_id": account_id}))
+        return self.snapshot_result
 
 
 @dataclass
@@ -100,11 +85,13 @@ def _override() -> ScheduleOccurrenceOverrideSnapshot:
 
 def test_get_account_snapshot_reads_active_deleted_schedules_and_overrides_in_one_uow() -> None:
     repository = _RecordingRepository(
-        schedules_result=(
-            _schedule(schedule_id="active-1", status=ScheduleStatus.ACTIVE),
-            _schedule(schedule_id="deleted-1", status=ScheduleStatus.DELETED),
+        snapshot_result=AccountScheduleSnapshot(
+            schedules=(
+                _schedule(schedule_id="active-1", status=ScheduleStatus.ACTIVE),
+                _schedule(schedule_id="deleted-1", status=ScheduleStatus.DELETED),
+            ),
+            occurrence_overrides=(_override(),),
         ),
-        overrides_result=(_override(),),
     )
     unit_of_work = _RecordingUnitOfWork(repository)
     factory_calls = 0
@@ -118,14 +105,10 @@ def test_get_account_snapshot_reads_active_deleted_schedules_and_overrides_in_on
         account_id="account-1"
     )
 
-    assert result.schedules == repository.schedules_result
-    assert result.occurrence_overrides == repository.overrides_result
+    assert result == repository.snapshot_result
     assert factory_calls == 1
     assert (unit_of_work.entered, unit_of_work.exited, unit_of_work.commits) == (1, 1, 0)
-    assert repository.calls == [
-        ("list_schedules", {"account_id": "account-1", "include_deleted": True}),
-        ("list_occurrence_overrides", {"account_id": "account-1"}),
-    ]
+    assert repository.calls == [("get_account_snapshot", {"account_id": "account-1"})]
 
 
 def test_get_account_snapshot_returns_empty_tuples_for_an_account_without_data() -> None:
@@ -138,10 +121,7 @@ def test_get_account_snapshot_returns_empty_tuples_for_an_account_without_data()
 
     assert result.schedules == ()
     assert result.occurrence_overrides == ()
-    assert repository.calls == [
-        ("list_schedules", {"account_id": "empty-account", "include_deleted": True}),
-        ("list_occurrence_overrides", {"account_id": "empty-account"}),
-    ]
+    assert repository.calls == [("get_account_snapshot", {"account_id": "empty-account"})]
     assert unit_of_work.commits == 0
 
 

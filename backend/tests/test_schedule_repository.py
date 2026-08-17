@@ -5,7 +5,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 
 from timeflow.business.calendar import (
@@ -76,6 +76,75 @@ def test_schedule_reads_are_account_scoped(session: Session) -> None:
     assert repository.get_schedule(account_id="account-a", schedule_id="schedule-b") is None
     account_schedules = repository.list_schedules(account_id="account-a")
     assert [snapshot.id for snapshot in account_schedules] == ["schedule-a"]
+
+
+def test_account_snapshot_reads_schedules_and_overrides_with_one_statement(
+    session: Session,
+) -> None:
+    """A full account snapshot is one point-in-time repository read."""
+    repository = ScheduleRepository(session)
+    parent = repository.add_schedule(
+        replace(
+            _schedule("series-a", "account-a"),
+            schedule_kind=ScheduleKind.RECURRING,
+            recurrence_rule="FREQ=DAILY",
+        )
+    )
+    replacement = repository.add_schedule(_schedule("replacement-a", "account-a"))
+    deleted_at = datetime.now(UTC)
+    repository.update_schedule(
+        snapshot=replace(
+            replacement,
+            status=ScheduleStatus.DELETED,
+            deleted_at=deleted_at,
+            updated_at=deleted_at,
+        ),
+        expected_revision=1,
+    )
+    repository.add_schedule(_schedule("other-account", "account-b"))
+    override = ScheduleOccurrenceOverrideSnapshot(
+        id="override-a",
+        schedule_id=parent.id,
+        occurrence_start=datetime.now(UTC),
+        action=OccurrenceOverrideAction.REPLACE,
+        replacement_schedule_id=replacement.id,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    assert (
+        repository.add_occurrence_override(
+            account_id="account-a",
+            snapshot=override,
+        )
+        is not None
+    )
+
+    statements: list[str] = []
+    assert session.bind is not None
+
+    def record_statement(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        statements.append(statement)
+
+    event.listen(session.bind, "before_cursor_execute", record_statement)
+    try:
+        snapshot = repository.get_account_snapshot(account_id="account-a")
+    finally:
+        event.remove(session.bind, "before_cursor_execute", record_statement)
+
+    assert [item.id for item in snapshot.schedules] == ["series-a", "replacement-a"]
+    assert [item.status for item in snapshot.schedules] == [
+        ScheduleStatus.ACTIVE,
+        ScheduleStatus.DELETED,
+    ]
+    assert [item.id for item in snapshot.occurrence_overrides] == ["override-a"]
+    assert len(statements) == 1
 
 
 def test_schedule_candidates_coarsely_filter_once_rows_and_keep_recurring_series(

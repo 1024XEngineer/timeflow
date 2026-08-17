@@ -6,6 +6,7 @@ from types import TracebackType
 from typing import Protocol, Self
 
 from timeflow.business.calendar.contracts import (
+    AccountScheduleSnapshot,
     ScheduleOccurrenceOverrideSnapshot,
     ScheduleSnapshot,
 )
@@ -36,6 +37,8 @@ class ScheduleRepositoryPort(Protocol):
     """Account-scoped persistence operations required by the application service."""
 
     def add_schedule(self, snapshot: ScheduleSnapshot) -> ScheduleSnapshot: ...
+
+    def get_account_snapshot(self, *, account_id: str) -> AccountScheduleSnapshot: ...
 
     def get_schedule(
         self,

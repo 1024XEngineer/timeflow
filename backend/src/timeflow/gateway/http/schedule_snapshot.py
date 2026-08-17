@@ -1,13 +1,12 @@
 """受保护的账号日程全量快照 HTTP 适配器。"""
 
 import logging
-from typing import Annotated, Self
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Security
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from timeflow.business.calendar import (
     AccountScheduleSnapshot,
@@ -19,6 +18,7 @@ from timeflow.business.calendar import (
     ScheduleSnapshotReader,
     ScheduleStatus,
     ScheduleType,
+    validate_schedule_snapshot,
 )
 from timeflow.gateway.auth_diagnostics import log_sanitized_exception
 from timeflow.gateway.http.auth import AuthErrorEnvelope
@@ -62,84 +62,6 @@ class ScheduleHttpSnapshot(BaseModel):
     created_at: AwareDatetime
     updated_at: AwareDatetime
     deleted_at: AwareDatetime | None
-
-    @model_validator(mode="after")
-    def validate_shared_contract(self) -> Self:
-        """Reject a damaged row that cannot satisfy the shared HTTP contract."""
-        try:
-            ZoneInfo(self.timezone)
-        except (ZoneInfoNotFoundError, ValueError) as error:
-            raise ValueError("timezone must be a valid IANA timezone") from error
-
-        if self.schedule_type is ScheduleType.TIME:
-            if self.start_time is None:
-                raise ValueError("time schedules require start_time")
-        elif self.start_time is not None:
-            raise ValueError("location schedules require a null start_time")
-
-        if self.end_time is not None and (
-            self.start_time is None or self.end_time <= self.start_time
-        ):
-            raise ValueError("end_time must be later than start_time")
-
-        if self.schedule_kind is ScheduleKind.RECURRING:
-            if self.recurrence_rule is None or not self.recurrence_rule.strip():
-                raise ValueError("recurring schedules require recurrence_rule")
-        elif self.recurrence_rule is not None:
-            raise ValueError("one-time schedules require a null recurrence_rule")
-
-        if (self.latitude is None) != (self.longitude is None):
-            raise ValueError("latitude and longitude must be supplied together")
-
-        self._validate_reminder_contract()
-
-        if self.status is ScheduleStatus.ACTIVE and self.deleted_at is not None:
-            raise ValueError("active schedules require a null deleted_at")
-        if self.status is ScheduleStatus.DELETED and self.deleted_at is None:
-            raise ValueError("deleted schedules require deleted_at")
-        return self
-
-    def _validate_reminder_contract(self) -> None:
-        reminder_fields = (
-            self.reminder_trigger_at,
-            self.reminder_offset_minutes,
-            self.reminder_strength,
-            self.reminder_disposition_state,
-        )
-        if self.reminder_type is None:
-            if any(value is not None for value in reminder_fields):
-                raise ValueError("reminder fields require reminder_type")
-            return
-        if self.reminder_strength is None:
-            raise ValueError("reminder_strength is required")
-
-        if self.reminder_type is ReminderType.AT_TIME:
-            if (
-                self.schedule_type is not ScheduleType.TIME
-                or self.start_time is None
-                or self.reminder_trigger_at is None
-                or self.reminder_offset_minutes is not None
-            ):
-                raise ValueError("invalid at_time reminder fields")
-            return
-
-        if self.reminder_type is ReminderType.BEFORE_START:
-            if (
-                self.schedule_type is not ScheduleType.TIME
-                or self.start_time is None
-                or self.reminder_trigger_at is not None
-                or self.reminder_offset_minutes is None
-            ):
-                raise ValueError("invalid before_start reminder fields")
-            return
-
-        if (
-            self.latitude is None
-            or self.longitude is None
-            or self.reminder_trigger_at is not None
-            or self.reminder_offset_minutes is not None
-        ):
-            raise ValueError("invalid location reminder fields")
 
 
 class ScheduleOccurrenceOverrideHttpSnapshot(BaseModel):
@@ -187,7 +109,12 @@ def _build_response(
     snapshot: AccountScheduleSnapshot,
 ) -> ScheduleSnapshotResponse:
     """转换并验证一个不可部分返回的账号快照。"""
-    schedules = tuple(ScheduleHttpSnapshot.model_validate(item) for item in snapshot.schedules)
+    validated_schedules: list[ScheduleHttpSnapshot] = []
+    for item in snapshot.schedules:
+        schedule = ScheduleHttpSnapshot.model_validate(item)
+        validate_schedule_snapshot(item)
+        validated_schedules.append(schedule)
+    schedules = tuple(validated_schedules)
     overrides = tuple(
         ScheduleOccurrenceOverrideHttpSnapshot.model_validate(item)
         for item in snapshot.occurrence_overrides
