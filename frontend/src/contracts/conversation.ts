@@ -64,6 +64,14 @@ export interface VoiceAsrCompletedMessage {
 /** 日程快照的形状由后端 `ScheduleSnapshot` 决定；前端只透传给本地落库，不在此处强约束字段。 */
 export type ScheduleSnapshotPayload = Record<string, unknown>;
 
+export interface OccurrenceOverridePayload {
+  id: string;
+  schedule_id: string;
+  occurrence_start: string;
+  action: 'cancel' | 'replace';
+  replacement_schedule_id: string | null;
+}
+
 export interface VoiceCommandResultMessage {
   type: 'voice.command.result';
   message_id: string;
@@ -74,6 +82,7 @@ export interface VoiceCommandResultMessage {
     status: string;
     schedule?: ScheduleSnapshotPayload;
     schedules?: ScheduleSnapshotPayload[];
+    occurrence_overrides?: OccurrenceOverridePayload[];
   };
 }
 

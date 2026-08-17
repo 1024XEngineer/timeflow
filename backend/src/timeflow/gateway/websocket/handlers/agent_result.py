@@ -91,6 +91,7 @@ class WebSocketResultSink:
                 status=result.status,
                 schedule=result.schedule,
                 schedules=result.schedules,
+                occurrence_overrides=result.occurrence_overrides,
             ),
         )
         await self._send(stream.session_id, message.type, message.model_dump(exclude_none=True))

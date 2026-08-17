@@ -1,6 +1,10 @@
-import type { CloudScheduleRow, ScheduleLocalRepository } from '../../../schedule/data';
+import type {
+  CloudScheduleRow,
+  LocalScheduleOccurrenceOverrideRow,
+  ScheduleLocalRepository,
+} from '../../../schedule/data';
 import type { LocalScheduleWriterPort } from '../../application/interfaces/LocalScheduleWriterPort';
-import type { AppliedCommand } from '../../domain/ConversationTurn';
+import type { AppliedCommand, AppliedOccurrenceOverride } from '../../domain/ConversationTurn';
 
 /**
  * `applyCloudSchedule` 是仓储里现成的 upsert，专门给"服务端权威数据落到本地"用的
@@ -16,20 +20,24 @@ import type { AppliedCommand } from '../../domain/ConversationTurn';
  * `schedule` 字段存在就同步，这样天然排除 list_schedules（只有 `schedules`
  * 复数字段，没有 `schedule`）。
  *
- * 已知没覆盖的情况：重复日程"仅删除这一次"且不需要截断 RRULE 时
- * （service.py 的 _delete_recurring_range 里创建 occurrence_override 那条
- * 分支），后端只把 override 记到 ScheduleMutationResult.occurrence_overrides
- * 里，`voice.command.result` 完全不下发这个字段——这种情况本地日历目前没法
- * 同步，得等后端把 override 数据也传下来。
+ * 重复日程"仅删除这一次"（service.py 的 _delete_recurring_range 里创建
+ * occurrence_override 那条分支）不产生新的 schedule 快照，只产生一条
+ * override；`occurrence_overrides` 跟 `schedule` 各自独立处理，一条
+ * command.result 里两者都可能有、也可能都没有。
  */
 export class LocalScheduleWriter implements LocalScheduleWriterPort {
   public constructor(private readonly repository: ScheduleLocalRepository) {}
 
   public async applyCommandResult(accountId: string, command: AppliedCommand): Promise<void> {
-    if (command.status !== 'applied' || !command.schedule) {
+    if (command.status !== 'applied' || (!command.schedule && !command.occurrence_overrides)) {
       return;
     }
-    await this.repository.applyCloudSchedule(toCloudScheduleRow(accountId, command.schedule));
+    if (command.schedule) {
+      await this.repository.applyCloudSchedule(toCloudScheduleRow(accountId, command.schedule));
+    }
+    for (const override of command.occurrence_overrides ?? []) {
+      await this.repository.upsertOccurrenceOverride(accountId, toOverrideRow(override));
+    }
   }
 }
 
@@ -67,6 +75,18 @@ function toCloudScheduleRow(accountId: string, raw: Record<string, unknown>): Cl
     // 服务端的 schedule 字典过滤掉了 updated_at（_snapshot_for_client），用写入
     // 这一刻的时间：这条记录确实就是此刻被服务端确认、同步到本地的。
     updated_at: new Date().toISOString(),
+  };
+}
+
+function toOverrideRow(
+  override: AppliedOccurrenceOverride,
+): LocalScheduleOccurrenceOverrideRow {
+  return {
+    id: override.id,
+    schedule_id: override.schedule_id,
+    occurrence_start: override.occurrence_start,
+    action: override.action,
+    replacement_schedule_id: override.replacement_schedule_id,
   };
 }
 

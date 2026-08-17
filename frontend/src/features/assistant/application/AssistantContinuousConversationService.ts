@@ -342,6 +342,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
           operation: message.payload.operation,
           schedule: message.payload.schedule,
           schedules: message.payload.schedules,
+          occurrence_overrides: message.payload.occurrence_overrides,
           status: message.payload.status,
         };
         // 状态立刻回到 listening（麦克风还开着），不等写库；message.ack 必须等
