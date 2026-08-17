@@ -19,6 +19,7 @@ function cloudSchedule(overrides: Partial<CloudScheduleRow> = {}): CloudSchedule
     account_id: 'account-a',
     schedule_type: 'time',
     schedule_kind: 'once',
+    category: 'work',
     title: 'Original title',
     is_all_day: 0,
     start_time: '2026-08-12T07:00:00Z',
@@ -92,6 +93,7 @@ describe('ScheduleLocalRepository SQLite behavior', () => {
 
     const stored = await repository.getSchedule('account-a', 'schedule-a');
     expect(stored).toMatchObject({
+      category: 'work',
       title: 'Original title',
       cloud_revision: 1,
       reminder_disposition_state: null,
@@ -102,6 +104,42 @@ describe('ScheduleLocalRepository SQLite behavior', () => {
       sync_status: 'synced',
       status: 'active',
     });
+  });
+
+  it('migrates version 1 schedules to category other without deleting rows', async () => {
+    const legacyDatabase = new SqlJsExpoDatabase(new sql.Database());
+    try {
+      await legacyDatabase.execAsync(`
+        CREATE TABLE local_schedules (
+          id TEXT PRIMARY KEY NOT NULL,
+          title TEXT NOT NULL
+        );
+        INSERT INTO local_schedules (id, title) VALUES ('legacy-a', 'Legacy schedule');
+        PRAGMA user_version = 1;
+      `);
+
+      await migrateScheduleDatabase(legacyDatabase.asSQLiteDatabase());
+
+      const row = await legacyDatabase.getFirstAsync<{ category: string; title: string }>(
+        `SELECT category, title FROM local_schedules WHERE id = 'legacy-a'`,
+      );
+      const version = await legacyDatabase.getFirstAsync<{ user_version: number }>(
+        'PRAGMA user_version',
+      );
+      expect(row).toEqual({ category: 'other', title: 'Legacy schedule' });
+      expect(version?.user_version).toBe(2);
+    } finally {
+      legacyDatabase.close();
+    }
+  });
+
+  it('rejects a category outside the shared enum at the SQLite boundary', async () => {
+    await expect(
+      repository.applyCloudSchedule(
+        cloudSchedule({ category: 'unsupported' as CloudScheduleRow['category'] }),
+      ),
+    ).rejects.toThrow();
+    expect(await repository.getSchedule('account-a', 'schedule-a')).toBeNull();
   });
 
   it('applies cloud fields without overwriting device runtime state', async () => {

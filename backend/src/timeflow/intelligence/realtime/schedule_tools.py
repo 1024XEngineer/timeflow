@@ -478,6 +478,7 @@ def _mutation_result(result: ScheduleMutationResult, operation: str, tz: ZoneInf
 def _for_model(schedule: Any, tz: ZoneInfo) -> dict[str, Any]:
     """Add a spoken-language local time beside the stored instant."""
     spoken = asdict(schedule)
+    spoken.pop("category", None)
     spoken["starts_at_local"] = _local_text(spoken.get("start_time"), tz)
     result = _json_value(spoken)
     assert isinstance(result, dict)

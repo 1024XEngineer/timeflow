@@ -6,10 +6,12 @@ from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from timeflow.business.calendar import (
     OccurrenceOverrideAction,
+    ScheduleCategory,
     ScheduleKind,
     ScheduleOccurrenceOverrideSnapshot,
     ScheduleSnapshot,
@@ -17,7 +19,7 @@ from timeflow.business.calendar import (
     ScheduleType,
 )
 from timeflow.data.database import Base
-from timeflow.data.models import Account
+from timeflow.data.models import Account, Schedule
 from timeflow.data.repositories import ScheduleRepository, ScheduleRevisionConflictError
 
 
@@ -76,6 +78,42 @@ def test_schedule_reads_are_account_scoped(session: Session) -> None:
     assert repository.get_schedule(account_id="account-a", schedule_id="schedule-b") is None
     account_schedules = repository.list_schedules(account_id="account-a")
     assert [snapshot.id for snapshot in account_schedules] == ["schedule-a"]
+
+
+def test_schedule_category_round_trips_through_the_repository(session: Session) -> None:
+    repository = ScheduleRepository(session)
+    schedule = replace(_schedule("schedule-a", "account-a"), category=ScheduleCategory.STUDY)
+
+    persisted = repository.add_schedule(schedule)
+    loaded = repository.get_schedule(account_id="account-a", schedule_id="schedule-a")
+
+    assert persisted.category is ScheduleCategory.STUDY
+    assert loaded is not None
+    assert loaded.category is ScheduleCategory.STUDY
+
+
+def test_schedule_table_rejects_an_unknown_category(session: Session) -> None:
+    now = datetime.now(UTC)
+    session.add(
+        Schedule(
+            id="schedule-invalid-category",
+            account_id="account-a",
+            schedule_type="time",
+            schedule_kind="once",
+            category="unsupported",
+            title="Invalid category",
+            is_all_day=False,
+            start_time=now,
+            timezone="Asia/Shanghai",
+            status="active",
+            revision=1,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        session.flush()
 
 
 def test_schedule_candidates_coarsely_filter_once_rows_and_keep_recurring_series(

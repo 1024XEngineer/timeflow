@@ -16,6 +16,7 @@ function cloudSchedule(overrides: Partial<CloudScheduleRow> = {}): CloudSchedule
     account_id: 'account-a',
     schedule_type: 'time',
     schedule_kind: 'once',
+    category: 'other',
     title: 'Schedule',
     is_all_day: 0,
     start_time: '2026-08-17T02:00:00Z',

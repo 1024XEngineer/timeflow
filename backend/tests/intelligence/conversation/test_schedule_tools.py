@@ -162,6 +162,7 @@ def test_definitions_match_business_contract_dimensions() -> None:
     }
     create_properties = definitions["schedule_create"].parameters["properties"]
     assert isinstance(create_properties, dict)
+    assert "category" not in create_properties
     assert set(create_properties) == {
         "schedule_type",
         "schedule_kind",
@@ -180,6 +181,19 @@ def test_definitions_match_business_contract_dimensions() -> None:
         "reminder_strength",
     }
     assert definitions["schedule_create"].parameters["additionalProperties"] is False
+
+    query_properties = definitions["schedule_query"].parameters["properties"]
+    update_properties = definitions["schedule_update"].parameters["properties"]
+    delete_properties = definitions["schedule_delete"].parameters["properties"]
+    assert isinstance(query_properties, dict)
+    assert isinstance(update_properties, dict)
+    assert isinstance(delete_properties, dict)
+    assert "category" not in query_properties
+    assert "category" not in update_properties
+    assert "category" not in delete_properties
+    changes = update_properties["changes"]
+    assert isinstance(changes, dict)
+    assert "category" not in changes["properties"]
 
 
 def test_create_arguments_map_to_existing_business_command() -> None:
@@ -429,6 +443,7 @@ async def test_registry_calls_service_with_injected_account_and_serializes_snaps
     assert result["result"]["schedules"][0]["id"] == "schedule-1"
     assert result["result"]["schedules"][0]["schedule_type"] == "time"
     assert result["result"]["schedules"][0]["start_time"] == "2026-08-12T07:00:00+00:00"
+    assert "category" not in result["result"]["schedules"][0]
 
 
 @pytest.mark.asyncio
