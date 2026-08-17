@@ -18,6 +18,14 @@ from timeflow.gateway.http.dependencies import (
     create_authenticated_account_dependency,
 )
 from timeflow.gateway.http.rate_limit import AuthRateLimiter, RateLimitPolicy
+from timeflow.gateway.http.schedule_snapshot import (
+    ScheduleHttpSnapshot,
+    ScheduleOccurrenceOverrideHttpSnapshot,
+    ScheduleSnapshotErrorDetail,
+    ScheduleSnapshotErrorEnvelope,
+    ScheduleSnapshotResponse,
+    create_schedule_snapshot_router,
+)
 
 __all__ = [
     "AuthAccess",
@@ -35,4 +43,10 @@ __all__ = [
     "create_authenticated_account_dependency",
     "install_auth_http_error_handler",
     "RateLimitPolicy",
+    "ScheduleHttpSnapshot",
+    "ScheduleOccurrenceOverrideHttpSnapshot",
+    "ScheduleSnapshotErrorDetail",
+    "ScheduleSnapshotErrorEnvelope",
+    "ScheduleSnapshotResponse",
+    "create_schedule_snapshot_router",
 ]
