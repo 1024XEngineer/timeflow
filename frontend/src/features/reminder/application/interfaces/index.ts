@@ -1,4 +1,6 @@
 export type {
+  AlarmNativeDisposition,
+  AlarmNativeEvent,
   AlarmScheduleReceipt,
   AlarmScheduleRequest,
   AlarmSchedulerPort,
@@ -17,11 +19,15 @@ export type { LocalScheduleReader } from './LocalScheduleReader';
 export type {
   LocationMonitorEvent,
   LocationMonitorPort,
+  LocationRebuildTarget,
   LocationWatchHandle,
   LocationWatchMode,
   LocationWatchRequest,
 } from './LocationMonitorPort';
 export type {
+  AlertDialogButton,
+  AlertDialogPort,
+  AlertDialogRequest,
   PopupPort,
   PopupReceipt,
   PopupRequest,
@@ -36,7 +42,11 @@ export type {
   ReminderApplicationResult,
   ReminderSnoozeRequest,
 } from './ReminderApplicationPort';
-export type { ReminderDeliveryPort } from './ReminderDeliveryPort';
+export type {
+  ReminderDeliveryPort,
+  ReminderDeliveryReceipt,
+  ReminderDeliveryRequest,
+} from './ReminderDeliveryPort';
 export type {
   ReminderConfirmedDisposition,
   ReminderDispositionSyncPort,
