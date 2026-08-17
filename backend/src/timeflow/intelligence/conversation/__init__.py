@@ -27,6 +27,7 @@ from timeflow.intelligence.conversation.asr import (
 from timeflow.intelligence.conversation.llm import (
     AssistantToolCallMessage,
     ChatMessage,
+    JsonLlmPort,
     LlmError,
     LlmEvent,
     LlmMessage,
@@ -67,6 +68,7 @@ __all__ = [
     "AsrTranscriptionError",
     "AssistantToolCallMessage",
     "ChatMessage",
+    "JsonLlmPort",
     "LlmError",
     "LlmEvent",
     "LlmMessage",

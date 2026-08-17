@@ -1,6 +1,7 @@
 import type {
   RecurringDeleteScope,
   ReminderDispositionState,
+  ScheduleCategory,
   ScheduleSnapshot,
 } from '../src/contracts/schedule';
 import type {
@@ -35,6 +36,13 @@ export type RecurringDeleteScopeContract = Assert<
 >;
 
 export type ReminderDispositionStateContract = Assert<Equal<ReminderDispositionState, 'confirmed'>>;
+
+export type ScheduleCategoryContract = Assert<
+  Equal<
+    ScheduleCategory,
+    'work' | 'study' | 'exercise' | 'entertainment' | 'social' | 'rest' | 'personal' | 'other'
+  >
+>;
 
 export type SnapshotReminderDispositionContract = Assert<
   Equal<ScheduleSnapshot['reminder_disposition_state'], ReminderDispositionState | null>

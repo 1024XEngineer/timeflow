@@ -9,7 +9,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from timeflow.infrastructure.external.llm.openai_compatible import OpenAICompatibleLlm
+from timeflow.infrastructure.external.llm.openai_compatible import (
+    OpenAICompatibleJsonLlm,
+    OpenAICompatibleLlm,
+)
 from timeflow.infrastructure.settings import Settings
 from timeflow.intelligence.conversation.llm import (
     AssistantToolCallMessage,
@@ -78,6 +81,23 @@ class FakeClient:
         self.chat = SimpleNamespace(completions=FakeCompletions(result))
 
 
+class SyncFakeCompletions:
+    def __init__(self, result: object | BaseException) -> None:
+        self.result = result
+        self.requests: list[dict[str, object]] = []
+
+    def create(self, **kwargs: object) -> object:
+        self.requests.append(kwargs)
+        if isinstance(self.result, BaseException):
+            raise self.result
+        return self.result
+
+
+class SyncFakeClient:
+    def __init__(self, result: object | BaseException) -> None:
+        self.chat = SimpleNamespace(completions=SyncFakeCompletions(result))
+
+
 def settings() -> Settings:
     return Settings(
         app_name="Test API",
@@ -139,6 +159,73 @@ def usage_chunk(prompt: object = 1, completion: object = 2, total: object = 3) -
             total_tokens=total,
         ),
     )
+
+
+def json_completion(content: object, *, choices: object | None = None) -> object:
+    actual_choices = [SimpleNamespace(message=SimpleNamespace(content=content))]
+    return SimpleNamespace(choices=actual_choices if choices is None else choices)
+
+
+def test_json_completion_uses_the_existing_provider_configuration() -> None:
+    client = SyncFakeClient(json_completion('{"category":"work"}'))
+    provider = OpenAICompatibleJsonLlm(settings(), client=client)
+
+    result = provider.complete_json([ChatMessage(role="user", content="classify")])
+
+    assert result == '{"category":"work"}'
+    assert client.chat.completions.requests == [
+        {
+            "model": "qwen-flash",
+            "messages": [{"role": "user", "content": "classify"}],
+            "response_format": {"type": "json_object"},
+            "stream": False,
+            "extra_body": {"enable_thinking": False},
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "completion",
+    [
+        json_completion("ignored", choices=[]),
+        json_completion("ignored", choices=[SimpleNamespace(), SimpleNamespace()]),
+        json_completion(""),
+        json_completion(None),
+    ],
+)
+def test_json_completion_rejects_invalid_provider_responses(completion: object) -> None:
+    provider = OpenAICompatibleJsonLlm(settings(), client=SyncFakeClient(completion))
+
+    with pytest.raises(LlmProtocolError):
+        provider.complete_json([ChatMessage(role="user", content="classify")])
+
+
+def test_json_completion_wraps_provider_failures_without_exposing_secrets() -> None:
+    provider = OpenAICompatibleJsonLlm(
+        settings(), client=SyncFakeClient(RuntimeError("request failed: test-secret-key"))
+    )
+
+    with pytest.raises(LlmProviderError) as captured:
+        provider.complete_json([ChatMessage(role="user", content="classify")])
+
+    assert "test-secret-key" not in str(captured.value)
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [
+        ("openai_base_url", "OpenAI-compatible base URL is not configured"),
+        ("openai_api_key", "OpenAI-compatible API key is not configured"),
+        ("openai_model", "OpenAI-compatible model is not configured"),
+    ],
+)
+def test_json_completion_rejects_missing_provider_settings(field: str, message: str) -> None:
+    provider = OpenAICompatibleJsonLlm(
+        replace(settings(), **{field: ""}), client=SyncFakeClient(json_completion("{}"))
+    )
+
+    with pytest.raises(LlmProviderError, match=message):
+        provider.complete_json([ChatMessage(role="user", content="classify")])
 
 
 @pytest.mark.asyncio

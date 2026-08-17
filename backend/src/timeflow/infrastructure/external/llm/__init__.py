@@ -1,5 +1,8 @@
 """Language model provider adapters."""
 
-from timeflow.infrastructure.external.llm.openai_compatible import OpenAICompatibleLlm
+from timeflow.infrastructure.external.llm.openai_compatible import (
+    OpenAICompatibleJsonLlm,
+    OpenAICompatibleLlm,
+)
 
-__all__ = ["OpenAICompatibleLlm"]
+__all__ = ["OpenAICompatibleJsonLlm", "OpenAICompatibleLlm"]

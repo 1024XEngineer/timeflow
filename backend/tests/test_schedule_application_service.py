@@ -21,6 +21,8 @@ from timeflow.business.calendar import (
     ReminderType,
     ScheduleApplicationService,
     ScheduleBusinessError,
+    ScheduleCategory,
+    ScheduleCategoryClassifier,
     ScheduleErrorCode,
     ScheduleKind,
     ScheduleOccurrenceOverrideSnapshot,
@@ -30,6 +32,8 @@ from timeflow.business.calendar import (
     UpdateScheduleCommand,
 )
 from timeflow.business.calendar.ports import ScheduleRevisionConflictError
+from timeflow.intelligence.conversation.llm import ChatMessage, LlmProviderError
+from timeflow.intelligence.schedule_category import LlmScheduleCategoryClassifier
 
 NOW = datetime(2026, 8, 11, 1, tzinfo=UTC)
 
@@ -223,11 +227,13 @@ class _UnitOfWork:
 def _service(
     *,
     now: datetime = NOW,
+    category_classifier: ScheduleCategoryClassifier | None = None,
 ) -> tuple[ScheduleApplicationService, _Store]:
     store = _Store({}, {})
     sequence = count(1)
     service = ScheduleApplicationService(
         lambda: _UnitOfWork(store),
+        category_classifier=category_classifier,
         clock=lambda: now,
         id_factory=lambda: f"generated-{next(sequence)}",
     )
@@ -338,7 +344,101 @@ def test_create_schedule_returns_the_committed_cloud_snapshot() -> None:
     assert snapshot.revision == 1
     assert snapshot.created_at == NOW
     assert snapshot.updated_at == NOW
+    assert snapshot.category is ScheduleCategory.OTHER
     assert store.schedules[snapshot.id] == snapshot
+
+
+class _FakeJsonLlm:
+    def __init__(self, result: str | BaseException) -> None:
+        self.result = result
+        self.calls = 0
+
+    def complete_json(self, messages: tuple[ChatMessage, ...]) -> str:
+        self.calls += 1
+        if isinstance(self.result, BaseException):
+            raise self.result
+        return self.result
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        TimeoutError("timed out"),
+        LlmProviderError("provider unavailable"),
+        "not-json",
+        '{"category":"unsupported"}',
+        "",
+    ],
+)
+def test_classification_failure_never_blocks_schedule_creation(
+    result: str | BaseException,
+) -> None:
+    llm = _FakeJsonLlm(result)
+    service, store = _service(category_classifier=LlmScheduleCategoryClassifier(llm))
+
+    snapshot = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert snapshot.category is ScheduleCategory.OTHER
+    assert store.schedules[snapshot.id] == snapshot
+    assert llm.calls == 1
+
+
+def test_recurring_schedule_is_classified_once_on_creation() -> None:
+    llm = _FakeJsonLlm('{"category":"work"}')
+    service, _ = _service(category_classifier=LlmScheduleCategoryClassifier(llm))
+
+    snapshot = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(
+            schedule_kind=ScheduleKind.RECURRING,
+            recurrence_rule="FREQ=WEEKLY;BYDAY=WE",
+        ),
+    ).schedules[0]
+
+    assert snapshot.category is ScheduleCategory.WORK
+    assert llm.calls == 1
+
+
+def test_schedule_update_preserves_category_without_reclassification() -> None:
+    llm = _FakeJsonLlm('{"category":"work"}')
+    service, _ = _service(category_classifier=LlmScheduleCategoryClassifier(llm))
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    updated = service.update_schedule(
+        account_id="account-a",
+        command=UpdateScheduleCommand(
+            schedule_id=created.id,
+            expected_revision=created.revision,
+            changes={"title": "修改后的标题"},
+        ),
+    ).schedules[0]
+
+    assert updated.category is ScheduleCategory.WORK
+    assert llm.calls == 1
+
+
+def test_service_catches_an_unexpected_classifier_exception() -> None:
+    class BrokenClassifier:
+        def classify(self, command: CreateScheduleCommand) -> ScheduleCategory:
+            raise RuntimeError("classifier bug")
+
+    service, _ = _service(category_classifier=BrokenClassifier())
+
+    snapshot = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert snapshot.category is ScheduleCategory.OTHER
+
+
+def test_service_rejects_an_invalid_classifier_return_without_blocking_creation() -> None:
+    class InvalidClassifier:
+        def classify(self, command: CreateScheduleCommand) -> ScheduleCategory:
+            return "work"  # type: ignore[return-value]
+
+    service, _ = _service(category_classifier=InvalidClassifier())
+
+    snapshot = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert snapshot.category is ScheduleCategory.OTHER
 
 
 @pytest.mark.parametrize(

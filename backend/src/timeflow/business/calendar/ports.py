@@ -6,9 +6,17 @@ from types import TracebackType
 from typing import Protocol, Self
 
 from timeflow.business.calendar.contracts import (
+    CreateScheduleCommand,
+    ScheduleCategory,
     ScheduleOccurrenceOverrideSnapshot,
     ScheduleSnapshot,
 )
+
+
+class ScheduleCategoryClassifier(Protocol):
+    """Classify one already-structured create command by its schedule semantics."""
+
+    def classify(self, command: CreateScheduleCommand) -> ScheduleCategory: ...
 
 
 class ScheduleRevisionConflictError(RuntimeError):
@@ -104,6 +112,7 @@ ScheduleUnitOfWorkFactory = Callable[[], ScheduleUnitOfWork]
 
 
 __all__ = [
+    "ScheduleCategoryClassifier",
     "ScheduleRepositoryPort",
     "ScheduleRevisionConflictError",
     "ScheduleUnitOfWork",

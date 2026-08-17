@@ -6,12 +6,13 @@ import asyncio
 from collections.abc import AsyncIterator, Sequence
 from typing import Any, Protocol, cast
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAI
 
 from timeflow.infrastructure.settings import Settings
 from timeflow.intelligence.conversation.llm import (
     AssistantToolCallMessage,
     ChatMessage,
+    JsonLlmPort,
     LlmEvent,
     LlmMessage,
     LlmPort,
@@ -27,6 +28,10 @@ from timeflow.intelligence.conversation.llm import (
 
 
 class _Client(Protocol):
+    chat: Any
+
+
+class _SyncClient(Protocol):
     chat: Any
 
 
@@ -189,3 +194,49 @@ class OpenAICompatibleLlm(LlmPort):
         if not isinstance(arguments, str):
             raise LlmProtocolError("LLM tool call arguments must be a string")
         return ToolCallDelta(index, call_id or None, name or None, arguments)
+
+
+class OpenAICompatibleJsonLlm(JsonLlmPort):
+    """Complete one JSON-mode request through the configured compatible provider."""
+
+    def __init__(self, settings: Settings, client: _SyncClient | None = None) -> None:
+        self._settings = settings
+        self._client = client or cast(
+            _SyncClient,
+            OpenAI(
+                api_key=settings.openai_api_key or "not-configured",
+                base_url=settings.openai_base_url or None,
+                timeout=settings.openai_timeout_seconds,
+            ),
+        )
+
+    def complete_json(self, messages: Sequence[ChatMessage]) -> str:
+        self._validate_settings()
+        try:
+            completion = self._client.chat.completions.create(
+                model=self._settings.openai_model,
+                messages=[_message_payload(message) for message in messages],
+                response_format={"type": "json_object"},
+                stream=False,
+                extra_body={"enable_thinking": False},
+            )
+            choices = getattr(completion, "choices", None)
+            if not isinstance(choices, list) or len(choices) != 1:
+                raise LlmProtocolError("LLM JSON response must contain exactly one choice")
+            message = getattr(choices[0], "message", None)
+            content = None if message is None else getattr(message, "content", None)
+            if not isinstance(content, str) or not content.strip():
+                raise LlmProtocolError("LLM JSON response content must be a non-empty string")
+            return content
+        except (LlmProtocolError, LlmProviderError):
+            raise
+        except Exception as exc:
+            raise LlmProviderError("OpenAI-compatible JSON request failed") from exc
+
+    def _validate_settings(self) -> None:
+        if not self._settings.openai_base_url:
+            raise LlmProviderError("OpenAI-compatible base URL is not configured")
+        if not self._settings.openai_api_key:
+            raise LlmProviderError("OpenAI-compatible API key is not configured")
+        if not self._settings.openai_model:
+            raise LlmProviderError("OpenAI-compatible model is not configured")

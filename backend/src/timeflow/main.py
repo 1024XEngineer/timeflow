@@ -36,6 +36,7 @@ from timeflow.gateway.websocket.handlers.session import SessionHandshake
 from timeflow.gateway.websocket.handlers.voice_stream import VoiceStreamHandlers
 from timeflow.gateway.websocket.ports import AudioSink
 from timeflow.gateway.websocket.router import MessageRouter
+from timeflow.infrastructure.external.llm import OpenAICompatibleJsonLlm
 from timeflow.infrastructure.external.location.tencent_maps import TencentMapsLocationPort
 from timeflow.infrastructure.external.realtime.qwen_audio import (
     QwenAudioConfig,
@@ -48,6 +49,7 @@ from timeflow.intelligence.location import ClientLocation, LocationSearchService
 from timeflow.intelligence.realtime.agent import RealtimeAgent
 from timeflow.intelligence.realtime.instructions import build_instructions
 from timeflow.intelligence.realtime.schedule_tools import ToolBox
+from timeflow.intelligence.schedule_category import LlmScheduleCategoryClassifier
 
 logging.basicConfig(
     level=logging.INFO,
@@ -220,7 +222,8 @@ def _build_realtime_agent(
         logger.info("using the realtime model", extra={"model": settings.aliyun_audio_model})
 
         schedule_service = ScheduleApplicationService(
-            lambda: SqlAlchemyScheduleUnitOfWork(session_factory)
+            lambda: SqlAlchemyScheduleUnitOfWork(session_factory),
+            category_classifier=LlmScheduleCategoryClassifier(OpenAICompatibleJsonLlm(settings)),
         )
 
         async def bind_account(

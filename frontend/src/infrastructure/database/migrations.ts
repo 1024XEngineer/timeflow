@@ -1,6 +1,6 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
-export const CURRENT_DATABASE_VERSION = 1;
+export const CURRENT_DATABASE_VERSION = 2;
 
 export const CREATE_SCHEDULE_STORAGE_SQL = `
 CREATE TABLE IF NOT EXISTS local_schedules (
@@ -8,6 +8,12 @@ CREATE TABLE IF NOT EXISTS local_schedules (
   account_id TEXT NOT NULL,
   schedule_type TEXT NOT NULL CHECK (schedule_type IN ('time', 'location')),
   schedule_kind TEXT NOT NULL DEFAULT 'once' CHECK (schedule_kind IN ('once', 'recurring')),
+  category TEXT NOT NULL DEFAULT 'other' CHECK (
+    category IN (
+      'work', 'study', 'exercise', 'entertainment',
+      'social', 'rest', 'personal', 'other'
+    )
+  ),
   title TEXT NOT NULL,
   is_all_day INTEGER NOT NULL DEFAULT 0 CHECK (is_all_day IN (0, 1)),
   start_time TEXT NULL,
@@ -128,7 +134,18 @@ export async function migrateScheduleDatabase(database: SQLiteDatabase): Promise
   await database.withExclusiveTransactionAsync(async (transaction) => {
     if (currentVersion < 1) {
       await transaction.execAsync(CREATE_SCHEDULE_STORAGE_SQL);
-      await transaction.execAsync('PRAGMA user_version = 1');
+      await transaction.execAsync(`PRAGMA user_version = ${CURRENT_DATABASE_VERSION}`);
+    } else if (currentVersion < 2) {
+      await transaction.execAsync(
+        `ALTER TABLE local_schedules
+         ADD COLUMN category TEXT NOT NULL DEFAULT 'other' CHECK (
+           category IN (
+             'work', 'study', 'exercise', 'entertainment',
+             'social', 'rest', 'personal', 'other'
+           )
+         )`,
+      );
+      await transaction.execAsync('PRAGMA user_version = 2');
     }
   });
 }

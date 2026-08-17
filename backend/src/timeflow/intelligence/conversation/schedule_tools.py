@@ -556,7 +556,7 @@ def _json_value(value: object) -> object:
     if isinstance(value, StrEnum):
         return value.value
     if isinstance(value, dict):
-        return {key: _json_value(item) for key, item in value.items()}
+        return {key: _json_value(item) for key, item in value.items() if key != "category"}
     if isinstance(value, (list, tuple)):
         return [_json_value(item) for item in value]
     return value

@@ -19,6 +19,7 @@ EXPECTED_FILES = {
     "20260810_0005_create_schedule_occurrence_overrides_table.py": (
         "schedule_occurrence_overrides"
     ),
+    "20260817_0006_add_schedule_category.py": None,
 }
 IMMUTABLE_BLOBS = {
     "20260728_0001_initial_structure.py": "0591ce3beece9ba78a3f4c3643e505654471db27",
@@ -46,9 +47,10 @@ def _upgrade_create_table_literals(path: Path) -> list[str]:
 def test_migration_chain_has_expected_single_head() -> None:
     config = Config(str(BACKEND_ROOT / "alembic.ini"))
     scripts = ScriptDirectory.from_config(config)
-    assert scripts.get_heads() == ["20260810_0005"]
+    assert scripts.get_heads() == ["20260817_0006"]
     revisions = {revision.revision: revision.down_revision for revision in scripts.walk_revisions()}
     assert revisions == {
+        "20260817_0006": "20260810_0005",
         "20260810_0005": "20260810_0004",
         "20260810_0004": "20260810_0003",
         "20260810_0003": "20260729_0002",
@@ -76,9 +78,10 @@ def test_mainline_revisions_remain_immutable() -> None:
         assert result.stdout.strip() == expected_blob
 
 
-def test_each_new_revision_creates_exactly_one_documented_table() -> None:
+def test_each_new_revision_creates_only_its_documented_table() -> None:
     for filename, table_name in EXPECTED_FILES.items():
-        assert _upgrade_create_table_literals(VERSIONS_ROOT / filename) == [table_name]
+        expected = [] if table_name is None else [table_name]
+        assert _upgrade_create_table_literals(VERSIONS_ROOT / filename) == expected
 
 
 def test_schedules_revision_guards_legacy_data_before_replacement() -> None:

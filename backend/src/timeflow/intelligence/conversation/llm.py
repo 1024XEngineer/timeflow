@@ -100,6 +100,13 @@ class LlmPort(Protocol):
         """Stream one provider-neutral model response."""
 
 
+class JsonLlmPort(Protocol):
+    """Provider-neutral interface for one synchronous JSON-mode request."""
+
+    def complete_json(self, messages: Sequence[ChatMessage]) -> str:
+        """Return the complete JSON text produced for one request."""
+
+
 class LlmError(Exception):
     """Base class for provider-neutral LLM failures."""
 

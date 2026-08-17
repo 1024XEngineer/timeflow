@@ -1,5 +1,6 @@
 """Agent-facing schedule service boundary and application implementation."""
 
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import replace
@@ -17,6 +18,7 @@ from timeflow.business.calendar.contracts import (
     RecurringDeleteScope,
     ReminderType,
     ScheduleBusinessError,
+    ScheduleCategory,
     ScheduleErrorCode,
     ScheduleKind,
     ScheduleMutationResult,
@@ -29,6 +31,7 @@ from timeflow.business.calendar.contracts import (
     UpdateScheduleCommand,
 )
 from timeflow.business.calendar.ports import (
+    ScheduleCategoryClassifier,
     ScheduleRepositoryPort,
     ScheduleRevisionConflictError,
     ScheduleUnitOfWorkFactory,
@@ -43,6 +46,8 @@ from timeflow.business.calendar.recurrence import (
     parse_recurrence_rule,
     truncate_rule_before_occurrence,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ScheduleAgentService(ABC):
@@ -130,10 +135,12 @@ class ScheduleApplicationService(ScheduleAgentService):
         self,
         unit_of_work_factory: ScheduleUnitOfWorkFactory,
         *,
+        category_classifier: ScheduleCategoryClassifier | None = None,
         clock: Callable[[], datetime] | None = None,
         id_factory: Callable[[], str] | None = None,
     ) -> None:
         self._unit_of_work_factory = unit_of_work_factory
+        self._category_classifier = category_classifier
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_factory = id_factory or (lambda: uuid4().hex)
 
@@ -158,6 +165,7 @@ class ScheduleApplicationService(ScheduleAgentService):
             revision=1,
             created_at=now,
             updated_at=now,
+            category=ScheduleCategory.OTHER,
             start_time=command.start_time,
             end_time=command.end_time,
             recurrence_rule=_normalize_optional_recurrence_rule(command.recurrence_rule),
@@ -170,11 +178,28 @@ class ScheduleApplicationService(ScheduleAgentService):
             reminder_strength=command.reminder_strength,
         )
         _validate_snapshot(snapshot)
+        snapshot = replace(snapshot, category=self._classify_category(command))
 
         with self._unit_of_work_factory() as unit_of_work:
             persisted = unit_of_work.schedules.add_schedule(snapshot)
             unit_of_work.commit()
         return ScheduleMutationResult(schedules=(persisted,))
+
+    def _classify_category(self, command: CreateScheduleCommand) -> ScheduleCategory:
+        if self._category_classifier is None:
+            return ScheduleCategory.OTHER
+        try:
+            category = self._category_classifier.classify(command)
+        except Exception as exc:
+            logger.warning(
+                "schedule category classifier raised unexpectedly; using other",
+                extra={"error_type": type(exc).__name__},
+            )
+            return ScheduleCategory.OTHER
+        if not isinstance(category, ScheduleCategory):
+            logger.warning("schedule category classifier returned an invalid value; using other")
+            return ScheduleCategory.OTHER
+        return category
 
     def find_schedules(
         self,
@@ -670,6 +695,8 @@ def _validate_update_patch(command: UpdateScheduleCommand) -> None:
 
 
 def _validate_snapshot(snapshot: ScheduleSnapshot) -> None:
+    if not isinstance(snapshot.category, ScheduleCategory):
+        _validation_error("category has an unsupported value", field="category")
     if not snapshot.title.strip() or len(snapshot.title) > 255:
         _validation_error("title must contain 1 to 255 characters", field="title")
     if not snapshot.timezone.strip() or len(snapshot.timezone) > 64:

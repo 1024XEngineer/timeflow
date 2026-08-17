@@ -47,6 +47,11 @@ class Schedule(Base):
             "schedule_kind IN ('once', 'recurring')",
             name="ck_schedules_schedule_kind",
         ),
+        CheckConstraint(
+            "category IN ('work', 'study', 'exercise', 'entertainment', "
+            "'social', 'rest', 'personal', 'other')",
+            name="ck_schedules_category",
+        ),
         CheckConstraint("status IN ('active', 'deleted')", name="ck_schedules_status"),
         CheckConstraint("revision >= 1", name="ck_schedules_revision_positive"),
         CheckConstraint(
@@ -153,6 +158,9 @@ class Schedule(Base):
     schedule_type: Mapped[str] = mapped_column(String(16), nullable=False)
     schedule_kind: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default=text("'once'")
+    )
+    category: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'other'")
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     is_all_day: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))

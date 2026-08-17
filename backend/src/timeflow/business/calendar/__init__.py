@@ -11,6 +11,7 @@ from timeflow.business.calendar.contracts import (
     ReminderStrength,
     ReminderType,
     ScheduleBusinessError,
+    ScheduleCategory,
     ScheduleErrorCode,
     ScheduleKind,
     ScheduleMutationResult,
@@ -22,6 +23,7 @@ from timeflow.business.calendar.contracts import (
     ScheduleUpdatePatch,
     UpdateScheduleCommand,
 )
+from timeflow.business.calendar.ports import ScheduleCategoryClassifier
 from timeflow.business.calendar.service import ScheduleAgentService, ScheduleApplicationService
 
 __all__ = [
@@ -37,6 +39,8 @@ __all__ = [
     "ScheduleAgentService",
     "ScheduleApplicationService",
     "ScheduleBusinessError",
+    "ScheduleCategory",
+    "ScheduleCategoryClassifier",
     "ScheduleErrorCode",
     "ScheduleKind",
     "ScheduleMutationResult",

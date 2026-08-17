@@ -7,10 +7,23 @@ from typing import TypedDict
 
 
 class ScheduleType(StrEnum):
-    """Supported schedule categories."""
+    """Supported schedule trigger forms."""
 
     TIME = "time"
     LOCATION = "location"
+
+
+class ScheduleCategory(StrEnum):
+    """Content category assigned independently from the schedule trigger form."""
+
+    WORK = "work"
+    STUDY = "study"
+    EXERCISE = "exercise"
+    ENTERTAINMENT = "entertainment"
+    SOCIAL = "social"
+    REST = "rest"
+    PERSONAL = "personal"
+    OTHER = "other"
 
 
 class ScheduleKind(StrEnum):
@@ -139,6 +152,7 @@ class ScheduleSnapshot:
     revision: int
     created_at: datetime
     updated_at: datetime
+    category: ScheduleCategory = ScheduleCategory.OTHER
     start_time: datetime | None = None
     end_time: datetime | None = None
     recurrence_rule: str | None = None
@@ -250,6 +264,7 @@ __all__ = [
     "ReminderDispositionState",
     "ReminderStrength",
     "ReminderType",
+    "ScheduleCategory",
     "ScheduleBusinessError",
     "ScheduleErrorCode",
     "ScheduleKind",
