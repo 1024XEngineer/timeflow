@@ -3,9 +3,7 @@ import { describe, expect, it } from '@jest/globals';
 import type { AuthAccessResponse } from '../../../../../src/contracts/auth';
 import {
   createAuthSession,
-  createLocalPreviewSession,
   isAuthSession,
-  isLocalPreviewSession,
   isObviouslyExpired,
   type AuthState,
   type AuthViewState,
@@ -62,29 +60,6 @@ describe('createAuthSession', () => {
     expect(() => createAuthSession(response, username, 0)).toThrow(
       'Invalid authentication access response',
     );
-  });
-});
-
-describe('createLocalPreviewSession', () => {
-  it('builds a local-only session that expires after one day', () => {
-    expect(createLocalPreviewSession(1_000_000)).toEqual({
-      accountId: 'preview_local',
-      accessToken: 'preview-local-session',
-      expiresAt: 1_000_000 + 24 * 60 * 60 * 1000,
-      username: '本地预览',
-    });
-  });
-
-  it('identifies only the local preview account', () => {
-    expect(isLocalPreviewSession(createLocalPreviewSession(1_000_000))).toBe(true);
-    expect(
-      isLocalPreviewSession({
-        accountId: 'acc_001',
-        accessToken: 'opaque-token',
-        expiresAt: 1,
-        username: 'timeflow_user',
-      }),
-    ).toBe(false);
   });
 });
 

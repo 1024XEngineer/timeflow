@@ -1,5 +1,3 @@
-import { Platform } from 'react-native';
-
 import type { AuthAccess } from '../contracts/auth';
 import {
   AccountStateCleanerRegistry,
@@ -37,7 +35,6 @@ export interface AuthRuntime {
 
 export interface CreateAuthRuntimeOptions extends Pick<CreateApiClientOptions, 'fetch'> {
   readonly accountStateCleaners?: AccountStateCleanerRegistry;
-  readonly allowLocalPreview?: boolean;
   readonly deviceId?: string;
   readonly diagnostics?: AuthDiagnostics;
   readonly now?: () => number;
@@ -56,7 +53,6 @@ export function createAuthRuntime(options: CreateAuthRuntimeOptions = {}): AuthR
   const retrier = new AuthSessionDeletionRetrier(store, diagnostics);
   let authAccess!: AuthAccess;
   const controller = new AuthController({
-    allowLocalPreview: options.allowLocalPreview ?? Platform.OS === 'web',
     authAccess: (request) => authAccess(request),
     now,
     retrier,

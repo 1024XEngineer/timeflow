@@ -21,9 +21,5 @@ export {
   type AuthSocketClosePort,
 } from './AuthInvalidationCoordinator';
 export { AuthSessionDeletionRetrier } from './AuthSessionDeletionRetrier';
-export {
-  AuthSessionPersistenceError,
-  LocalPreviewAuthDisabledError,
-  type AuthInvalidationReason,
-} from './authErrors';
+export { AuthSessionPersistenceError, type AuthInvalidationReason } from './authErrors';
 export { AuthSessionCleanupRequiredError, type AuthSessionStore } from './interfaces';

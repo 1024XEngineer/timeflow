@@ -176,7 +176,6 @@ describe('AuthenticatedWebSocketClient', () => {
         getAccessToken,
         invalidate: async () => undefined,
         isInvalidating: () => true,
-        shouldInvalidateOnUnauthenticated: () => true,
       },
       deviceId: 'device_001',
       socketFactory,
@@ -198,7 +197,6 @@ describe('AuthenticatedWebSocketClient', () => {
         getAccessToken: async () => token,
         invalidate: async () => undefined,
         isInvalidating: () => false,
-        shouldInvalidateOnUnauthenticated: () => true,
       },
       deviceId,
       socketFactory,
@@ -218,7 +216,6 @@ describe('AuthenticatedWebSocketClient', () => {
         getAccessToken: () => token.promise,
         invalidate: async () => undefined,
         isInvalidating: () => invalidating,
-        shouldInvalidateOnUnauthenticated: () => true,
       },
       deviceId: 'device_001',
       requestIdFactory: () => 'req_001',
@@ -242,7 +239,6 @@ describe('AuthenticatedWebSocketClient', () => {
         getAccessToken: () => token.promise,
         invalidate: async () => undefined,
         isInvalidating: () => false,
-        shouldInvalidateOnUnauthenticated: () => true,
       },
       deviceId: 'device_001',
       socketFactory,
@@ -290,35 +286,6 @@ describe('AuthenticatedWebSocketClient', () => {
     await expect(connection).rejects.toBeInstanceOf(WebSocketConnectionError);
     expect(invalidate).not.toHaveBeenCalled();
     expect(client.getState()).toBe('disconnected');
-  });
-
-  it('invalidates a real session when handshake returns UNAUTHENTICATED', async () => {
-    const socket = new FakeWebSocket();
-    const invalidate = jest.fn(async () => undefined);
-    const client = createClient(socket, { invalidate });
-    const connection = client.connect();
-    await flushPromises();
-    socket.open();
-    socket.receive(JSON.stringify(sessionError('UNAUTHENTICATED')));
-
-    await expect(connection).rejects.toBeInstanceOf(WebSocketConnectionError);
-    expect(invalidate).toHaveBeenCalledWith('revoked');
-  });
-
-  it('keeps the session when handshake returns UNAUTHENTICATED but invalidation is suppressed', async () => {
-    const socket = new FakeWebSocket();
-    const invalidate = jest.fn(async () => undefined);
-    const client = createClient(socket, {
-      invalidate,
-      shouldInvalidateOnUnauthenticated: () => false,
-    });
-    const connection = client.connect();
-    await flushPromises();
-    socket.open();
-    socket.receive(JSON.stringify(sessionError('UNAUTHENTICATED')));
-
-    await expect(connection).rejects.toBeInstanceOf(WebSocketConnectionError);
-    expect(invalidate).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -418,7 +385,6 @@ function createClient(
   options: {
     readonly handshakeTimeoutMs?: number;
     readonly invalidate?: jest.MockedFunction<(reason: 'expired' | 'revoked') => Promise<void>>;
-    readonly shouldInvalidateOnUnauthenticated?: () => boolean;
     readonly socketFactory?: () => FakeWebSocket;
   } = {},
 ): AuthenticatedWebSocketClient {
@@ -427,7 +393,6 @@ function createClient(
       getAccessToken: async () => 'opaque-token',
       invalidate: options.invalidate ?? jest.fn(async () => undefined),
       isInvalidating: () => false,
-      shouldInvalidateOnUnauthenticated: options.shouldInvalidateOnUnauthenticated ?? (() => true),
     },
     deviceId: 'device_001',
     handshakeTimeoutMs: options.handshakeTimeoutMs,

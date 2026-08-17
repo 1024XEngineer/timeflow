@@ -1,33 +1,10 @@
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
-import { Platform } from 'react-native';
+import { describe, expect, it, jest } from '@jest/globals';
 
 import { createAuthRuntime } from '../../../src/app/authRuntime';
 import { FakeAuthSessionStore } from '../../fakes/FakeAuthSessionStore';
 import { FakeWebSocket } from '../../fakes/FakeWebSocket';
 
 describe('createAuthRuntime', () => {
-  const originalPlatform = Platform.OS;
-
-  afterEach(() => {
-    Platform.OS = originalPlatform;
-  });
-
-  it('enables local preview only on the web preview platform', () => {
-    Platform.OS = 'web';
-    const webRuntime = createAuthRuntime({
-      fetch: createSuccessfulAuthFetch() as typeof global.fetch,
-      store: new FakeAuthSessionStore(),
-    });
-    expect(webRuntime.controller.allowsLocalPreview()).toBe(true);
-
-    Platform.OS = 'android';
-    const androidRuntime = createAuthRuntime({
-      fetch: createSuccessfulAuthFetch() as typeof global.fetch,
-      store: new FakeAuthSessionStore(),
-    });
-    expect(androidRuntime.controller.allowsLocalPreview()).toBe(false);
-  });
-
   it('composes the authentication access entry with the shared public client', async () => {
     const fetch = createSuccessfulAuthFetch();
     const runtime = createAuthRuntime({

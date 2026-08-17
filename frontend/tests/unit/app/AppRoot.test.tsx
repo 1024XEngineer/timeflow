@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { Platform } from 'react-native';
 
 import { AppRoot } from '../../../src/app/AppRoot';
 import { AuthController } from '../../../src/features/auth/application';
@@ -70,6 +71,12 @@ beforeEach(() => {
 });
 
 describe('AppRoot', () => {
+  const originalPlatform = Platform.OS;
+
+  afterEach(() => {
+    Platform.OS = originalPlatform;
+  });
+
   it.each([
     ['renders a pending restoration', undefined, undefined, true, '正在恢复登录状态'],
     [
@@ -103,6 +110,16 @@ describe('AppRoot', () => {
     },
     10_000,
   );
+
+  it('opens the calendar on web without a session', async () => {
+    Platform.OS = 'web';
+    const controller = createController();
+    render(<AppRoot authController={controller} />);
+
+    await waitFor(() => expect(screen.getByText('日程日历')).toBeTruthy());
+    expect(screen.getByText('预览')).toBeTruthy();
+    expect(screen.queryByText('登录或注册')).toBeNull();
+  });
 
   it('enters the calendar after controller authentication without exposing the token', async () => {
     const controller = createController();

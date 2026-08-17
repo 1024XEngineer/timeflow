@@ -128,48 +128,6 @@ describe('AuthInvalidationCoordinator', () => {
     ]);
     expect(events.every((event) => Object.keys(event).length === 2)).toBe(true);
   });
-
-  it('does not revoke a local preview session on unauthenticated transport errors', () => {
-    const coordinator = new AuthInvalidationCoordinator({
-      controller: {
-        getAccessToken: () => 'preview-local-session',
-        getState: () => ({
-          session: {
-            accountId: 'preview_local',
-            accessToken: 'preview-local-session',
-            expiresAt: 200_000,
-            username: '本地预览',
-          },
-          status: 'authenticated' as const,
-        }),
-        invalidate: async () => undefined,
-      },
-      now: () => 100_000,
-    });
-
-    expect(coordinator.shouldInvalidateOnUnauthenticated()).toBe(false);
-  });
-
-  it('still revokes a real session on unauthenticated transport errors', () => {
-    const coordinator = new AuthInvalidationCoordinator({
-      controller: {
-        getAccessToken: () => 'opaque-token',
-        getState: () => ({
-          session: {
-            accountId: 'acc_001',
-            accessToken: 'opaque-token',
-            expiresAt: 200_000,
-            username: 'timeflow_user',
-          },
-          status: 'authenticated' as const,
-        }),
-        invalidate: async () => undefined,
-      },
-      now: () => 100_000,
-    });
-
-    expect(coordinator.shouldInvalidateOnUnauthenticated()).toBe(true);
-  });
 });
 
 function createDeferred<T>() {

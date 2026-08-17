@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { AssistantContinuousConversationService } from '../features/assistant/application/AssistantContinuousConversationService';
 import { AssistantConversationService } from '../features/assistant/application/AssistantConversationService';
@@ -70,6 +70,16 @@ function AuthRoute({
   }
 
   if (viewState.status === 'unauthenticated') {
+    if (Platform.OS === 'web') {
+      return (
+        <AuthenticatedScheduleRoute
+          accountId="preview_local"
+          key="preview_local"
+          username="预览"
+          webSocketClient={webSocketClient}
+        />
+      );
+    }
     return <LoginScreen />;
   }
 

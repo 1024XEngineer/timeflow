@@ -1,4 +1,4 @@
-import { isLocalPreviewSession, isObviouslyExpired, type AuthState } from '../domain';
+import { isObviouslyExpired, type AuthState } from '../domain';
 import type { AuthInvalidationReason } from './authErrors';
 import {
   NOOP_AUTH_DIAGNOSTICS,
@@ -38,12 +38,6 @@ export class AuthInvalidationCoordinator {
 
   isInvalidating(): boolean {
     return this.invalidation !== undefined;
-  }
-
-  /** 本地预览会话过不了线上鉴权，但不能因此把人踢回登录页。主动退出仍走 invalidate。 */
-  shouldInvalidateOnUnauthenticated(): boolean {
-    const state = this.options.controller.getState();
-    return !(state.status === 'authenticated' && isLocalPreviewSession(state.session));
   }
 
   async getAccessToken(): Promise<string | undefined> {

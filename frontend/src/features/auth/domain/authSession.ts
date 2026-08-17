@@ -3,10 +3,6 @@ import { isAuthAccessResponse } from '../../../contracts/auth';
 const MILLISECONDS_PER_SECOND = 1000;
 const EXPIRY_SKEW_MS = 30_000;
 const INVALID_AUTH_ACCESS_RESPONSE_MESSAGE = 'Invalid authentication access response';
-export const LOCAL_PREVIEW_ACCOUNT_ID = 'preview_local';
-export const LOCAL_PREVIEW_USERNAME = '本地预览';
-const LOCAL_PREVIEW_ACCESS_TOKEN = 'preview-local-session';
-const LOCAL_PREVIEW_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** 已通过认证且可持久化的最小会话；访问令牌保持 opaque，不在客户端解释。 */
 export interface AuthSession {
@@ -40,21 +36,6 @@ export function createAuthSession(response: unknown, username: unknown, now: num
     expiresAt: now + response.expires_in * MILLISECONDS_PER_SECOND,
     username: username.trim(),
   };
-}
-
-/** 无后端时的本地预览会话：只打开本地日历，令牌不能当线上凭据用。 */
-export function createLocalPreviewSession(now: number): AuthSession {
-  return {
-    accountId: LOCAL_PREVIEW_ACCOUNT_ID,
-    accessToken: LOCAL_PREVIEW_ACCESS_TOKEN,
-    expiresAt: now + LOCAL_PREVIEW_TTL_MS,
-    username: LOCAL_PREVIEW_USERNAME,
-  };
-}
-
-/** 本地预览令牌过不了线上握手；不能把它当成真实会话被吊销。 */
-export function isLocalPreviewSession(session: AuthSession): boolean {
-  return session.accountId === LOCAL_PREVIEW_ACCOUNT_ID;
 }
 
 /** 校验未知输入是否具备可安全使用的会话字段。 */
