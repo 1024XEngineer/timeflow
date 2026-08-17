@@ -14,6 +14,7 @@ import { MonthCalendar } from './MonthCalendar';
 import { ScheduleOccurrenceDetailSheet } from './ScheduleOccurrenceDetailSheet';
 import { ScheduleOccurrenceRow } from './ScheduleOccurrenceRow';
 import { useScheduleCalendar } from './useScheduleCalendar';
+import type { CalendarFocusTarget } from './calendarFocus';
 
 const SELECTED_DATE_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
   day: 'numeric',
@@ -30,6 +31,7 @@ interface ScheduleCalendarScreenProps {
   isSigningOut?: boolean;
   /** 外部触发刷新用（比如语音写完一条日程）；变化即重取，不用管具体数值。 */
   refreshSignal?: number;
+  focusTarget?: CalendarFocusTarget | null;
 }
 
 export function ScheduleCalendarScreen({
@@ -40,8 +42,16 @@ export function ScheduleCalendarScreen({
   onSignOut,
   isSigningOut = false,
   refreshSignal,
+  focusTarget,
 }: ScheduleCalendarScreenProps) {
-  const calendar = useScheduleCalendar(service, accountId, timezone, undefined, refreshSignal);
+  const calendar = useScheduleCalendar(
+    service,
+    accountId,
+    timezone,
+    undefined,
+    refreshSignal,
+    focusTarget,
+  );
   const [selectedOccurrence, setSelectedOccurrence] = useState<ScheduleOccurrenceView | null>(null);
   const [selectedLocation, setSelectedLocation] = useState<LocationScheduleView | null>(null);
   const selectedLabel = SELECTED_DATE_FORMATTER.format(calendar.selectedDate);
@@ -276,7 +286,7 @@ const styles = StyleSheet.create({
   },
   retryText: { color: colors.onPrimary, fontWeight: '700' },
   screen: { backgroundColor: colors.background, flex: 1 },
-  scrollContent: { paddingBottom: spacing.xxl * 3 },
+  scrollContent: { paddingBottom: spacing.lg },
   sectionCount: { color: colors.mutedText, fontSize: 12, fontWeight: '600' },
   sectionEyebrow: { color: colors.mutedText, fontSize: 12, fontWeight: '600', marginBottom: 3 },
   sectionHeader: {

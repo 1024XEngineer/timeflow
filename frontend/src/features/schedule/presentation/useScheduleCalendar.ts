@@ -6,7 +6,18 @@ import type {
   ScheduleCalendarReadService,
   ScheduleOccurrenceView,
 } from '../application';
+import {
+  floatingDateToLocalParts,
+  instantToZonedParts,
+  localPartsToFloatingDate,
+  zonedPartsToInstant,
+} from '../domain/scheduleDateTime';
+import {
+  normalizeUtcUntilForFloatingRrule,
+  parseScheduleRrule,
+} from '../domain/scheduleRecurrence';
 import { addDays, dateKey, dateKeyInTimezone, startOfMonth } from './scheduleDisplay';
+import type { CalendarFocusTarget } from './calendarFocus';
 
 export interface ScheduleCalendarState {
   selectedDate: Date;
@@ -34,6 +45,7 @@ export function useScheduleCalendar(
   initialDate = new Date(),
   /** 外部触发刷新用（比如语音写完一条日程）；变化时跟 retry() 走同一条重取路径。 */
   refreshSignal = 0,
+  focusTarget?: CalendarFocusTarget | null,
 ): ScheduleCalendarState {
   const [selectedDate, setSelectedDate] = useState(() => initialDate);
   const [visibleMonth, setVisibleMonth] = useState(() => startOfMonth(initialDate));
@@ -46,6 +58,54 @@ export function useScheduleCalendar(
   const [occurrencesError, setOccurrencesError] = useState<string | null>(null);
   const [locationsError, setLocationsError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
+
+  const focusKey = focusTarget
+    ? `${focusTarget.scheduleId}:${focusTarget.kind}:${focusTarget.recurrenceMode}:${focusTarget.startTime ?? ''}`
+    : null;
+  const recurringFocusReloadToken = focusTarget?.recurrenceMode === 'recurring' ? reloadToken : 0;
+
+  useEffect(() => {
+    if (focusTarget === undefined || focusTarget === null || focusTarget.kind === 'location') {
+      return;
+    }
+
+    let cancelled = false;
+    const applyDate = (date: Date) => {
+      if (cancelled) return;
+      setSelectedDate(date);
+      setVisibleMonth(startOfMonth(date));
+    };
+
+    if (focusTarget.recurrenceMode !== 'recurring') {
+      const dateKeyForTarget = focusTarget.startTime
+        ? dateKeyInTimezone(focusTarget.startTime, timezone)
+        : null;
+      const date = dateKeyForTarget ? parseDateKey(dateKeyForTarget) : null;
+      if (date !== null) applyDate(date);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void findNextOccurrenceDate(service, accountId, timezone, focusTarget)
+      .then((date) => {
+        if (date !== null) applyDate(date);
+      })
+      .catch(() => {
+        if (!cancelled) setOccurrencesError('日程加载失败，请重试');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    accountId,
+    focusKey,
+    focusTarget,
+    recurringFocusReloadToken,
+    refreshSignal,
+    service,
+    timezone,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -161,4 +221,57 @@ export function useScheduleCalendar(
     changeMonth,
     retry,
   };
+}
+
+function parseDateKey(value: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return dateKey(date) === value ? date : null;
+}
+
+async function findNextOccurrenceDate(
+  service: ScheduleCalendarReadService,
+  accountId: string,
+  timezone: string,
+  target: CalendarFocusTarget,
+): Promise<Date | null> {
+  const now = new Date();
+  const scheduleTimezone = target.timezone ?? timezone;
+  if (target.startTime === null || target.recurrenceRule === null) return null;
+  const scheduleStart = new Date(target.startTime);
+  if (Number.isNaN(scheduleStart.getTime())) return null;
+  const floatingStart = localPartsToFloatingDate(
+    instantToZonedParts(scheduleStart, scheduleTimezone),
+  );
+  const floatingNow = localPartsToFloatingDate(instantToZonedParts(now, scheduleTimezone));
+  const rule = parseScheduleRrule(
+    normalizeUtcUntilForFloatingRrule(target.recurrenceRule, scheduleTimezone),
+    floatingStart,
+  );
+  const nextFloating = rule.after(floatingNow, false);
+  if (nextFloating === null) return null;
+  const nextInstant = zonedPartsToInstant(floatingDateToLocalParts(nextFloating), scheduleTimezone);
+  const startKey = dateKeyInTimezone(nextInstant.toISOString(), timezone);
+  const startDate = startKey ? parseDateKey(startKey) : null;
+  if (startDate === null || startKey === null) return null;
+  const occurrences = await service.getSchedulesByRange({
+    accountId,
+    endDate: dateKey(addDays(startDate, 1)),
+    startDate: startKey,
+    timezone,
+  });
+  const next = occurrences
+    .filter(
+      (occurrence) =>
+        occurrence.scheduleId === target.scheduleId &&
+        occurrence.occurrenceStart !== null &&
+        new Date(occurrence.occurrenceStart).getTime() >= now.getTime(),
+    )
+    .sort(
+      (left, right) =>
+        new Date(left.occurrenceStart!).getTime() - new Date(right.occurrenceStart!).getTime(),
+    )[0];
+  const nextKey = next?.occurrenceStart ? dateKeyInTimezone(next.occurrenceStart, timezone) : null;
+  return nextKey ? parseDateKey(nextKey) : null;
 }

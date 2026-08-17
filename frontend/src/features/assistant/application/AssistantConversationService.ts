@@ -266,18 +266,17 @@ export class AssistantConversationService implements AssistantApplicationPort {
     command: AppliedCommand,
     messageId: string,
   ): Promise<void> {
-    let writeSucceeded = true;
     try {
       await this.deps.localScheduleWriter.applyCommandResult(this.options.accountId, command);
     } catch {
-      writeSucceeded = false;
       // 写失败不重试；不发 ack，避免向服务端谎报已落库。
-    }
-    if (writeSucceeded && this.connection !== null) {
-      this.connection.send({ message_id: messageId, status: 'applied', type: 'message.ack' });
+      return;
     }
     this.lastAppliedCommand = command;
     this.notifyListeners();
+    if (this.connection !== null) {
+      this.connection.send({ message_id: messageId, status: 'applied', type: 'message.ack' });
+    }
   }
 
   private handleAudioFrame(chunk: ArrayBuffer): void {

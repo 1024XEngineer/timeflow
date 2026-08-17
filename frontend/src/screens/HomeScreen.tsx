@@ -6,6 +6,10 @@ import { AssistantVoiceOverlay } from '../features/assistant/presentation/Assist
 import { useAssistantConversation } from '../features/assistant/presentation/useAssistantConversation';
 import type { ScheduleCalendarReadService } from '../features/schedule/application';
 import { ScheduleCalendarScreen } from '../features/schedule/presentation/ScheduleCalendarScreen';
+import {
+  calendarFocusTargetFromCommand,
+  type CalendarFocusTarget,
+} from '../features/schedule/presentation/calendarFocus';
 
 interface HomeScreenProps {
   pushToTalkApplication: AssistantApplicationPort;
@@ -38,6 +42,7 @@ export function HomeScreen({
   const [trackedPttCommand, setTrackedPttCommand] = useState(pttCommand);
   const [trackedCallCommand, setTrackedCallCommand] = useState(callCommand);
   const [refreshSignal, setRefreshSignal] = useState(0);
+  const [focusTarget, setFocusTarget] = useState<CalendarFocusTarget | null>(null);
 
   // command.result 写完本地库之后 lastAppliedCommand 才会更新（见
   // AssistantConversationService.applyCommandResultLocally），所以这里发现它
@@ -46,12 +51,14 @@ export function HomeScreen({
   if (trackedPttCommand !== pttCommand) {
     setTrackedPttCommand(pttCommand);
     if (pttCommand !== null) {
+      setFocusTarget(calendarFocusTargetFromCommand(pttCommand));
       setRefreshSignal((value) => value + 1);
     }
   }
   if (trackedCallCommand !== callCommand) {
     setTrackedCallCommand(callCommand);
     if (callCommand !== null) {
+      setFocusTarget(calendarFocusTargetFromCommand(callCommand));
       setRefreshSignal((value) => value + 1);
     }
   }
@@ -63,6 +70,7 @@ export function HomeScreen({
         isSigningOut={isSigningOut}
         onSignOut={onSignOut}
         refreshSignal={refreshSignal}
+        focusTarget={focusTarget}
         service={scheduleService}
         timezone={timezone}
         username={username}

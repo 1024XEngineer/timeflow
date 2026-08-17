@@ -229,6 +229,12 @@ describe('AssistantConversationService', () => {
       status: 'applied',
       type: 'message.ack',
     });
+    expect(service.getLastAppliedCommand()).toEqual({
+      operation: 'create_schedule',
+      schedule: undefined,
+      schedules: undefined,
+      status: 'applied',
+    });
   });
 
   it('withholds message.ack when the local write fails', async () => {
@@ -252,12 +258,7 @@ describe('AssistantConversationService', () => {
     await flushAsync();
 
     expect(fake.sent).not.toContainEqual(expect.objectContaining({ type: 'message.ack' }));
-    expect(service.getLastAppliedCommand()).toEqual({
-      operation: 'create_schedule',
-      schedule: undefined,
-      schedules: undefined,
-      status: 'applied',
-    });
+    expect(service.getLastAppliedCommand()).toBeNull();
   });
 
   it('dispose() unsubscribes every listener registered on the connection', async () => {
