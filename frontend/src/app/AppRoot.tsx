@@ -10,6 +10,7 @@ import { AuthenticatedVoiceTransport } from '../features/assistant/data/websocke
 import { LocalScheduleWriter } from '../features/assistant/data/local/LocalScheduleWriter';
 import type { AuthController } from '../features/auth/application';
 import { useAuth } from '../features/auth/presentation/AuthProvider';
+import type { SqliteLocalScheduleReader, SqliteReminderStateStore } from '../features/reminder';
 import { SqliteScheduleClientService } from '../features/schedule/application';
 import { ScheduleLocalRepository } from '../features/schedule/data';
 import { RNAppStateProvider } from '../infrastructure/appState/RNAppStateProvider';
@@ -37,14 +38,22 @@ export function AppRoot({
       invalidationCoordinator={authController ? undefined : services.auth.invalidationCoordinator}
       services={services}
     >
-      <AuthRoute webSocketClient={services.webSocketClient} />
+      <AuthRoute
+        reminderState={services.reminderState}
+        scheduleReader={services.schedules}
+        webSocketClient={services.webSocketClient}
+      />
     </AppProviders>
   );
 }
 
 function AuthRoute({
+  reminderState,
+  scheduleReader,
   webSocketClient,
 }: {
+  readonly reminderState: SqliteReminderStateStore;
+  readonly scheduleReader: SqliteLocalScheduleReader;
   readonly webSocketClient: AuthenticatedWebSocketClient;
 }) {
   const { retryInitialization, viewState } = useAuth();
@@ -77,6 +86,8 @@ function AuthRoute({
     <AuthenticatedScheduleRoute
       accountId={viewState.accountId}
       key={viewState.accountId}
+      reminderState={reminderState}
+      scheduleReader={scheduleReader}
       username={viewState.username}
       webSocketClient={webSocketClient}
     />
@@ -96,10 +107,14 @@ type ScheduleLoadState =
 
 function AuthenticatedScheduleRoute({
   accountId,
+  reminderState,
+  scheduleReader,
   username,
   webSocketClient,
 }: {
   readonly accountId: string;
+  readonly reminderState: SqliteReminderStateStore;
+  readonly scheduleReader: SqliteLocalScheduleReader;
   readonly username: string;
   readonly webSocketClient: AuthenticatedWebSocketClient;
 }) {
@@ -150,6 +165,24 @@ function AuthenticatedScheduleRoute({
     [currentLoadState],
   );
 
+  // 提醒引擎（LocalReminderApplication）在认证态一变化就 start()，早于这里数据库
+  // 打开完成；SqliteLocalScheduleReader / SqliteReminderStateStore 都是整个 App
+  // 生命周期唯一一个实例，attach() 只是把它们接到这次登录/重试打开的仓储上。
+  // reminderState 要先于 refresh() 触发的 rebuild 接上，不然 rebuild 读到的运行时
+  // 状态还是空的，会把已经响过的提醒当成没响过又送一遍。
+  useEffect(() => {
+    if (currentLoadState?.status !== 'ready') {
+      return;
+    }
+    reminderState.attach(currentLoadState.repository, accountId);
+    scheduleReader.attach(currentLoadState.repository, accountId);
+    void scheduleReader.refresh();
+    return () => {
+      scheduleReader.detach();
+      reminderState.detach();
+    };
+  }, [accountId, currentLoadState, reminderState, scheduleReader]);
+
   // 语音这条连接复用应用唯一的 AuthenticatedWebSocketClient——握手、鉴权失效、
   // 断线通知都由它统一处理，这里不再单独持有 access_token/device_id/wsUrl。
   // 按住说话和免提通话共用同一批 capture/playback/location/appState 端口
@@ -166,11 +199,11 @@ function AuthenticatedScheduleRoute({
     return {
       appState: new RNAppStateProvider(),
       capture: new ExpoAudioCapture(),
-      localScheduleWriter: new LocalScheduleWriter(currentLoadState.repository),
+      localScheduleWriter: new LocalScheduleWriter(currentLoadState.repository, scheduleReader),
       location: new ExpoLocationProvider(),
       playback: new ExpoAudioPlayback(),
     };
-  }, [currentLoadState]);
+  }, [currentLoadState, scheduleReader]);
 
   const pushToTalkApplication = useMemo(() => {
     if (assistantDependencies === null) {

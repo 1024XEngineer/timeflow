@@ -9,7 +9,12 @@ import { openTimeflowDatabase } from '../../../src/infrastructure/database';
 jest.mock('../../../src/infrastructure/database', () => ({
   openTimeflowDatabase: jest.fn<() => Promise<unknown>>().mockResolvedValue({}),
 }));
-jest.mock('../../../src/features/schedule/data', () => ({ ScheduleLocalRepository: jest.fn() }));
+jest.mock('../../../src/features/schedule/data', () => ({
+  ScheduleLocalRepository: jest.fn().mockImplementation(() => ({
+    getSchedule: jest.fn<() => Promise<null>>().mockResolvedValue(null),
+    listSchedules: jest.fn<() => Promise<never[]>>().mockResolvedValue([]),
+  })),
+}));
 jest.mock('../../../src/features/schedule/application', () => ({
   SqliteScheduleClientService: jest.fn(),
 }));
