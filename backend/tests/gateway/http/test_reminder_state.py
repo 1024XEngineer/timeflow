@@ -191,6 +191,34 @@ def test_expected_business_failures_have_stable_http_mappings(
     assert response.json() == _error(response_code, message)
 
 
+def test_unmapped_business_failure_is_sanitized_and_returns_stable_500(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sensitive_detail = "validation-detail-and-secret"
+    confirmer = _Confirmer(
+        error=ScheduleBusinessError(
+            code=ScheduleErrorCode.VALIDATION_FAILED,
+            message=sensitive_detail,
+            schedule_id="schedule-001",
+        )
+    )
+
+    with caplog.at_level(logging.ERROR, logger="timeflow.gateway.http.reminder_state"):
+        response = _client(confirmer).put(
+            "/api/v1/schedule/reminder-state",
+            headers=AUTHORIZATION,
+            json=VALID_BODY,
+        )
+
+    assert response.status_code == 500
+    assert response.json() == _error(
+        "REMINDER_STATE_INTERNAL_ERROR",
+        "Reminder state service unavailable",
+    )
+    assert sensitive_detail not in caplog.text
+    assert caplog.records[-1].event_id.startswith("reminder_state_event_")
+
+
 def test_unexpected_failure_is_sanitized_and_returns_stable_500(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

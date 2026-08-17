@@ -215,6 +215,35 @@ def test_concurrent_loser_rereads_winner_and_succeeds_without_commit() -> None:
     assert unit_of_work.commits == 0
 
 
+def test_atomic_miss_with_pending_reread_raises_internal_failure() -> None:
+    pending = _schedule()
+    repository = _Repository(reads=[pending, pending], update_result=None)
+    service, unit_of_work = _service(repository)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Reminder confirmation update did not persist",
+    ):
+        service.confirm(account_id="account-a", schedule_id="schedule-001")
+
+    assert repository.confirm_calls == 1
+    assert unit_of_work.commits == 0
+
+
+def test_unconfirmed_repository_result_raises_internal_failure() -> None:
+    pending = _schedule()
+    repository = _Repository(reads=[pending], update_result=pending)
+    service, _ = _service(repository)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Reminder confirmation result is not confirmed",
+    ):
+        service.confirm(account_id="account-a", schedule_id="schedule-001")
+
+    assert repository.confirm_calls == 1
+
+
 @pytest.mark.parametrize(
     ("reread", "expected_code"),
     [
