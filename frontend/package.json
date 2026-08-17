@@ -11,16 +11,20 @@
     "@expo/metro-runtime": "~57.0.8",
     "@irvingouj/expo-audio-stream": "3.1.0",
     "expo": "~57.0.7",
+    "expo-audio": "~57.0.3",
     "expo-location": "~57.0.9",
+    "expo-notifications": "~57.0.10",
     "expo-secure-store": "~57.0.1",
     "expo-sqlite": "~57.0.1",
     "expo-status-bar": "~57.0.1",
+    "expo-task-manager": "~57.0.9",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.0",
     "react-native-svg": "15.15.4",
     "react-native-web": "^0.21.2",
-    "rrule": "^2.8.1"
+    "rrule": "^2.8.1",
+    "timeflow-alarm": "file:modules/timeflow-alarm"
   },
   "devDependencies": {
     "@testing-library/react-native": "13.3.3",
