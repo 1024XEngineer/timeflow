@@ -167,10 +167,13 @@ export function useReminderPermissionsOnLaunch(
         }
       } finally {
         busyRef.current = false;
-      }
-
-      if (queueNext && !awaitingReturnRef.current) {
-        setTimeout(runPrompt, 250);
+        // 必须放在 finally 里：try 里几乎每条分支（直接请求、跳设置、弹框拒绝、
+        // 定位授权/回退）都在分支末尾 return，放在 try/finally 外面的话，只有
+        // 悬浮窗/全屏通知/电池优化这种"用户点了确认"的兜底分支能落到这行——
+        // 其余分支设了 queueNext 也没人来消费，链就断在第一个权限上。
+        if (queueNext && !awaitingReturnRef.current) {
+          setTimeout(runPrompt, 250);
+        }
       }
     };
 

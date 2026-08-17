@@ -1,18 +1,14 @@
 import { act, renderHook } from '@testing-library/react-native';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
-import { Alert, AppState, Platform, type AlertButton } from 'react-native';
 
 import type {
+  AlertDialogPort,
+  AlertDialogRequest,
   DeviceCapabilityPort,
   DeviceCapabilityStatus,
   DevicePermission,
 } from '../../../../src/features/reminder/application/interfaces';
 import { useReminderPermissionsOnLaunch } from '../../../../src/features/reminder/presentation/useReminderPermissionsOnLaunch';
-
-const ALERT_OPTIONS = expect.objectContaining({
-  cancelable: true,
-  onDismiss: expect.any(Function),
-});
 
 function deniedPermissions(): Record<DevicePermission, boolean> {
   return {
@@ -41,15 +37,14 @@ function grantedPermissions(): Record<DevicePermission, boolean> {
 type FakeDevice = DeviceCapabilityPort & { status: DeviceCapabilityStatus };
 
 function createDevice(
-  status: Partial<DeviceCapabilityStatus> & Pick<DeviceCapabilityStatus, 'platform'> = {
-    platform: 'android',
-  },
+  status: Partial<DeviceCapabilityStatus> & Pick<DeviceCapabilityStatus, 'platform'>,
 ): FakeDevice {
+  const listeners: (() => void)[] = [];
   const device: FakeDevice = {
     status: {
       platform: status.platform,
       supported: status.supported ?? status.platform === 'android',
-      permissions: { ...deniedPermissions(), ...status.permissions },
+      permissions: { ...grantedPermissions(), ...status.permissions },
       background_execution: status.background_execution ?? true,
     },
     getStatus: jest.fn(async () => device.status),
@@ -61,13 +56,26 @@ function createDevice(
       return true;
     }),
     openSettings: jest.fn(async () => true),
+    onAppActive: jest.fn((listener: () => void) => {
+      listeners.push(listener);
+      return jest.fn();
+    }),
+  };
+  (device as unknown as { fireAppActive: () => void }).fireAppActive = () => {
+    listeners.forEach((listener) => listener());
   };
   return device;
 }
 
-let alertButtons: readonly AlertButton[] = [];
-let dismissAlertCallback: (() => void) | undefined;
-const appStateListeners: ((state: string) => void)[] = [];
+let dialogRequest: AlertDialogRequest | undefined;
+
+function createDialog(): AlertDialogPort {
+  return {
+    show: jest.fn(async (request: AlertDialogRequest) => {
+      dialogRequest = request;
+    }),
+  };
+}
 
 async function flush(ms = 0): Promise<void> {
   await act(async () => {
@@ -82,15 +90,7 @@ async function flush(ms = 0): Promise<void> {
 
 async function press(label: string): Promise<void> {
   await act(async () => {
-    alertButtons.find((button) => button.text === label)?.onPress?.();
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-}
-
-async function dismissAlert(): Promise<void> {
-  await act(async () => {
-    dismissAlertCallback?.();
+    dialogRequest?.buttons.find((button) => button.text === label)?.onPress?.();
     await Promise.resolve();
     await Promise.resolve();
   });
@@ -98,213 +98,111 @@ async function dismissAlert(): Promise<void> {
 
 describe('useReminderPermissionsOnLaunch', () => {
   beforeEach(() => {
-    alertButtons = [];
-    appStateListeners.length = 0;
-    Platform.OS = 'android';
-    dismissAlertCallback = undefined;
-    jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons, options) => {
-      alertButtons = buttons ?? [];
-      dismissAlertCallback = options?.onDismiss;
-    });
-    jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, listener) => {
-      appStateListeners.push(listener as (state: string) => void);
-      return { remove: jest.fn() } as ReturnType<typeof AppState.addEventListener>;
-    });
+    dialogRequest = undefined;
   });
 
   afterEach(() => {
     jest.useRealTimers();
-    jest.restoreAllMocks();
   });
 
-  it('does nothing off Android or without a device', async () => {
+  it('does nothing without a device or a dialog', async () => {
     jest.useFakeTimers();
-    const androidDevice = createDevice();
-    Platform.OS = 'ios';
-    renderHook(() => useReminderPermissionsOnLaunch(androidDevice));
-    Platform.OS = 'android';
-    renderHook(() => useReminderPermissionsOnLaunch(null));
+    const device = createDevice({ platform: 'android', supported: true, permissions: deniedPermissions() });
+    const dialog = createDialog();
+    renderHook(() => useReminderPermissionsOnLaunch(null, dialog));
+    renderHook(() => useReminderPermissionsOnLaunch(device, null));
     await flush(1_000);
-    expect(androidDevice.getStatus).not.toHaveBeenCalled();
+    expect(device.getStatus).not.toHaveBeenCalled();
+    expect(dialog.show).not.toHaveBeenCalled();
   });
 
-  it('requests notifications directly without an explanation alert', async () => {
+  it('requests notifications directly without a dialog, then reports the update', async () => {
     jest.useFakeTimers();
-    const device = createDevice({ platform: 'android', supported: true });
-    renderHook(() => useReminderPermissionsOnLaunch(device));
+    const device = createDevice({ platform: 'android', supported: true, permissions: deniedPermissions() });
+    const dialog = createDialog();
+    const onPermissionsUpdated = jest.fn();
+    renderHook(() => useReminderPermissionsOnLaunch(device, dialog, onPermissionsUpdated));
     await flush(600);
-    expect(Alert.alert).not.toHaveBeenCalled();
+    expect(dialog.show).not.toHaveBeenCalled();
     expect(device.requestPermission).toHaveBeenCalledWith('notifications');
+    expect(onPermissionsUpdated).toHaveBeenCalledTimes(1);
   });
 
-  it('asks before opening settings for exact alarm, then resumes on app active', async () => {
+  it('jumps straight to settings for exact alarm, then resumes once the app is active again', async () => {
     jest.useFakeTimers();
     const device = createDevice({
       platform: 'android',
       supported: true,
       permissions: { ...deniedPermissions(), notifications: true },
     });
-    renderHook(() => useReminderPermissionsOnLaunch(device));
+    const dialog = createDialog();
+    const onPermissionsUpdated = jest.fn();
+    renderHook(() => useReminderPermissionsOnLaunch(device, dialog, onPermissionsUpdated));
     await flush(600);
-    expect(Alert.alert).toHaveBeenCalledWith(
-      '需要精确闹钟权限',
-      expect.any(String),
-      expect.any(Array),
-      ALERT_OPTIONS,
-    );
-    await press('去授权');
+    expect(dialog.show).not.toHaveBeenCalled();
     expect(device.openSettings).toHaveBeenCalledWith('exact_alarm');
-    expect(device.requestPermission).not.toHaveBeenCalled();
+    expect(device.requestPermission).not.toHaveBeenCalledWith('exact_alarm');
 
     device.status = {
       ...device.status,
       permissions: { ...device.status.permissions, exact_alarm: true },
     };
     await act(async () => {
-      appStateListeners.forEach((listener) => listener('active'));
+      (device as unknown as { fireAppActive: () => void }).fireAppActive();
       await Promise.resolve();
     });
     await flush(300);
-    expect(Alert.alert).toHaveBeenCalledWith(
-      '需要悬浮窗权限',
-      expect.any(String),
-      expect.any(Array),
-      ALERT_OPTIONS,
+    expect(onPermissionsUpdated).toHaveBeenCalledTimes(1);
+    expect(dialog.show).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '需要悬浮窗权限' }),
     );
   });
 
-  it('skips a permission when the user declines the explanation alert', async () => {
+  it('shows a dialog before requesting location permission, and falls back to settings when denied', async () => {
     jest.useFakeTimers();
     const device = createDevice({
       platform: 'android',
       supported: true,
-      permissions: { ...deniedPermissions(), notifications: true },
+      permissions: { ...deniedPermissions(), location_foreground: false },
+      background_execution: true,
     });
-    renderHook(() => useReminderPermissionsOnLaunch(device));
+    device.status.permissions = {
+      ...grantedPermissions(),
+      location_foreground: false,
+    };
+    device.requestPermission = jest.fn(async () => false);
+    const dialog = createDialog();
+    const onPermissionsUpdated = jest.fn();
+    renderHook(() => useReminderPermissionsOnLaunch(device, dialog, onPermissionsUpdated));
     await flush(600);
+    expect(dialog.show).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '需要定位权限' }),
+    );
+
+    await press('去授权');
+    await flush(350);
+    expect(device.requestPermission).toHaveBeenCalledWith('location_foreground');
+    expect(device.openSettings).toHaveBeenCalledWith('location_foreground');
+    expect(onPermissionsUpdated).not.toHaveBeenCalled();
+  });
+
+  it('skips a permission and moves on when the user declines the dialog', async () => {
+    jest.useFakeTimers();
+    const device = createDevice({
+      platform: 'android',
+      supported: true,
+      permissions: { ...grantedPermissions(), overlay: false, full_screen: false },
+    });
+    const dialog = createDialog();
+    renderHook(() => useReminderPermissionsOnLaunch(device, dialog));
+    await flush(600);
+    expect(dialog.show).toHaveBeenCalledWith(expect.objectContaining({ title: '需要悬浮窗权限' }));
+
     await press('暂不');
     await flush(250);
-    expect(device.openSettings).not.toHaveBeenCalled();
-    expect(Alert.alert).toHaveBeenCalledWith(
-      '需要悬浮窗权限',
-      expect.any(String),
-      expect.any(Array),
-      ALERT_OPTIONS,
+    expect(device.openSettings).not.toHaveBeenCalledWith('overlay');
+    expect(dialog.show).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '需要全屏通知权限' }),
     );
-  });
-
-  it('skips and continues when the explanation alert is dismissed', async () => {
-    jest.useFakeTimers();
-    const device = createDevice({
-      platform: 'android',
-      supported: true,
-      permissions: { ...deniedPermissions(), notifications: true },
-    });
-    renderHook(() => useReminderPermissionsOnLaunch(device));
-    await flush(600);
-    await dismissAlert();
-    await flush(250);
-    expect(device.openSettings).not.toHaveBeenCalled();
-    expect(Alert.alert).toHaveBeenCalledWith(
-      '需要悬浮窗权限',
-      expect.any(String),
-      expect.any(Array),
-      ALERT_OPTIONS,
-    );
-  });
-
-  it('skips notifications and continues when requestPermission rejects', async () => {
-    jest.useFakeTimers();
-    const device = createDevice({ platform: 'android', supported: true });
-    device.requestPermission = jest.fn(async () => {
-      throw new Error('native prompt failed');
-    });
-    renderHook(() => useReminderPermissionsOnLaunch(device));
-    await flush(600);
-    expect(device.requestPermission).toHaveBeenCalledWith('notifications');
-    await flush(350);
-    expect(Alert.alert).toHaveBeenCalledWith(
-      '需要精确闹钟权限',
-      expect.any(String),
-      expect.any(Array),
-      ALERT_OPTIONS,
-    );
-  });
-
-  it('skips and continues when openSettings returns false', async () => {
-    jest.useFakeTimers();
-    const device = createDevice({
-      platform: 'android',
-      supported: true,
-      permissions: { ...deniedPermissions(), notifications: true },
-    });
-    device.openSettings = jest.fn(async () => false);
-    renderHook(() => useReminderPermissionsOnLaunch(device));
-    await flush(600);
-    await press('去授权');
-    expect(device.openSettings).toHaveBeenCalledWith('exact_alarm');
-    await flush(200);
-    expect(Alert.alert).toHaveBeenCalledWith(
-      '需要悬浮窗权限',
-      expect.any(String),
-      expect.any(Array),
-      ALERT_OPTIONS,
-    );
-  });
-
-  it('skips and continues when openSettings throws', async () => {
-    jest.useFakeTimers();
-    const device = createDevice({
-      platform: 'android',
-      supported: true,
-      permissions: { ...deniedPermissions(), notifications: true },
-    });
-    device.openSettings = jest.fn(async () => {
-      throw new Error('settings unavailable');
-    });
-    renderHook(() => useReminderPermissionsOnLaunch(device));
-    await flush(600);
-    await press('去授权');
-    await flush(200);
-    expect(Alert.alert).toHaveBeenCalledWith(
-      '需要悬浮窗权限',
-      expect.any(String),
-      expect.any(Array),
-      ALERT_OPTIONS,
-    );
-  });
-
-  it('does not run delayed prompts after unmount', async () => {
-    jest.useFakeTimers();
-    const device = createDevice();
-    const { unmount } = renderHook(() => useReminderPermissionsOnLaunch(device));
-    unmount();
-    await flush(1_000);
-    expect(device.getStatus).not.toHaveBeenCalled();
-  });
-
-  it('cancels pending follow-up prompts on unmount', async () => {
-    jest.useFakeTimers();
-    const device = createDevice();
-    const { unmount } = renderHook(() => useReminderPermissionsOnLaunch(device));
-    await flush(600);
-    expect(device.getStatus).toHaveBeenCalledTimes(1);
-    unmount();
-    await flush(1_000);
-    expect(device.getStatus).toHaveBeenCalledTimes(1);
-    expect(Alert.alert).not.toHaveBeenCalled();
-  });
-
-  it('does not prompt when every permission is already granted', async () => {
-    jest.useFakeTimers();
-    const device = createDevice({
-      platform: 'android',
-      supported: true,
-      permissions: grantedPermissions(),
-    });
-    renderHook(() => useReminderPermissionsOnLaunch(device));
-    await flush(600);
-    expect(device.requestPermission).not.toHaveBeenCalled();
-    expect(Alert.alert).not.toHaveBeenCalled();
   });
 });
