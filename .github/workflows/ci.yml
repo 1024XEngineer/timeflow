@@ -31,6 +31,11 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      # Lets codecov-action mint a short-lived OIDC token instead of a CODECOV_TOKEN
+      # secret -- works for public repos without needing repo/org secret access.
+      id-token: write
     defaults:
       run:
         working-directory: backend
@@ -59,6 +64,18 @@ jobs:
           name: backend-coverage
           path: backend/coverage.xml
           if-no-files-found: ignore
+
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          files: backend/coverage.xml
+          flags: backend
+          use_oidc: true
+          # Public repo: don't fail the build if the Codecov upload itself has
+          # trouble (rate limit, transient outage) -- coverage reporting is
+          # informational, not a merge gate.
+          fail_ci_if_error: false
 
   migrations:
     name: Backend (migrations)
@@ -120,6 +137,11 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      # Lets codecov-action mint a short-lived OIDC token instead of a CODECOV_TOKEN
+      # secret -- works for public repos without needing repo/org secret access.
+      id-token: write
     defaults:
       run:
         working-directory: frontend
@@ -137,6 +159,21 @@ jobs:
 
       - name: Checks (lint, format, typecheck)
         run: npm run check
+
+      # Re-runs both suites with coverage instrumentation on -- npm run check's
+      # test step above doesn't collect coverage, so this is a second pass just
+      # for the Codecov report, not a second correctness gate.
+      - name: Test coverage
+        run: npm run test:coverage
+
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          directory: frontend/coverage
+          flags: frontend
+          use_oidc: true
+          fail_ci_if_error: false
 
       - name: Export build
         run: npx expo export --platform android --output-dir dist
