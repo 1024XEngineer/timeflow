@@ -10,7 +10,7 @@ import {
   MockReminderDispositionSync,
   MockReminderStateStore,
 } from '../../features/reminder/data/local';
-import { MockAudioPlayback } from '../../infrastructure/audio';
+import { ExpoAudioPlayback } from '../../infrastructure/audio';
 import { MockLocationMonitor } from '../../infrastructure/location';
 import {
   MockPopup,
@@ -48,7 +48,7 @@ export function createAppServices(options: CreateAppServicesOptions = {}): AppSe
     location: new MockLocationMonitor(),
     alarms: new NativeAlarmScheduler(),
     delivery: new MockReminderDelivery(),
-    audio: new MockAudioPlayback(),
+    audio: new ExpoAudioPlayback(),
     device: new NativeDeviceCapability(),
     presenter: new MockReminderPresenter(),
     systemNotification: new MockSystemNotification(),
