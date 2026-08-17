@@ -35,3 +35,5 @@ export {
   resolveSnoozeUntil,
   resolveTimeTriggerAt,
 } from './timeWindow';
+export type { StrengthDeliveryPlan } from './strengthDelivery';
+export { resolveStrengthDeliveryPlan } from './strengthDelivery';
