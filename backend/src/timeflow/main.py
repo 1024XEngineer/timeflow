@@ -11,7 +11,12 @@ from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from timeflow.business.auth import AccessTokenService, AuthAccessService
-from timeflow.business.calendar import ScheduleSnapshotQueryService, ScheduleSnapshotReader
+from timeflow.business.calendar import (
+    ReminderDispositionConfirmer,
+    ReminderDispositionService,
+    ScheduleSnapshotQueryService,
+    ScheduleSnapshotReader,
+)
 from timeflow.business.calendar.service import ScheduleApplicationService
 from timeflow.business.health import HealthService
 from timeflow.data.account_uow import SqlAlchemyAuthUnitOfWork
@@ -22,6 +27,7 @@ from timeflow.gateway.http import (
     AuthRateLimiter,
     create_auth_router,
     create_authenticated_account_dependency,
+    create_reminder_state_router,
     create_schedule_snapshot_router,
     install_auth_http_error_handler,
 )
@@ -66,6 +72,7 @@ def create_app(
     engine: Engine | None = None,
     auth_rate_limiter: AuthRateLimiter | None = None,
     schedule_snapshot_reader: ScheduleSnapshotReader | None = None,
+    reminder_disposition_confirmer: ReminderDispositionConfirmer | None = None,
 ) -> FastAPI:
     """Build the application and connect the minimal inbound surface."""
     settings = get_settings()
@@ -76,7 +83,10 @@ def create_app(
 
     # 认证仓储和实时日程工具共用同一个数据库会话工厂，避免两套连接池分裂。
     if engine is None and (
-        auth_access is None or audio_sink is None or schedule_snapshot_reader is None
+        auth_access is None
+        or audio_sink is None
+        or schedule_snapshot_reader is None
+        or reminder_disposition_confirmer is None
     ):
         engine = build_engine(settings.database_url)
         owned_engine = engine
@@ -94,6 +104,12 @@ def create_app(
     if schedule_snapshot_reader is None:
         assert session_factory is not None
         schedule_snapshot_reader = ScheduleSnapshotQueryService(
+            lambda: SqlAlchemyScheduleUnitOfWork(session_factory)
+        )
+
+    if reminder_disposition_confirmer is None:
+        assert session_factory is not None
+        reminder_disposition_confirmer = ReminderDispositionService(
             lambda: SqlAlchemyScheduleUnitOfWork(session_factory)
         )
 
@@ -129,7 +145,7 @@ def create_app(
             CORSMiddleware,
             allow_origins=list(settings.cors_allowed_origins),
             allow_credentials=False,
-            allow_methods=["GET", "POST"],
+            allow_methods=["GET", "POST", "PUT"],
             allow_headers=["Authorization", "Content-Type"],
             expose_headers=["Retry-After", "X-Auth-Event-Id"],
         )
@@ -163,6 +179,12 @@ def create_app(
     application.include_router(create_auth_router(auth_access, rate_limiter=auth_rate_limiter))
     application.include_router(
         create_schedule_snapshot_router(schedule_snapshot_reader, authenticated_account)
+    )
+    application.include_router(
+        create_reminder_state_router(
+            reminder_disposition_confirmer,
+            authenticated_account,
+        )
     )
     application.state.authenticated_account_dependency = authenticated_account
 

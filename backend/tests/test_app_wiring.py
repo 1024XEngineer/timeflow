@@ -2,6 +2,7 @@
 
 import os
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Any
 from unittest import mock
 
@@ -16,7 +17,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 
 from timeflow.business.auth import AuthAccessResult
-from timeflow.business.calendar import AccountScheduleSnapshot
+from timeflow.business.calendar import (
+    AccountScheduleSnapshot,
+    ReminderDispositionResult,
+    ReminderDispositionState,
+)
 from timeflow.gateway.websocket.ports import StreamContext
 from timeflow.infrastructure.settings import get_settings
 from timeflow.main import create_app
@@ -61,6 +66,29 @@ class _CapturingScheduleSnapshotReader:
         """记录读取目标并返回完整的空快照。"""
         self.account_ids.append(account_id)
         return AccountScheduleSnapshot((), ())
+
+
+class _UnusedReminderConfirmer:
+    """隔离数据库装配，使无关测试不会确认提醒。"""
+
+    def confirm(self, *, account_id: str, schedule_id: str) -> ReminderDispositionResult:
+        """这些装配测试不应确认提醒。"""
+        raise AssertionError(f"unexpected reminder confirmation for {account_id!r}/{schedule_id!r}")
+
+
+class _ReminderConfirmer:
+    """Record reminder confirmations routed through the composition root."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def confirm(self, *, account_id: str, schedule_id: str) -> ReminderDispositionResult:
+        self.calls.append((account_id, schedule_id))
+        return ReminderDispositionResult(
+            schedule_id=schedule_id,
+            disposition_state=ReminderDispositionState.CONFIRMED,
+            updated_at=datetime(2026, 8, 17, 3, 30, tzinfo=UTC),
+        )
 
 
 class _FakeAsyncClient:
@@ -117,6 +145,10 @@ def _build_with_environment(
         with mock.patch.dict(os.environ, environment_values, clear=False):
             auth_access = injected.pop("auth_access", _UnusedAuthAccess())
             injected.setdefault("schedule_snapshot_reader", _UnusedScheduleSnapshotReader())
+            injected.setdefault(
+                "reminder_disposition_confirmer",
+                _UnusedReminderConfirmer(),
+            )
             return create_app(auth_access=auth_access, **injected)
     finally:
         get_settings.cache_clear()
@@ -185,6 +217,56 @@ def test_schedule_snapshot_route_uses_the_shared_authenticated_account() -> None
     assert reader.account_ids == ["acc_snapshot"]
     dependency = application.state.authenticated_account_dependency
     assert dependency(f"Bearer {issued.access_token}").account_id == "acc_snapshot"
+
+
+def test_composition_root_exposes_authenticated_reminder_state_sync() -> None:
+    """The production app routes trusted JWT identity into the reminder use case."""
+    tokens = build_test_token_service()
+    issued = tokens.issue("acc_reminder")
+    confirmer = _ReminderConfirmer()
+    application = _build_with_environment(
+        "development",
+        jwt_secret="",
+        access_token_service=tokens,
+        audio_sink=_Sink(),
+        reminder_disposition_confirmer=confirmer,
+    )
+
+    with TestClient(application) as client:
+        response = client.put(
+            "/api/v1/schedule/reminder-state",
+            headers={"Authorization": f"Bearer {issued.access_token}"},
+            json={
+                "schedule_id": "schedule-001",
+                "disposition_state": "confirmed",
+            },
+        )
+
+    assert response.status_code == 200
+    assert confirmer.calls == [("acc_reminder", "schedule-001")]
+
+
+def test_configured_cors_origin_allows_reminder_state_put() -> None:
+    """Browser clients can preflight the protected reminder-state endpoint."""
+    application = _build_with_environment(
+        "development",
+        audio_sink=_Sink(),
+        cors_allowed_origins="http://localhost:8081",
+        reminder_disposition_confirmer=_ReminderConfirmer(),
+    )
+
+    with TestClient(application) as client:
+        response = client.options(
+            "/api/v1/schedule/reminder-state",
+            headers={
+                "Access-Control-Request-Headers": "authorization,content-type",
+                "Access-Control-Request-Method": "PUT",
+                "Origin": "http://localhost:8081",
+            },
+        )
+
+    assert response.status_code == 200
+    assert "PUT" in response.headers["access-control-allow-methods"]
 
 
 def test_building_in_development_still_works_without_a_real_model() -> None:

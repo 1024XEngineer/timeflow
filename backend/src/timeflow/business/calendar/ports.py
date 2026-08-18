@@ -71,6 +71,14 @@ class ScheduleRepositoryPort(Protocol):
         expected_revision: int,
     ) -> ScheduleSnapshot | None: ...
 
+    def confirm_reminder_disposition(
+        self,
+        *,
+        account_id: str,
+        schedule_id: str,
+        confirmed_at: datetime,
+    ) -> ScheduleSnapshot | None: ...
+
     def add_occurrence_override(
         self,
         *,
