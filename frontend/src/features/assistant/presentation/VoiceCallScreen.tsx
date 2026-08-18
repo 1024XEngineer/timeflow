@@ -9,6 +9,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, spacing } from '../../../shared/ui/theme';
 import type { ConversationTurnRecord } from '../domain/ConversationTurn';
@@ -44,6 +45,7 @@ export function VoiceCallScreen({
   onEnd,
   onTogglePause,
 }: VoiceCallScreenProps) {
+  const insets = useSafeAreaInsets();
   const [scale] = useState(() => new Animated.Value(1));
   const historyRef = useRef<ScrollView>(null);
 
@@ -77,14 +79,16 @@ export function VoiceCallScreen({
 
   return (
     <View style={styles.screen}>
-      <Pressable
-        accessibilityLabel="收起通话"
-        accessibilityRole="button"
-        onPress={onCollapse}
-        style={({ pressed }) => [styles.collapseButton, pressed && styles.buttonPressed]}
-      >
-        <PhoneCallIcon color={colors.onPrimary} size={18} />
-      </Pressable>
+      <View style={[styles.navigation, { paddingTop: Math.max(spacing.md, insets.top) }]}>
+        <Pressable
+          accessibilityLabel="收起通话"
+          accessibilityRole="button"
+          onPress={onCollapse}
+          style={({ pressed }) => [styles.collapseButton, pressed && styles.buttonPressed]}
+        >
+          <PhoneCallIcon color={colors.onPrimary} size={18} />
+        </Pressable>
+      </View>
 
       <ScrollView
         ref={historyRef}
@@ -130,7 +134,12 @@ export function VoiceCallScreen({
         </Pressable>
       </View>
 
-      <View style={styles.actions}>
+      <View
+        style={[
+          styles.actions,
+          { paddingBottom: Math.max(spacing.xl, insets.bottom + spacing.md) },
+        ]}
+      >
         <Pressable
           accessibilityLabel="结束对话"
           accessibilityRole="button"
@@ -181,9 +190,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     height: 40,
     justifyContent: 'center',
-    left: spacing.lg,
-    position: 'absolute',
-    top: spacing.xl,
     width: 40,
   },
   endButton: {
@@ -191,6 +197,10 @@ const styles = StyleSheet.create({
   },
   endText: {
     color: colors.onPrimary,
+  },
+  navigation: {
+    paddingBottom: spacing.sm,
+    paddingHorizontal: spacing.lg,
   },
   history: {
     flex: 1,

@@ -4,6 +4,10 @@ import { ScrollView } from 'react-native';
 
 import { VoiceCallScreen } from '../../../../../src/features/assistant/presentation/VoiceCallScreen';
 
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ bottom: 0, left: 0, right: 0, top: 0 }),
+}));
+
 function renderScreen(overrides: Partial<Parameters<typeof VoiceCallScreen>[0]> = {}) {
   const props = {
     onCollapse: jest.fn(),

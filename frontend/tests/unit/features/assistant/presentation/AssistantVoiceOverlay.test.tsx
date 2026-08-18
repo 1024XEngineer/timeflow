@@ -82,9 +82,9 @@ describe('AssistantVoiceOverlay layout', () => {
   });
 
   it.each([
-    ['keeps the design spacing when the inset is smaller', 8, 16],
-    ['keeps the voice controls above the system navigation area', 34, 34],
-  ])('%s', (_name, bottomInset, expectedPadding) => {
+    ['keeps a comfortable offset on devices with a small inset', 8, 32],
+    ['moves controls above the system navigation area', 34, 50],
+  ])('%s', (_name, bottomInset, expectedBottom) => {
     mockBottomInset = bottomInset;
     mockPttApplication = createApplication();
     const continuousApplication = createApplication();
@@ -96,8 +96,10 @@ describe('AssistantVoiceOverlay layout', () => {
     );
 
     expect(
-      StyleSheet.flatten(screen.getByTestId('assistant-voice-overlay').props.style).paddingBottom,
-    ).toBe(expectedPadding);
+      StyleSheet.flatten(screen.getByTestId('assistant-voice-controls').props.style),
+    ).toMatchObject({
+      bottom: expectedBottom,
+    });
   });
 
   it('shows only a generic status label while replying, never the reply content', () => {

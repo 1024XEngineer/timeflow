@@ -101,10 +101,8 @@ function normalizeLevel(dbfs: number | null): number {
 const styles = StyleSheet.create({
   bar: {
     alignItems: 'center',
-    backgroundColor: colors.input,
-    borderColor: colors.border,
-    borderRadius: 14,
-    borderWidth: 1,
+    backgroundColor: colors.text,
+    borderRadius: 999,
     flex: 1,
     height: 52,
     justifyContent: 'center',
@@ -119,12 +117,12 @@ const styles = StyleSheet.create({
     opacity: 0.86,
   },
   label: {
-    color: colors.text,
+    color: colors.onPrimary,
     fontSize: 14,
     fontWeight: '600',
   },
   labelDisabled: {
-    color: colors.mutedText,
+    color: colors.onPrimary,
   },
   wave: {
     alignItems: 'center',
