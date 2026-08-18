@@ -1,7 +1,6 @@
-# Unprivileged Android PR build. This workflow runs PR-controlled code
-# (checkout, npm, Expo config plugins, generated Gradle) and must never
-# reference APPETIZE_API_TOKEN or any other repository secret.
-# Upload and PR comments live in android-preview-publish.yml (workflow_run).
+# Android PR preview. The build job runs PR-controlled code and must never
+# reference APPETIZE_API_TOKEN. Upload/comment is a separate job that only
+# downloads the APK artifact — no checkout, npm, Expo, or Gradle.
 name: Android Preview
 
 on:
@@ -139,3 +138,138 @@ jobs:
           path: frontend/android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 7
+
+  # Same pull_request workflow, separate runner: token is never in env while
+  # npm / Expo / Gradle run. This is enough to comment on the current PR;
+  # workflow_run is not required for that.
+  publish:
+    name: Publish Appetize preview
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: android-preview-apk
+          path: apk
+
+      - name: Locate preview APK
+        id: apk
+        run: |
+          set -euo pipefail
+          apk="$(find apk -type f -name '*.apk' | head -n 1)"
+          if [ -z "$apk" ]; then
+            echo "Expected APK missing from artifact" >&2
+            find apk -type f >&2 || true
+            exit 1
+          fi
+          echo "path=$apk" >> "$GITHUB_OUTPUT"
+          ls -lh "$apk"
+
+      - name: Upload APK to Appetize
+        id: appetize
+        env:
+          APPETIZE_API_TOKEN: ${{ secrets.APPETIZE_API_TOKEN }}
+          APK_PATH: ${{ steps.apk.outputs.path }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPETIZE_API_TOKEN}" ]; then
+            echo "Repository secret APPETIZE_API_TOKEN is not set." >&2
+            exit 1
+          fi
+          response="$(mktemp)"
+          http_code="$(
+            curl -sS --http1.1 --max-time 300 \
+              -o "$response" -w "%{http_code}" \
+              -X POST "https://api.appetize.io/v2/builds" \
+              -H "X-API-KEY: ${APPETIZE_API_TOKEN}" \
+              -F "file=@${APK_PATH}" \
+              -F "platform=android"
+          )"
+          if [ "$http_code" != "200" ]; then
+            echo "Appetize upload failed: HTTP ${http_code}" >&2
+            cat "$response" >&2
+            exit 1
+          fi
+          build_id="$(jq -r '.id // .buildId // empty' "$response")"
+          if [ -z "$build_id" ] || [ "$build_id" = "null" ]; then
+            echo "Appetize response did not include a build id" >&2
+            cat "$response" >&2
+            exit 1
+          fi
+          preview_url="https://appetize.io/app/${build_id}"
+          echo "build_id=${build_id}" >> "$GITHUB_OUTPUT"
+          echo "preview_url=${preview_url}" >> "$GITHUB_OUTPUT"
+          echo "Preview: ${preview_url}"
+
+      - name: Comment or update Appetize preview link
+        if: steps.appetize.outcome == 'success'
+        uses: actions/github-script@v7
+        env:
+          COMMENT_MARKER: "<!-- timeflow-android-appetize-preview -->"
+          PREVIEW_URL: ${{ steps.appetize.outputs.preview_url }}
+          BUILD_ID: ${{ steps.appetize.outputs.build_id }}
+        with:
+          script: |
+            const marker = process.env.COMMENT_MARKER;
+            const previewUrl = process.env.PREVIEW_URL;
+            const buildId = process.env.BUILD_ID;
+            if (!previewUrl || !buildId) {
+              core.setFailed('Appetize preview URL was not produced');
+              return;
+            }
+
+            const sha = context.payload.pull_request.head.sha;
+            const shortSha = sha.slice(0, 7);
+            const headRepo = context.payload.pull_request.head.repo.html_url;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              marker,
+              '## Android 预览（Appetize）',
+              '',
+              '在浏览器中打开并操作本次提交构建的 Android APK（无需安装）：',
+              '',
+              `**[打开预览](${previewUrl})**`,
+              '',
+              `- 提交：[\`${shortSha}\`](${headRepo}/commit/${sha})`,
+              `- Build ID：\`${buildId}\``,
+              `- 工作流：[本次运行](${runUrl})`,
+              '',
+              '新的提交会更新本条评论中的链接；请勿手动编辑。',
+              '',
+            ].join('\n');
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const existing = comments.find(
+              (comment) =>
+                comment.body &&
+                comment.body.includes(marker) &&
+                comment.user &&
+                comment.user.login === 'github-actions[bot]',
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
