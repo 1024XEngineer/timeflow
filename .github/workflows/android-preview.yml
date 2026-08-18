@@ -1,0 +1,227 @@
+# Android PR preview on Appetize.io (native APK, not Vercel web).
+# Required repo secret: APPETIZE_API_TOKEN
+name: Android Preview
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "20.20.2"
+  JAVA_VERSION: "17"
+  COMMENT_MARKER: "<!-- timeflow-android-appetize-preview -->"
+
+jobs:
+  android-preview:
+    name: Build and preview
+    # Same-repo PRs only: fork runs never see APPETIZE_API_TOKEN.
+    # Drafts wait for ready_for_review so we do not spend Appetize quota on WIP.
+    if: >
+      github.event.pull_request.draft == false
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: write
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      # android/ is gitignored; generate it from app.config.js on the runner.
+      - name: Generate Android project
+        env:
+          EXPO_NO_GIT_STATUS: "1"
+        run: npx expo prebuild --platform android --clean --non-interactive --no-install
+
+      # Debug variants skip Metro bundling by default, which makes the APK
+      # unusable on Appetize (no packager). Force the debug APK to embed JS.
+      - name: Embed JS bundle in the debug APK
+        run: |
+          python3 <<'PY'
+          import re
+          from pathlib import Path
+
+          path = Path("android/app/build.gradle")
+          if not path.is_file():
+              raise SystemExit("android/app/build.gradle was not generated")
+          text = path.read_text()
+          if re.search(r"^\s*debuggableVariants\s*=", text, re.M):
+              print("debuggableVariants already set")
+          elif "react {" not in text:
+              raise SystemExit("android/app/build.gradle has no react { block")
+          else:
+              text = text.replace(
+                  "react {",
+                  "react {\n    // CI: bundle JS so Appetize can boot without Metro\n    debuggableVariants = []",
+                  1,
+              )
+              path.write_text(text)
+              print("set debuggableVariants = []")
+          PY
+
+      - name: Assemble debug APK
+        env:
+          # arm64 is what Appetize Android devices run; skip extra ABIs to cut CI time.
+          ORG_GRADLE_PROJECT_reactNativeArchitectures: arm64-v8a
+        run: |
+          set -euo pipefail
+          export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          printf 'sdk.dir=%s\n' "$ANDROID_HOME" > android/local.properties
+          chmod +x android/gradlew
+          (cd android && ./gradlew :app:assembleDebug --build-cache --stacktrace)
+
+      - name: Locate debug APK
+        id: apk
+        run: |
+          set -euo pipefail
+          apk="$GITHUB_WORKSPACE/frontend/android/app/build/outputs/apk/debug/app-debug.apk"
+          if [ ! -f "$apk" ]; then
+            echo "Expected APK missing: $apk" >&2
+            find "$GITHUB_WORKSPACE/frontend/android/app/build/outputs" -type f -name '*.apk' >&2 || true
+            exit 1
+          fi
+          echo "path=$apk" >> "$GITHUB_OUTPUT"
+          ls -lh "$apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-apk
+          path: frontend/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+
+      # Fork PRs never enter this step, so APPETIZE_API_TOKEN is not read.
+      # Do not switch this workflow to pull_request_target.
+      - name: Upload APK to Appetize
+        id: appetize
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          APPETIZE_API_TOKEN: ${{ secrets.APPETIZE_API_TOKEN }}
+          APK_PATH: ${{ steps.apk.outputs.path }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPETIZE_API_TOKEN}" ]; then
+            echo "Repository secret APPETIZE_API_TOKEN is not set." >&2
+            exit 1
+          fi
+          response="$(mktemp)"
+          http_code="$(
+            curl -sS --http1.1 --max-time 300 \
+              -o "$response" -w "%{http_code}" \
+              -X POST "https://api.appetize.io/v2/builds" \
+              -H "X-API-KEY: ${APPETIZE_API_TOKEN}" \
+              -F "file=@${APK_PATH}" \
+              -F "platform=android"
+          )"
+          if [ "$http_code" != "200" ]; then
+            echo "Appetize upload failed: HTTP ${http_code}" >&2
+            cat "$response" >&2
+            exit 1
+          fi
+          # Appetize V2 returns the build identifier as `id`.
+          build_id="$(jq -r '.id // .buildId // empty' "$response")"
+          if [ -z "$build_id" ] || [ "$build_id" = "null" ]; then
+            echo "Appetize response did not include a build id" >&2
+            cat "$response" >&2
+            exit 1
+          fi
+          preview_url="https://appetize.io/app/${build_id}"
+          echo "build_id=${build_id}" >> "$GITHUB_OUTPUT"
+          echo "preview_url=${preview_url}" >> "$GITHUB_OUTPUT"
+          echo "Preview: ${preview_url}"
+
+      - name: Comment or update Appetize preview link
+        if: github.event.pull_request.head.repo.full_name == github.repository && steps.appetize.outcome == 'success'
+        uses: actions/github-script@v7
+        env:
+          PREVIEW_URL: ${{ steps.appetize.outputs.preview_url }}
+          BUILD_ID: ${{ steps.appetize.outputs.build_id }}
+        with:
+          script: |
+            const marker = process.env.COMMENT_MARKER;
+            const previewUrl = process.env.PREVIEW_URL;
+            const buildId = process.env.BUILD_ID;
+            if (!previewUrl || !buildId) {
+              core.setFailed('Appetize preview URL was not produced');
+              return;
+            }
+
+            const sha = context.payload.pull_request.head.sha;
+            const shortSha = sha.slice(0, 7);
+            const headRepo = context.payload.pull_request.head.repo.html_url;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              marker,
+              '## Android 预览（Appetize）',
+              '',
+              '在浏览器中打开并操作本次提交构建的 Debug APK（无需安装）：',
+              '',
+              `**[打开预览](${previewUrl})**`,
+              '',
+              `- 提交：[\`${shortSha}\`](${headRepo}/commit/${sha})`,
+              `- Build ID：\`${buildId}\``,
+              `- 工作流：[本次运行](${runUrl})`,
+              '',
+              '新的提交会更新本条评论中的链接；请勿手动编辑。',
+              '',
+            ].join('\n');
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const existing = comments.find(
+              (comment) =>
+                comment.body &&
+                comment.body.includes(marker) &&
+                comment.user &&
+                comment.user.login === 'github-actions[bot]',
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
