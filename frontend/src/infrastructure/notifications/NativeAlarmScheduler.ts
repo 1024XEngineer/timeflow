@@ -28,7 +28,7 @@ export class NativeAlarmScheduler implements AlarmSchedulerPort {
         return unscheduled(request.schedule_id);
       }
 
-      const alarmId = await nativeScheduleAlarm(triggerAtMillis, request.title);
+      const alarmId = await nativeScheduleAlarm(triggerAtMillis, request.title, request.schedule_id);
       if (alarmId == null || alarmId.length === 0) {
         return unscheduled(request.schedule_id);
       }

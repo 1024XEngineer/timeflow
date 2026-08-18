@@ -168,9 +168,9 @@ public final class AlarmSoundService extends Service {
     }
 
     private int backgroundActivityStartMode() {
-        if (Build.VERSION.SDK_INT >= 36) {
-            return ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS;
-        }
+        // MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS (API 36) 不能引用：这个模块
+        // 的 build.gradle 把 compileSdkVersion 定死在 35，javac 在编译期就解析不到
+        // 这个符号，跟运行时的 SDK_INT 判断无关，会直接编译失败。
         return ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED;
     }
 
