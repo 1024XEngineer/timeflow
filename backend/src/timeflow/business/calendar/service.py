@@ -196,6 +196,8 @@ class ScheduleApplicationService(ScheduleAgentService):
                 extra={"error_type": type(exc).__name__},
             )
             return None
+        if category is None:
+            return None
         if not isinstance(category, ScheduleCategory):
             logger.warning(
                 "schedule category classifier returned an invalid value; leaving category null"
