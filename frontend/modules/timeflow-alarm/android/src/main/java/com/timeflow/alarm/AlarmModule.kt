@@ -15,6 +15,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.WritableArray
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
@@ -101,9 +102,9 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
-  fun consumeNativeDispositions(promise: Promise) {
+  fun peekNativeDispositions(promise: Promise) {
     try {
-      val records = AlarmNativeBridge.consumeDispositions(reactContext)
+      val records = AlarmNativeBridge.peekDispositions(reactContext)
       val array: WritableArray = Arguments.createArray()
       for (record in records) {
         val item = Arguments.createMap()
@@ -115,7 +116,21 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
       }
       promise.resolve(array)
     } catch (error: Exception) {
-      promise.reject("CONSUME_DISPOSITIONS_FAILED", error.message, error)
+      promise.reject("PEEK_DISPOSITIONS_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun ackNativeDispositions(scheduleIds: ReadableArray, promise: Promise) {
+    try {
+      val acked = HashSet<String>()
+      for (index in 0 until scheduleIds.size()) {
+        scheduleIds.getString(index)?.let { acked.add(it) }
+      }
+      AlarmNativeBridge.ackDispositions(reactContext, acked)
+      promise.resolve(true)
+    } catch (error: Exception) {
+      promise.reject("ACK_DISPOSITIONS_FAILED", error.message, error)
     }
   }
 

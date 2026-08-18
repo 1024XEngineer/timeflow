@@ -25,6 +25,9 @@ import android.view.WindowManager;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.util.ArrayDeque;
+import java.util.HashSet;
+import java.util.Set;
 
 public final class AlarmSoundService extends Service {
     private static final long SPEECH_REPEAT_DELAY_MILLIS = 1_500L;
@@ -41,12 +44,41 @@ public final class AlarmSoundService extends Service {
     private String scheduleId;
     private String alarmTitle;
     private int requestCode;
-    /** 上一次已经通知过 JS "fired" 的 alarmId；service 实例可能被多个不同闹钟复用。 */
-    private String firedNotifiedAlarmId;
+    /** 已经通知过 JS "fired" 的 alarmId 集合；service 实例可能被多个不同闹钟复用。 */
+    private final Set<String> firedNotifiedAlarmIds = new HashSet<>();
+    /**
+     * 界面/音频被占用时到达的闹钟排在这里，而不是被 overlayView != null 的检查直接
+     * 丢弃——每条闹钟一进 onStartCommand 就已经从持久化列表删除、也通知过 JS
+     * "fired"，如果不排队就无声无息地跳过展示，用户永远看不到、也点不到它，
+     * disposition 卡在 pending 上再也等不到确认/延后。confirm/snooze 处理完当前
+     * 这条后从队首取下一条顶上，队列空了才真正 stopSelf()。
+     */
+    private final ArrayDeque<AlarmContract.ExtractedExtras> pendingQueue = new ArrayDeque<>();
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         AlarmContract.ExtractedExtras extras = AlarmContract.ExtractedExtras.from(this, intent);
+
+        if (overlayView != null) {
+            // 界面被占用：先把这条闹钟从持久化列表摘掉、通知 JS 已经 fired（跟
+            // 立刻展示的那条待遇一致，不然 JS 侧的状态跟"其实已经响了"对不上），
+            // 排队等前一条处理完再展示，不在这里动 this.alarmId 等字段——那些字段
+            // 是当前正在展示的那条的，showAlarmOverlay() 里捕获给 snooze/dismiss
+            // lambda 用，这里改了就是重蹈之前"串号"的覆辙。
+            AlarmScheduler.removeAlarmRecord(this, extras.alarmId, extras.requestCode);
+            if (firedNotifiedAlarmIds.add(extras.alarmId)) {
+                AlarmNativeBridge.notifyFired(this, extras.scheduleId, extras.alarmId, extras.title);
+            }
+            pendingQueue.add(extras);
+            return START_NOT_STICKY;
+        }
+
+        presentAlarm(extras);
+        return START_NOT_STICKY;
+    }
+
+    /** 展示某一条闹钟：更新前台通知、摘除持久化记录、通知 JS fired、弹响铃界面。 */
+    private void presentAlarm(AlarmContract.ExtractedExtras extras) {
         requestCode = extras.requestCode;
         alarmId = extras.alarmId;
         scheduleId = extras.scheduleId;
@@ -65,8 +97,7 @@ public final class AlarmSoundService extends Service {
                 startForeground(requestCode, notification);
             }
             removeFromSavedAlarms();
-            if (!alarmId.equals(firedNotifiedAlarmId)) {
-                firedNotifiedAlarmId = alarmId;
+            if (firedNotifiedAlarmIds.add(alarmId)) {
                 AlarmNativeBridge.notifyFired(this, scheduleId, alarmId, alarmTitle);
             }
             showAlarmOverlay(alarmTitle);
@@ -74,9 +105,18 @@ public final class AlarmSoundService extends Service {
                 startBundledSpeech();
             }
         } catch (RuntimeException exception) {
-            stopSelf();
+            advanceOrStop();
         }
-        return START_NOT_STICKY;
+    }
+
+    /** 当前这条处理完了：队列里还有就顶上下一条，没有才真正停服务。 */
+    private void advanceOrStop() {
+        AlarmContract.ExtractedExtras next = pendingQueue.poll();
+        if (next == null) {
+            stopSelf();
+            return;
+        }
+        presentAlarm(next);
     }
 
     @Override
@@ -206,12 +246,11 @@ public final class AlarmSoundService extends Service {
             return;
         }
 
-        // 捕获这一刻的 alarmId/scheduleId/title：一个 Service 实例可能被多个不同闹钟
-        // 复用，overlayView != null 时第二个闹钟不会重建界面，但 onStartCommand 已经
-        // 把 this.alarmId/scheduleId/alarmTitle 覆盖成第二条了。下面两个 lambda 如果读
-        // this.xxx（可变实例字段，按点按时刻取值），用户点的是屏幕上还显示着第一条
-        // 标题的界面，操作却会落到第二条闹钟身上。改成读这里捕获的 final 局部变量，
-        // 保证界面上看到的和实际操作的是同一条。
+        // 捕获这一刻的 alarmId/scheduleId/title 成局部 final 变量，snooze/dismiss
+        // lambda 读这几个变量而不是 this.alarmId 等可变实例字段。presentAlarm()
+        // 现在保证同一时刻只有"正在展示"的那条闹钟会改这些字段（排队中的闹钟在
+        // pendingQueue 里等着，advanceOrStop() 顶上来才会改字段、重建界面），这里
+        // 仍然捕获局部变量是双重保险，不依赖调用方永远遵守这个约定。
         String targetAlarmId = alarmId;
         String targetScheduleId = scheduleId;
         String targetTitle = title;
@@ -230,13 +269,13 @@ public final class AlarmSoundService extends Service {
                     AlarmNativeBridge.notifySnoozed(this, targetScheduleId, targetAlarmId, targetTitle);
                     removeAlarmOverlay();
                     RingActivity.finishIfOpen();
-                    stopSelf();
+                    advanceOrStop();
                 },
                 view -> {
                     AlarmNativeBridge.notifyDismissed(this, targetScheduleId, targetAlarmId, targetTitle);
                     removeAlarmOverlay();
                     RingActivity.finishIfOpen();
-                    stopSelf();
+                    advanceOrStop();
                 }
         );
         int windowType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O

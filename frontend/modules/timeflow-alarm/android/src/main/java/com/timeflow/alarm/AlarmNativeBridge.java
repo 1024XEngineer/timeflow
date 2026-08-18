@@ -10,10 +10,18 @@ import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 持久化原生 fire/dismiss，供 JS 在进程死后补水 disposition；
  * 并在 React 上下文存活时向 AlarmModule 转发事件。
+ *
+ * peekDispositions()/ackDispositions() 是两阶段读取：peek 只读不删，JS 把结果
+ * 写进自己的持久化存储（SQLite）之后再显式 ack 传回处理成功的 schedule_id，
+ * ackDispositions() 才真正从这里的缓冲区删除。原来的单次 consume（读完立刻清空）
+ * 在 JS 侧还没落盘完就进程被杀、Promise 回调失败、或桥接重载的窗口里会把这批
+ * fired/dismissed/snoozed 状态永久丢掉——这正是这层持久化机制本该防住的情况
+ * （Issue #263：App 被杀死后事件不丢失），不能只留一个已知会丢数据的消费接口。
  */
 public final class AlarmNativeBridge {
     private AlarmNativeBridge() {
@@ -67,36 +75,65 @@ public final class AlarmNativeBridge {
         AlarmModule.emitAlarmEvent(AlarmContract.EVENT_SNOOZED, scheduleId, alarmId, title);
     }
 
-    public static List<DispositionRecord> consumeDispositions(Context context) {
+    /** 只读：不清空缓冲区，JS 落盘成功后必须调用 ackDispositions() 才会真正删除。 */
+    public static List<DispositionRecord> peekDispositions(Context context) {
+        List<DispositionRecord> records = new ArrayList<>();
+        for (JSONObject object : loadDispositionObjects(context)) {
+            String scheduleId = object.optString("schedule_id", "");
+            String state = object.optString("state", "");
+            if (scheduleId.isEmpty() || state.isEmpty()) {
+                continue;
+            }
+            records.add(new DispositionRecord(
+                    scheduleId,
+                    object.optString("alarm_id", ""),
+                    state,
+                    object.optLong("updated_at", System.currentTimeMillis())
+            ));
+        }
+        return records;
+    }
+
+    /**
+     * 只删除 scheduleIds 里点名的记录；调用方（JS）确认这些已经durably处理完才应该
+     * 调这个。期间新落的记录（比如 ack 还没返回时又响了一次）不受影响，留给下次
+     * peek。
+     */
+    public static void ackDispositions(Context context, Set<String> scheduleIds) {
+        if (scheduleIds == null || scheduleIds.isEmpty()) {
+            return;
+        }
+        JSONArray remaining = new JSONArray();
+        for (JSONObject object : loadDispositionObjects(context)) {
+            String scheduleId = object.optString("schedule_id", "");
+            if (scheduleId.isEmpty() || scheduleIds.contains(scheduleId)) {
+                continue;
+            }
+            remaining.put(object);
+        }
+        context.getSharedPreferences(AlarmContract.PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(AlarmContract.DISPOSITIONS_KEY, remaining.toString())
+                .apply();
+    }
+
+    private static List<JSONObject> loadDispositionObjects(Context context) {
         SharedPreferences preferences =
                 context.getSharedPreferences(AlarmContract.PREFS_NAME, Context.MODE_PRIVATE);
         String serialized = preferences.getString(AlarmContract.DISPOSITIONS_KEY, "[]");
-        List<DispositionRecord> records = new ArrayList<>();
+        List<JSONObject> objects = new ArrayList<>();
         try {
             JSONArray array = new JSONArray(serialized);
             for (int index = 0; index < array.length(); index++) {
                 Object value = array.get(index);
-                if (!(value instanceof JSONObject)) {
-                    continue;
+                if (value instanceof JSONObject) {
+                    objects.add((JSONObject) value);
                 }
-                JSONObject object = (JSONObject) value;
-                String scheduleId = object.optString("schedule_id", "");
-                String state = object.optString("state", "");
-                if (scheduleId.isEmpty() || state.isEmpty()) {
-                    continue;
-                }
-                records.add(new DispositionRecord(
-                        scheduleId,
-                        object.optString("alarm_id", ""),
-                        state,
-                        object.optLong("updated_at", System.currentTimeMillis())
-                ));
             }
         } catch (JSONException ignored) {
-            records.clear();
+            return new ArrayList<>();
         }
-        preferences.edit().putString(AlarmContract.DISPOSITIONS_KEY, "[]").apply();
-        return records;
+        return objects;
     }
 
     public static void stopRinging(Context context) {
@@ -129,23 +166,14 @@ public final class AlarmNativeBridge {
         if (scheduleId == null || scheduleId.isEmpty()) {
             return;
         }
-        SharedPreferences preferences =
-                context.getSharedPreferences(AlarmContract.PREFS_NAME, Context.MODE_PRIVATE);
-        String serialized = preferences.getString(AlarmContract.DISPOSITIONS_KEY, "[]");
         JSONArray remaining = new JSONArray();
-        try {
-            JSONArray array = new JSONArray(serialized);
-            for (int index = 0; index < array.length(); index++) {
-                Object value = array.get(index);
-                if (!(value instanceof JSONObject)) {
-                    continue;
-                }
-                JSONObject object = (JSONObject) value;
-                if (scheduleId.equals(object.optString("schedule_id", ""))) {
-                    continue;
-                }
-                remaining.put(object);
+        for (JSONObject object : loadDispositionObjects(context)) {
+            if (scheduleId.equals(object.optString("schedule_id", ""))) {
+                continue;
             }
+            remaining.put(object);
+        }
+        try {
             JSONObject next = new JSONObject();
             next.put("schedule_id", scheduleId);
             next.put("alarm_id", alarmId == null ? "" : alarmId);
@@ -155,7 +183,8 @@ public final class AlarmNativeBridge {
         } catch (JSONException ignored) {
             return;
         }
-        preferences.edit()
+        context.getSharedPreferences(AlarmContract.PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
                 .putString(AlarmContract.DISPOSITIONS_KEY, remaining.toString())
                 .apply();
     }
