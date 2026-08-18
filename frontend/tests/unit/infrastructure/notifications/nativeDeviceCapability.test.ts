@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
-import { Platform } from 'react-native';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { AppState, Platform } from 'react-native';
 
 import { NativeDeviceCapability } from '../../../../src/infrastructure/notifications/NativeDeviceCapability';
 import {
@@ -143,5 +143,45 @@ describe('NativeDeviceCapability', () => {
       'battery',
       'app',
     ]);
+  });
+
+  describe('onAppActive', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('calls the listener only when AppState transitions to active', () => {
+      const remove = jest.fn();
+      const addEventListener = jest
+        .spyOn(AppState, 'addEventListener')
+        .mockReturnValue({ remove } as unknown as ReturnType<typeof AppState.addEventListener>);
+
+      const device = new NativeDeviceCapability();
+      const listener = jest.fn();
+      device.onAppActive(listener);
+
+      expect(addEventListener).toHaveBeenCalledWith('change', expect.any(Function));
+      const handler = addEventListener.mock.calls[0][1] as (state: string) => void;
+
+      handler('background');
+      expect(listener).not.toHaveBeenCalled();
+
+      handler('active');
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it('removes the underlying subscription when the returned unsubscribe is called', () => {
+      const remove = jest.fn();
+      jest
+        .spyOn(AppState, 'addEventListener')
+        .mockReturnValue({ remove } as unknown as ReturnType<typeof AppState.addEventListener>);
+
+      const device = new NativeDeviceCapability();
+      const unsubscribe = device.onAppActive(jest.fn());
+
+      expect(remove).not.toHaveBeenCalled();
+      unsubscribe();
+      expect(remove).toHaveBeenCalledTimes(1);
+    });
   });
 });

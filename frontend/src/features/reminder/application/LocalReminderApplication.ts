@@ -185,7 +185,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         return;
       }
 
-      await this.hydrateNativeDispositions();
+      await this.hydrateNativeDispositions(generation);
       if (!this.isLive(generation)) {
         await this.stopInternal();
         return;
@@ -764,17 +764,24 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     });
   }
 
-  private async hydrateNativeDispositions(): Promise<void> {
+  /**
+   * 只能在 startInternal() 内部调用：这本身就是 opChain 上正在跑的那个任务，
+   * 这里必须直接调 confirmInternal/snoozeInternal（不再入队），否则通过公开的
+   * confirm()/snooze() 会把新任务追加到同一条 opChain 上，而那条链要等
+   * startInternal()（也就是当前这次调用本身）先跑完才会轮到它们——形成死锁,
+   * 冷启动永远卡在这一步。
+   */
+  private async hydrateNativeDispositions(generation: number): Promise<void> {
     const rows = await this.dependencies.alarms.peekNativeDispositions?.();
     if (rows == null || rows.length === 0) return;
 
     for (const row of rows) {
       if (row.state === 'confirmed') {
-        await this.confirm(row.schedule_id, row.updated_at);
+        await this.confirmInternal(row.schedule_id, row.updated_at, generation);
         continue;
       }
       if (row.state === 'snoozed') {
-        await this.snooze({ schedule_id: row.schedule_id, snooze_until: null });
+        await this.snoozeInternal({ schedule_id: row.schedule_id, snooze_until: null }, generation);
         continue;
       }
       await this.acknowledgeNativeFire(row.schedule_id, row.updated_at);
