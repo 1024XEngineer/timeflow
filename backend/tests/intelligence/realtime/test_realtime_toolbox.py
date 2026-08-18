@@ -361,7 +361,7 @@ def test_a_committed_write_speaks_the_local_time_and_hides_the_audit_fields() ->
     assert "category" not in payload["schedule"]
     assert result.outcome is not None
     assert result.outcome["operation"] == "create_schedule"
-    assert result.outcome["schedule"]["category"] == "other"
+    assert result.outcome["schedule"]["category"] is None
     # The client is not told which account the row belongs to, nor when it was audited.
     assert "account_id" not in result.outcome["schedule"]
     assert "created_at" not in result.outcome["schedule"]
