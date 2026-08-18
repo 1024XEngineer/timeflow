@@ -463,6 +463,7 @@ def _business_error(error: ScheduleBusinessError) -> ToolResult:
 def _mutation_result(result: ScheduleMutationResult, operation: str, tz: ZoneInfo) -> ToolResult:
     """Convert a mutation result into model output and client outcome."""
     snapshot = result.schedules[0] if result.schedules else None
+    schedules = [_snapshot_for_client(s) for s in result.schedules]
     overrides = [_override_for_client(o) for o in result.occurrence_overrides]
     return ToolResult(
         output=json.dumps(
@@ -472,6 +473,7 @@ def _mutation_result(result: ScheduleMutationResult, operation: str, tz: ZoneInf
             "operation": operation,
             "status": "applied",
             "schedule": _snapshot_for_client(snapshot) if snapshot else None,
+            "schedules": schedules or None,
             "occurrence_overrides": overrides or None,
         },
     )

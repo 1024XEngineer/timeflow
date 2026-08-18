@@ -349,6 +349,36 @@ def test_a_this_occurrence_delete_reports_the_override_it_produced() -> None:
     ]
 
 
+class MultiScheduleProducingService(RecordingService):
+    """A this_occurrence delete hitting an existing replace override: no new override,
+    but two schedules — the untouched parent and the soft-deleted replacement."""
+
+    def delete_recurring_schedule(self, *, account_id: str, command: Any) -> ScheduleMutationResult:
+        self.calls.append("delete_recurring")
+        replacement = replace(SNAPSHOT, id="sch_replacement", status=ScheduleStatus.DELETED)
+        return ScheduleMutationResult(schedules=(SNAPSHOT, replacement))
+
+
+def test_a_this_occurrence_delete_with_existing_replacement_reports_both_schedules() -> None:
+    result = run(
+        "schedule_delete",
+        {
+            "schedule_id": "sch_1",
+            "expected_revision": 1,
+            "schedule_kind": "recurring",
+            "scope": "this_occurrence",
+        },
+        ToolBox("acc_test", MultiScheduleProducingService()),
+    )
+    assert result.outcome is not None
+    # schedule（单数）保持只给第一条，向后兼容
+    assert result.outcome["schedule"]["id"] == "sch_1"
+    # schedules（复数）必须两条都在，这是这次要修的东西——之前只有 schedules[0] 会下发，
+    # 软删除的 replacement 永远到不了客户端
+    ids = [s["id"] for s in result.outcome["schedules"]]
+    assert ids == ["sch_1", "sch_replacement"]
+
+
 def test_a_delete_with_nothing_left_to_report_still_says_it_applied() -> None:
     result = run(
         "schedule_delete",
