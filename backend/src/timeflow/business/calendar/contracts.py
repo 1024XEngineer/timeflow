@@ -152,7 +152,7 @@ class ScheduleSnapshot:
     revision: int
     created_at: datetime
     updated_at: datetime
-    category: ScheduleCategory = ScheduleCategory.OTHER
+    category: ScheduleCategory | None = None
     start_time: datetime | None = None
     end_time: datetime | None = None
     recurrence_rule: str | None = None

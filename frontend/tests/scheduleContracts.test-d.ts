@@ -48,6 +48,10 @@ export type SnapshotReminderDispositionContract = Assert<
   Equal<ScheduleSnapshot['reminder_disposition_state'], ReminderDispositionState | null>
 >;
 
+export type SnapshotCategoryContract = Assert<
+  Equal<ScheduleSnapshot['category'], ScheduleCategory | null>
+>;
+
 export type LocalReminderStateIsNotCloudDispositionContract = Assert<
   Equal<Extract<'snoozed' | 'pending' | 'done', ReminderDispositionState>, never>
 >;

@@ -8,8 +8,8 @@ CREATE TABLE IF NOT EXISTS local_schedules (
   account_id TEXT NOT NULL,
   schedule_type TEXT NOT NULL CHECK (schedule_type IN ('time', 'location')),
   schedule_kind TEXT NOT NULL DEFAULT 'once' CHECK (schedule_kind IN ('once', 'recurring')),
-  category TEXT NOT NULL DEFAULT 'other' CHECK (
-    category IN (
+  category TEXT NULL CHECK (
+    category IS NULL OR category IN (
       'work', 'study', 'exercise', 'entertainment',
       'social', 'rest', 'personal', 'other'
     )
@@ -138,8 +138,8 @@ export async function migrateScheduleDatabase(database: SQLiteDatabase): Promise
     } else if (currentVersion < 2) {
       await transaction.execAsync(
         `ALTER TABLE local_schedules
-         ADD COLUMN category TEXT NOT NULL DEFAULT 'other' CHECK (
-           category IN (
+         ADD COLUMN category TEXT NULL CHECK (
+           category IS NULL OR category IN (
              'work', 'study', 'exercise', 'entertainment',
              'social', 'rest', 'personal', 'other'
            )

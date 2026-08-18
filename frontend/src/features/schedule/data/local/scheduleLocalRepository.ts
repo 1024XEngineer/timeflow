@@ -23,7 +23,7 @@ export interface CloudScheduleRow {
   account_id: string;
   schedule_type: ScheduleType;
   schedule_kind: ScheduleKind;
-  category: ScheduleCategory;
+  category: ScheduleCategory | null;
   title: string;
   is_all_day: 0 | 1;
   start_time: string | null;

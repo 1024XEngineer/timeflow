@@ -72,7 +72,7 @@ def test_legacy_data_blocks_replacement_and_survives(
         get_settings.cache_clear()
 
 
-def test_schedule_category_migration_backfills_existing_rows(
+def test_schedule_category_migration_keeps_existing_rows_unclassified(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database_url = _database_url()
@@ -119,7 +119,7 @@ def test_schedule_category_migration_backfills_existing_rows(
                 connection.scalar(
                     sa.text("SELECT category FROM schedules WHERE id = 'category-schedule'")
                 )
-                == "other"
+                is None
             )
     finally:
         command.upgrade(config, "head")

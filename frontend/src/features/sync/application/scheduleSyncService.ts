@@ -346,7 +346,7 @@ function isValidSchedule(schedule: ScheduleSnapshot): boolean {
   const reminderTrigger = parseIsoInstant(schedule.reminder_trigger_at);
   if (
     !['time', 'location'].includes(schedule.schedule_type) ||
-    !SCHEDULE_CATEGORIES.includes(schedule.category) ||
+    (schedule.category !== null && !SCHEDULE_CATEGORIES.includes(schedule.category)) ||
     !['once', 'recurring'].includes(schedule.schedule_kind) ||
     !['active', 'deleted'].includes(schedule.status) ||
     schedule.id.trim().length === 0 ||

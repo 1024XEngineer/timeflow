@@ -21,7 +21,6 @@ from timeflow.business.calendar import (
     ReminderType,
     ScheduleApplicationService,
     ScheduleBusinessError,
-    ScheduleCategory,
     ScheduleErrorCode,
     ScheduleKind,
     ScheduleOccurrenceOverrideSnapshot,
@@ -339,7 +338,7 @@ def test_create_schedule_returns_the_committed_cloud_snapshot() -> None:
     assert snapshot.revision == 1
     assert snapshot.created_at == NOW
     assert snapshot.updated_at == NOW
-    assert snapshot.category is ScheduleCategory.OTHER
+    assert snapshot.category is None
     assert store.schedules[snapshot.id] == snapshot
 
 
