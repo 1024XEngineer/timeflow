@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
 import { AppRoot } from '../../../src/app/AppRoot';
@@ -70,6 +70,19 @@ beforeEach(() => {
 });
 
 describe('AppRoot', () => {
+  const originalMockMode = process.env.EXPO_PUBLIC_MOCK_MODE;
+
+  beforeEach(() => {
+    delete process.env.EXPO_PUBLIC_MOCK_MODE;
+  });
+
+  afterEach(() => {
+    if (originalMockMode === undefined) {
+      delete process.env.EXPO_PUBLIC_MOCK_MODE;
+    } else {
+      process.env.EXPO_PUBLIC_MOCK_MODE = originalMockMode;
+    }
+  });
   it.each([
     ['renders a pending restoration', undefined, undefined, true, '正在恢复登录状态'],
     [
@@ -79,7 +92,7 @@ describe('AppRoot', () => {
       false,
       '无法恢复登录状态，请重试',
     ],
-    ['renders unauthenticated state', undefined, undefined, false, '登录或注册'],
+    ['renders unauthenticated state', undefined, undefined, false, '登录'],
     [
       'renders authenticated state',
       {
@@ -119,7 +132,7 @@ describe('AppRoot', () => {
     expect(screen.getByText('timeflow_user')).toBeTruthy();
     expect(screen.queryByText(/账号：/)).toBeNull();
     expect(screen.queryByText(/acc_001/)).toBeNull();
-    expect(screen.queryByText('登录或注册')).toBeNull();
+    expect(screen.queryByText('登录')).toBeNull();
     expect(screen.queryByText('opaque-token')).toBeNull();
   });
 
@@ -172,7 +185,7 @@ describe('AppRoot', () => {
     await screen.findByText('本地日程存储初始化失败');
     fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
 
-    await waitFor(() => expect(screen.getByText('登录或注册')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('登录')).toBeTruthy());
     expect(controller.getViewState()).toEqual({ status: 'unauthenticated' });
   });
 
@@ -189,7 +202,7 @@ describe('AppRoot', () => {
     await screen.findByText('正在准备日程');
     fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
 
-    await waitFor(() => expect(screen.getByText('登录或注册')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('登录')).toBeTruthy());
     expect(controller.getViewState()).toEqual({ status: 'unauthenticated' });
   });
 
@@ -205,8 +218,22 @@ describe('AppRoot', () => {
     await screen.findByText('日程日历');
     fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
 
-    await waitFor(() => expect(screen.getByText('登录或注册')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('登录')).toBeTruthy());
     expect(controller.getViewState()).toEqual({ status: 'unauthenticated' });
+  });
+
+  it('skips SQLite in mock mode', async () => {
+    process.env.EXPO_PUBLIC_MOCK_MODE = '1';
+    const controller = createController({
+      accountId: 'acc_001',
+      accessToken: 'opaque-token',
+      expiresAt: 200_000,
+      username: 'timeflow_user',
+    });
+    render(<AppRoot authController={controller} />);
+
+    await waitFor(() => expect(screen.getByText('日程日历')).toBeTruthy());
+    expect(mockedOpenTimeflowDatabase).not.toHaveBeenCalled();
   });
 });
 

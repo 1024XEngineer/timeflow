@@ -55,6 +55,29 @@ describe('createAuthRuntime', () => {
     runtime.webSocketClient.close();
     expect(socket.closeCalls).toBe(1);
   });
+
+  it('uses an injected auth access adapter instead of the HTTP client', async () => {
+    const fetch = createSuccessfulAuthFetch();
+    const runtime = createAuthRuntime({
+      authAccess: async () => ({
+        account_id: 'mock-account-001',
+        access_token: 'mock-preview-token',
+        expires_in: 3600,
+      }),
+      fetch: fetch as typeof global.fetch,
+      now: () => 100_000,
+      store: new FakeAuthSessionStore(),
+    });
+
+    await runtime.controller.authenticate({ password: 'preview12', username: '示例用户' });
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(runtime.controller.getViewState()).toEqual({
+      accountId: 'mock-account-001',
+      status: 'authenticated',
+      username: '示例用户',
+    });
+  });
 });
 
 function createSuccessfulAuthFetch() {

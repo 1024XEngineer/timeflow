@@ -2,6 +2,8 @@ import { describe, expect, it, jest } from '@jest/globals';
 
 import { createAppServices } from '../../../src/app/composition/createAppServices';
 import { FakeAuthSessionStore } from '../../fakes/FakeAuthSessionStore';
+import { MockAlarmScheduler } from '../../../src/infrastructure/notifications/MockAlarmScheduler';
+import { MockDeviceCapability } from '../../../src/infrastructure/notifications/MockDeviceCapability';
 
 describe('createAppServices', () => {
   it('exposes authenticated transports and registers production account cleaners', async () => {
@@ -29,6 +31,41 @@ describe('createAppServices', () => {
       timezone: null,
     });
     expect(stopReminder).toHaveBeenCalledTimes(1);
+  });
+
+  it('wires mock auth and device ports when preview mock mode is on', async () => {
+    const previous = process.env.EXPO_PUBLIC_MOCK_MODE;
+    process.env.EXPO_PUBLIC_MOCK_MODE = '1';
+    try {
+      const fetch = jest.fn();
+      const services = createAppServices({
+        auth: {
+          fetch: fetch as typeof global.fetch,
+          now: () => 100_000,
+          store: new FakeAuthSessionStore(),
+        },
+      });
+
+      await services.auth.controller.authenticate({
+        password: 'password123',
+        username: 'reviewer',
+      });
+
+      expect(fetch).not.toHaveBeenCalled();
+      expect(services.auth.controller.getViewState()).toEqual({
+        accountId: 'mock-account-001',
+        status: 'authenticated',
+        username: 'reviewer',
+      });
+      expect(services.reminderPorts.alarms).toBeInstanceOf(MockAlarmScheduler);
+      expect(services.reminderPorts.device).toBeInstanceOf(MockDeviceCapability);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.EXPO_PUBLIC_MOCK_MODE;
+      } else {
+        process.env.EXPO_PUBLIC_MOCK_MODE = previous;
+      }
+    }
   });
 });
 

@@ -1,6 +1,7 @@
 node_modules/
 .expo/
 dist/
+dist-web/
 web-build/
 package-lock.json
 assets/

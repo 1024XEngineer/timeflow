@@ -15,6 +15,12 @@ module.exports = {
       },
       bundleIdentifier: 'com.anonymous.timeflow',
     },
+    web: {
+      bundler: 'metro',
+      favicon: './assets/icon.png',
+      name: 'Timeflow',
+      output: 'single',
+    },
     android: {
       package: 'com.anonymous.timeflow',
       permissions: [

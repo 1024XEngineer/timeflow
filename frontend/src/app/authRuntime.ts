@@ -35,6 +35,7 @@ export interface AuthRuntime {
 
 export interface CreateAuthRuntimeOptions extends Pick<CreateApiClientOptions, 'fetch'> {
   readonly accountStateCleaners?: AccountStateCleanerRegistry;
+  readonly authAccess?: AuthAccess;
   readonly deviceId?: string;
   readonly diagnostics?: AuthDiagnostics;
   readonly now?: () => number;
@@ -69,7 +70,7 @@ export function createAuthRuntime(options: CreateAuthRuntimeOptions = {}): AuthR
   const clientOptions = { fetch: options.fetch, invalidationCoordinator };
   const publicClient = createPublicApiClient(clientOptions);
   const protectedClient = createProtectedApiClient(clientOptions);
-  authAccess = createAuthAccess(publicClient);
+  authAccess = options.authAccess ?? createAuthAccess(publicClient);
   webSocketClient = new AuthenticatedWebSocketClient({
     coordinator: invalidationCoordinator,
     deviceId: options.deviceId ?? AUTH_WEB_SOCKET_DEVICE_ID,

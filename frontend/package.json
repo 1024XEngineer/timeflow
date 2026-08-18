@@ -53,6 +53,8 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
+    "web:preview": "EXPO_PUBLIC_MOCK_MODE=1 expo start --web",
+    "export:web": "EXPO_PUBLIC_MOCK_MODE=1 expo export --platform web --output-dir dist",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
@@ -67,7 +69,7 @@
     "typecheck": "tsc --noEmit",
     "check": "npm run lint && npm run format:check && npm run typecheck && npm run test",
     "postinstall": "patch-package",
-    "verify:ci": "npm run check && expo export --platform android --output-dir dist"
+    "verify:ci": "npm run check && expo export --platform android --output-dir dist && EXPO_PUBLIC_MOCK_MODE=1 expo export --platform web --output-dir dist-web"
   },
   "private": true,
   "jest": {

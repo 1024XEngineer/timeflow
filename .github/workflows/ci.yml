@@ -177,5 +177,13 @@ jobs:
           use_oidc: true
           fail_ci_if_error: false
 
-      - name: Export build
+      - name: Export Android bundle
         run: npx expo export --platform android --output-dir dist
+
+      - name: Export web preview
+        env:
+          EXPO_PUBLIC_MOCK_MODE: "1"
+        run: npx expo export --platform web --output-dir dist-web
+
+      - name: Assert web index.html
+        run: test -f dist-web/index.html

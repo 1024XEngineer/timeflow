@@ -1,0 +1,8 @@
+{
+  "buildCommand": "EXPO_PUBLIC_MOCK_MODE=1 npx expo export --platform web --output-dir dist",
+  "cleanUrls": true,
+  "devCommand": "npx expo start --web",
+  "framework": null,
+  "outputDirectory": "dist",
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+}

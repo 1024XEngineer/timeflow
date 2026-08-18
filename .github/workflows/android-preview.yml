@@ -28,6 +28,8 @@ jobs:
       && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    outputs:
+      preview_mode: ${{ steps.bake.outputs.mode }}
     permissions:
       contents: read
     defaults:
@@ -63,13 +65,16 @@ jobs:
       # Debug APKs set BuildConfig.DEBUG and still contact Metro at runtime,
       # which Appetize cannot reach. Release embeds JS and loads it offline.
       # Expo's prebuild template signs release with the debug keystore.
-      - name: Bake Appetize backend URLs
+      - name: Bake Appetize preview env
+        id: bake
         env:
           EXPO_PUBLIC_API_URL: ${{ vars.EXPO_PUBLIC_API_URL }}
         run: |
           set -euo pipefail
           if [ -z "${EXPO_PUBLIC_API_URL}" ]; then
-            echo "EXPO_PUBLIC_API_URL is unset; APK will keep localhost defaults."
+            printf '%s\n' 'EXPO_PUBLIC_MOCK_MODE=1' 'EXPO_PUBLIC_DEVICE_ID=appetize-preview' > .env
+            echo "EXPO_PUBLIC_API_URL is unset; baking mock preview mode."
+            echo "mode=mock" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           python3 <<'PY'
@@ -101,6 +106,7 @@ jobs:
           print(f"Preview API: {api}")
           print(f"Preview WS: {ws}")
           PY
+          echo "mode=live" >> "$GITHUB_OUTPUT"
 
       - name: Assemble release APK
         env:
@@ -215,11 +221,13 @@ jobs:
           COMMENT_MARKER: "<!-- timeflow-android-appetize-preview -->"
           PREVIEW_URL: ${{ steps.appetize.outputs.preview_url }}
           BUILD_ID: ${{ steps.appetize.outputs.build_id }}
+          PREVIEW_MODE: ${{ needs.build.outputs.preview_mode }}
         with:
           script: |
             const marker = process.env.COMMENT_MARKER;
             const previewUrl = process.env.PREVIEW_URL;
             const buildId = process.env.BUILD_ID;
+            const previewMode = process.env.PREVIEW_MODE === 'mock' ? 'mock' : 'live';
             if (!previewUrl || !buildId) {
               core.setFailed('Appetize preview URL was not produced');
               return;
@@ -229,6 +237,10 @@ jobs:
             const shortSha = sha.slice(0, 7);
             const headRepo = context.payload.pull_request.head.repo.html_url;
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const dataNote =
+              previewMode === 'mock'
+                ? '当前未配置公网后端，预览使用示例日程（mock 模式），语音助手不可用。'
+                : '预览已写入仓库配置的 HTTPS 后端地址。';
             const body = [
               marker,
               '## Android 预览（Appetize）',
@@ -236,6 +248,8 @@ jobs:
               '在浏览器中打开并操作本次提交构建的 Android APK（无需安装）：',
               '',
               `**[打开预览](${previewUrl})**`,
+              '',
+              dataNote,
               '',
               `- 提交：[\`${shortSha}\`](${headRepo}/commit/${sha})`,
               `- Build ID：\`${buildId}\``,
