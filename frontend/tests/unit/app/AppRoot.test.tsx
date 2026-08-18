@@ -79,7 +79,7 @@ describe('AppRoot', () => {
       false,
       '无法恢复登录状态，请重试',
     ],
-    ['renders unauthenticated state', undefined, undefined, false, '登录或注册'],
+    ['renders unauthenticated state', undefined, undefined, false, '登录'],
     [
       'renders authenticated state',
       {
@@ -119,7 +119,7 @@ describe('AppRoot', () => {
     expect(screen.getByText('timeflow_user')).toBeTruthy();
     expect(screen.queryByText(/账号：/)).toBeNull();
     expect(screen.queryByText(/acc_001/)).toBeNull();
-    expect(screen.queryByText('登录或注册')).toBeNull();
+    expect(screen.queryByText('登录')).toBeNull();
     expect(screen.queryByText('opaque-token')).toBeNull();
   });
 
@@ -172,7 +172,7 @@ describe('AppRoot', () => {
     await screen.findByText('本地日程存储初始化失败');
     fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
 
-    await waitFor(() => expect(screen.getByText('登录或注册')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('登录')).toBeTruthy());
     expect(controller.getViewState()).toEqual({ status: 'unauthenticated' });
   });
 
@@ -189,7 +189,7 @@ describe('AppRoot', () => {
     await screen.findByText('正在准备日程');
     fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
 
-    await waitFor(() => expect(screen.getByText('登录或注册')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('登录')).toBeTruthy());
     expect(controller.getViewState()).toEqual({ status: 'unauthenticated' });
   });
 
@@ -205,7 +205,7 @@ describe('AppRoot', () => {
     await screen.findByText('日程日历');
     fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
 
-    await waitFor(() => expect(screen.getByText('登录或注册')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('登录')).toBeTruthy());
     expect(controller.getViewState()).toEqual({ status: 'unauthenticated' });
   });
 });
