@@ -206,6 +206,16 @@ public final class AlarmSoundService extends Service {
             return;
         }
 
+        // 捕获这一刻的 alarmId/scheduleId/title：一个 Service 实例可能被多个不同闹钟
+        // 复用，overlayView != null 时第二个闹钟不会重建界面，但 onStartCommand 已经
+        // 把 this.alarmId/scheduleId/alarmTitle 覆盖成第二条了。下面两个 lambda 如果读
+        // this.xxx（可变实例字段，按点按时刻取值），用户点的是屏幕上还显示着第一条
+        // 标题的界面，操作却会落到第二条闹钟身上。改成读这里捕获的 final 局部变量，
+        // 保证界面上看到的和实际操作的是同一条。
+        String targetAlarmId = alarmId;
+        String targetScheduleId = scheduleId;
+        String targetTitle = title;
+
         View content = AlarmRingUi.build(
                 this,
                 title,
@@ -213,17 +223,17 @@ public final class AlarmSoundService extends Service {
                     long triggerAt = System.currentTimeMillis()
                             + AlarmContract.SNOOZE_MINUTES * 60_000L;
                     try {
-                        AlarmScheduler.schedule(this, triggerAt, alarmTitle, scheduleId);
+                        AlarmScheduler.schedule(this, triggerAt, targetTitle, targetScheduleId);
                     } catch (RuntimeException ignored) {
                         // ignore
                     }
-                    AlarmNativeBridge.notifySnoozed(this, scheduleId, alarmId, alarmTitle);
+                    AlarmNativeBridge.notifySnoozed(this, targetScheduleId, targetAlarmId, targetTitle);
                     removeAlarmOverlay();
                     RingActivity.finishIfOpen();
                     stopSelf();
                 },
                 view -> {
-                    AlarmNativeBridge.notifyDismissed(this, scheduleId, alarmId, alarmTitle);
+                    AlarmNativeBridge.notifyDismissed(this, targetScheduleId, targetAlarmId, targetTitle);
                     removeAlarmOverlay();
                     RingActivity.finishIfOpen();
                     stopSelf();
