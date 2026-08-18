@@ -221,6 +221,58 @@ describe('AssistantContinuousConversationService', () => {
     expect(service.getState()).toMatchObject({ phase: 'listening' });
   });
 
+  it('accumulates transcript/reply pairs into turn history instead of overwriting', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_1',
+      payload: { duration_ms: 800, language: 'zh', transcript: '明天几点开会' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '明天下午三点' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_2',
+      payload: { duration_ms: 500, language: 'zh', transcript: '谁参加' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getTurns()).toEqual([
+      { id: 'req_1', replyText: '明天下午三点', transcript: '明天几点开会' },
+      { id: 'req_2', replyText: null, transcript: '谁参加' },
+    ]);
+  });
+
+  it('clears turn history when a new call starts', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_1',
+      payload: { duration_ms: 800, language: 'zh', transcript: '明天几点开会' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getTurns()).toHaveLength(1);
+
+    await service.endTurn();
+    await startListening(fake, service);
+
+    expect(service.getTurns()).toHaveLength(0);
+  });
+
   it('resets the idle timer after a reply finishes playing', async () => {
     jest.useFakeTimers();
     const fake = createFakeConnection();

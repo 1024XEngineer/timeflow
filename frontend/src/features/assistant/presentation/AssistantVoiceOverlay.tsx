@@ -114,6 +114,7 @@ export function AssistantVoiceOverlay({
         onTogglePause={() => call.togglePause()}
         status={callStatusFor(call.state.phase)}
         title={titleFor(call.state, call.replyText)}
+        turns={call.turns}
       />
     );
   }

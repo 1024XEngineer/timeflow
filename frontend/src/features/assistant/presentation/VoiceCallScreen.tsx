@@ -1,7 +1,17 @@
-import { useEffect, useState } from 'react';
-import { Animated, Easing, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import {
+  Animated,
+  Easing,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
 import { colors, spacing } from '../../../shared/ui/theme';
+import type { ConversationTurnRecord } from '../domain/ConversationTurn';
 
 import type { CallStatus } from './AssistantVoiceOverlay';
 import { PhoneCallIcon } from './PhoneCallIcon';
@@ -9,6 +19,7 @@ import { PhoneCallIcon } from './PhoneCallIcon';
 interface VoiceCallScreenProps {
   status: CallStatus;
   title: string;
+  turns?: readonly ConversationTurnRecord[];
   onCollapse: () => void;
   onEnd: () => void;
   onTogglePause: () => void;
@@ -25,11 +36,13 @@ const TALK_SCALE = { duration: 650, from: 1, to: 1.14 };
 export function VoiceCallScreen({
   status,
   title,
+  turns = [],
   onCollapse,
   onEnd,
   onTogglePause,
 }: VoiceCallScreenProps) {
   const [scale] = useState(() => new Animated.Value(1));
+  const historyRef = useRef<ScrollView>(null);
 
   useEffect(() => {
     scale.stopAnimation();
@@ -69,6 +82,24 @@ export function VoiceCallScreen({
       >
         <PhoneCallIcon color={colors.onPrimary} size={18} />
       </Pressable>
+
+      {turns.length > 0 ? (
+        <ScrollView
+          ref={historyRef}
+          contentContainerStyle={styles.historyContent}
+          onContentSizeChange={() => historyRef.current?.scrollToEnd({ animated: true })}
+          style={styles.history}
+        >
+          {turns.map((turn) => (
+            <View key={turn.id} style={styles.historyTurn}>
+              <Text style={styles.historyTranscript}>{turn.transcript}</Text>
+              {turn.replyText !== null ? (
+                <Text style={styles.historyReply}>{turn.replyText}</Text>
+              ) : null}
+            </View>
+          ))}
+        </ScrollView>
+      ) : null}
 
       <View style={styles.body}>
         <Text style={styles.title}>{title}</Text>
@@ -161,6 +192,27 @@ const styles = StyleSheet.create({
   },
   endText: {
     color: colors.onPrimary,
+  },
+  history: {
+    maxHeight: '38%',
+    paddingTop: spacing.xl * 2,
+  },
+  historyContent: {
+    gap: spacing.md,
+    paddingHorizontal: spacing.xl,
+  },
+  historyReply: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 14,
+    marginTop: spacing.xs,
+  },
+  historyTranscript: {
+    color: colors.onPrimary,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  historyTurn: {
+    gap: 2,
   },
   screen: {
     backgroundColor: colors.text,
