@@ -75,6 +75,22 @@ describe('ScheduleSnapshotBootstrapService', () => {
     expect(test.sync.applyFullScheduleSnapshotToSqlite).not.toHaveBeenCalled();
   });
 
+  it('stops before fetching the snapshot when aborted while reading local schedules', async () => {
+    const test = harness(0);
+    const count = createDeferred<number>();
+    test.schedules.countSchedules.mockReturnValueOnce(count.promise);
+    const controller = new AbortController();
+
+    const preparation = test.service.ensureLocalSnapshot('account-a', controller.signal);
+    await Promise.resolve();
+    controller.abort();
+    count.resolve(0);
+
+    await expect(preparation).rejects.toMatchObject({ name: 'AbortError' });
+    expect(test.access.getAccountSnapshot).not.toHaveBeenCalled();
+    expect(test.sync.applyFullScheduleSnapshotToSqlite).not.toHaveBeenCalled();
+  });
+
   it('surfaces a failed full-snapshot transaction', async () => {
     const test = harness(0);
     test.sync.applyFullScheduleSnapshotToSqlite.mockResolvedValueOnce({
