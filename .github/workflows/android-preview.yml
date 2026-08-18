@@ -79,12 +79,14 @@ jobs:
 
           api = os.environ["EXPO_PUBLIC_API_URL"].strip()
           parsed = urlparse(api)
-          if parsed.scheme not in ("http", "https") or not parsed.netloc:
-              raise SystemExit(f"invalid EXPO_PUBLIC_API_URL: {api}")
-          ws_scheme = "wss" if parsed.scheme == "https" else "ws"
+          if parsed.scheme != "https" or not parsed.netloc:
+              raise SystemExit(
+                  "EXPO_PUBLIC_API_URL must be https://... ; "
+                  "assembleRelease blocks cleartext HTTP/WS on Android 9+"
+              )
           path = parsed.path.rstrip("/")
           ws_path = path[: -len("/api/v1")] + "/ws" if path.endswith("/api/v1") else "/ws"
-          ws = urlunparse((ws_scheme, parsed.netloc, ws_path, "", "", ""))
+          ws = urlunparse(("wss", parsed.netloc, ws_path, "", "", ""))
           Path(".env").write_text(
               "\n".join(
                   [
