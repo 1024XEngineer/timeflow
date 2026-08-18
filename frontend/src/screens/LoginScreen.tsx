@@ -1,8 +1,8 @@
 import { StatusBar } from 'expo-status-bar';
 import { useRef, useState } from 'react';
 import {
-  Image,
   KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -34,28 +34,16 @@ export function LoginScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={[styles.shell, { width: Math.min(windowWidth - spacing.xxl, 400) }]}>
-          <View style={styles.brandRow} testID="brand-region">
-            <View style={styles.brandMark} accessibilityElementsHidden>
-              <Text style={styles.brandMarkText}>T</Text>
-            </View>
-            <Text style={styles.brandName}>Timeflow</Text>
+          <View style={styles.wordmark} testID="brand-region">
+            <Text style={styles.wordmarkTime}>Time</Text>
+            <Text style={styles.wordmarkFlow}>flow</Text>
           </View>
 
           <View style={styles.mainArea} testID="login-main">
-            <View style={styles.heroIconWrap}>
-              <Image
-                accessibilityIgnoresInvertColors
-                accessible={false}
-                source={require('../../assets/icon.png')}
-                style={styles.heroIcon}
-                testID="hero-app-icon"
-              />
-            </View>
-
             <View style={styles.loginContent}>
               <View style={styles.intro}>
-                <Text style={styles.title}>登录或注册</Text>
-                <Text style={styles.subtitle}>首次使用会自动创建账号，已有账号将直接登录。</Text>
+                <Text style={styles.title}>登录</Text>
+                <Text style={styles.subtitle}>首次使用会自动创建账号。</Text>
               </View>
 
               <View style={styles.formSurface}>
@@ -107,7 +95,6 @@ export function LoginScreen() {
                     onSubmitEditing={submit}
                     placeholder="输入密码"
                     placeholderTextColor={colors.mutedText}
-                    secureTextEntry
                     selectionColor={colors.focus}
                     style={[
                       styles.input,
@@ -148,7 +135,7 @@ export function LoginScreen() {
           </View>
 
           <Text style={styles.privacyNote} testID="privacy-note">
-            你的日程只属于你，我们会认真保护账号信息。
+            你的日程只属于你
           </Text>
         </View>
       </ScrollView>
@@ -158,30 +145,6 @@ export function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  brandMark: {
-    alignItems: 'center',
-    backgroundColor: colors.accent,
-    borderRadius: 14,
-    height: 40,
-    justifyContent: 'center',
-    width: 40,
-  },
-  brandMarkText: {
-    color: colors.text,
-    fontSize: 18,
-    fontWeight: '800',
-  },
-  brandName: {
-    color: colors.text,
-    fontSize: 19,
-    fontWeight: '700',
-    letterSpacing: -0.2,
-  },
-  brandRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 12,
-  },
   errorText: {
     color: colors.error,
     fontSize: 13,
@@ -197,15 +160,6 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     borderWidth: 1,
     padding: spacing.lg,
-  },
-  heroIcon: {
-    borderRadius: 24,
-    height: 112,
-    width: 112,
-  },
-  heroIconWrap: {
-    alignItems: 'center',
-    marginBottom: spacing.xl,
   },
   input: {
     backgroundColor: colors.input,
@@ -300,5 +254,37 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: -0.8,
     lineHeight: 39,
+  },
+  wordmark: {
+    alignItems: 'baseline',
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    paddingBottom: spacing.md,
+    paddingTop: spacing.sm,
+  },
+  wordmarkFlow: {
+    color: colors.text,
+    fontFamily: Platform.select({
+      ios: 'Didot',
+      android: 'serif',
+      default: 'Didot, "Bodoni 72", "New York", "Songti SC", serif',
+    }),
+    fontSize: 40,
+    fontStyle: 'italic',
+    fontWeight: '400',
+    letterSpacing: 4,
+    lineHeight: 44,
+  },
+  wordmarkTime: {
+    color: colors.text,
+    fontFamily: Platform.select({
+      ios: 'Didot',
+      android: 'serif',
+      default: 'Didot, "Bodoni 72", "New York", "Songti SC", serif',
+    }),
+    fontSize: 40,
+    fontWeight: '700',
+    letterSpacing: -1.2,
+    lineHeight: 44,
   },
 });
