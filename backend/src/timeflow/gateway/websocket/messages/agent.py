@@ -29,6 +29,7 @@ class VoiceCommandResultPayload(BaseModel):
     status: str
     schedule: dict[str, Any] | None = None
     schedules: list[dict[str, Any]] | None = None
+    occurrence_overrides: list[dict[str, Any]] | None = None
 
 
 class VoiceCommandResult(BaseModel):

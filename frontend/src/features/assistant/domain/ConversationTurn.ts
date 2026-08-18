@@ -18,9 +18,18 @@ export type ConversationTurnState =
   | { phase: 'paused'; conversationId: string | null }
   | { phase: 'error'; message: string };
 
+export interface AppliedOccurrenceOverride {
+  id: string;
+  schedule_id: string;
+  occurrence_start: string;
+  action: 'cancel' | 'replace';
+  replacement_schedule_id: string | null;
+}
+
 export interface AppliedCommand {
   operation: string;
   status: string;
   schedule?: Record<string, unknown>;
   schedules?: Record<string, unknown>[];
+  occurrence_overrides?: AppliedOccurrenceOverride[];
 }

@@ -58,7 +58,7 @@ class ReminderStrength(StrEnum):
 
 
 class ReminderDispositionState(StrEnum):
-    """Cloud-persisted final disposition for the current reminder occurrence."""
+    """Cloud-persisted final reminder state on the schedule aggregate."""
 
     CONFIRMED = "confirmed"
 
@@ -86,6 +86,7 @@ class ScheduleErrorCode(StrEnum):
     """Stable business failures raised by the Agent schedule boundary."""
 
     SCHEDULE_NOT_FOUND = "schedule_not_found"
+    REMINDER_NOT_CONFIGURED = "reminder_not_configured"
     REVISION_CONFLICT = "revision_conflict"
     OCCURRENCE_NOT_FOUND = "occurrence_not_found"
     INVALID_TIMEZONE = "invalid_timezone"
@@ -256,6 +257,15 @@ class ScheduleMutationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ReminderDispositionResult:
+    """Final reminder state returned after a confirmation sync."""
+
+    schedule_id: str
+    disposition_state: ReminderDispositionState
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class ScheduleSearchResult:
     """Schedules matched for Agent query or disambiguation."""
 
@@ -270,6 +280,7 @@ __all__ = [
     "FindSchedulesQuery",
     "OccurrenceOverrideAction",
     "RecurringDeleteScope",
+    "ReminderDispositionResult",
     "ReminderDispositionState",
     "ReminderStrength",
     "ReminderType",

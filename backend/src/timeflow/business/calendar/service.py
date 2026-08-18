@@ -260,6 +260,8 @@ class ScheduleApplicationService(ScheduleAgentService):
                 schedule_id=command.schedule_id,
             )
             candidate = replace(current, **command.changes, updated_at=now)
+            if "reminder_type" in command.changes and command.changes["reminder_type"] is None:
+                candidate = replace(candidate, reminder_disposition_state=None)
             if "recurrence_rule" in command.changes:
                 candidate = replace(
                     candidate,

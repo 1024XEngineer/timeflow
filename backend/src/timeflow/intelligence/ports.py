@@ -108,6 +108,7 @@ class CommandResult:
     status: str
     schedule: dict[str, Any] | None = None
     schedules: list[dict[str, Any]] | None = None
+    occurrence_overrides: list[dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True, slots=True)

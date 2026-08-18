@@ -17,6 +17,7 @@ from timeflow.business.calendar import (
     FindSchedulesQuery,
     OccurrenceOverrideAction,
     RecurringDeleteScope,
+    ReminderDispositionState,
     ReminderStrength,
     ReminderType,
     ScheduleApplicationService,
@@ -1090,6 +1091,46 @@ def test_update_schedule_applies_patch_and_translates_revision_conflict() -> Non
     assert updated.revision == 2
     assert updated.updated_at == later
     assert conflict.field == "expected_revision"
+    assert store.schedules[created.id] == updated
+
+
+def test_update_removes_confirmed_reminder_and_clears_disposition() -> None:
+    service, store = _service(now=NOW)
+    created = service.create_schedule(
+        account_id="account-a",
+        command=replace(
+            _time_command(),
+            reminder_type=ReminderType.AT_TIME,
+            reminder_trigger_at=datetime(2026, 8, 12, 7, tzinfo=UTC),
+            reminder_strength=ReminderStrength.MEDIUM,
+        ),
+    ).schedules[0]
+    confirmed = replace(
+        created,
+        reminder_disposition_state=ReminderDispositionState.CONFIRMED,
+    )
+    store.schedules[created.id] = confirmed
+
+    updated = service.update_schedule(
+        account_id="account-a",
+        command=UpdateScheduleCommand(
+            created.id,
+            confirmed.revision,
+            {
+                "reminder_type": None,
+                "reminder_trigger_at": None,
+                "reminder_offset_minutes": None,
+                "reminder_strength": None,
+            },
+        ),
+    ).schedules[0]
+
+    assert updated.reminder_type is None
+    assert updated.reminder_trigger_at is None
+    assert updated.reminder_offset_minutes is None
+    assert updated.reminder_strength is None
+    assert updated.reminder_disposition_state is None
+    assert updated.revision == confirmed.revision + 1
     assert store.schedules[created.id] == updated
 
 

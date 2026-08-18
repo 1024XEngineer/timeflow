@@ -7,6 +7,7 @@ from timeflow.business.calendar.contracts import (
     FindSchedulesQuery,
     OccurrenceOverrideAction,
     RecurringDeleteScope,
+    ReminderDispositionResult,
     ReminderDispositionState,
     ReminderStrength,
     ReminderType,
@@ -22,6 +23,10 @@ from timeflow.business.calendar.contracts import (
     ScheduleType,
     ScheduleUpdatePatch,
     UpdateScheduleCommand,
+)
+from timeflow.business.calendar.reminder_disposition import (
+    ReminderDispositionConfirmer,
+    ReminderDispositionService,
 )
 from timeflow.business.calendar.service import (
     ScheduleAgentService,
@@ -42,6 +47,9 @@ __all__ = [
     "FindSchedulesQuery",
     "OccurrenceOverrideAction",
     "RecurringDeleteScope",
+    "ReminderDispositionConfirmer",
+    "ReminderDispositionResult",
+    "ReminderDispositionService",
     "ReminderDispositionState",
     "ReminderStrength",
     "ReminderType",
