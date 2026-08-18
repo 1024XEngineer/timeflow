@@ -105,6 +105,19 @@ describe('ScheduleLocalRepository SQLite behavior', () => {
     }
   });
 
+  it('rejects a database version newer than the supported schema', async () => {
+    const futureDatabase = new SqlJsExpoDatabase(new sql.Database());
+    try {
+      await futureDatabase.execAsync('PRAGMA user_version = 3');
+
+      await expect(migrateScheduleDatabase(futureDatabase.asSQLiteDatabase())).rejects.toThrow(
+        'Unsupported Timeflow database version 3',
+      );
+    } finally {
+      futureDatabase.close();
+    }
+  });
+
   it('inserts a cloud schedule with safe local runtime defaults', async () => {
     expect(await repository.applyCloudSchedule(cloudSchedule())).toBe(true);
 
