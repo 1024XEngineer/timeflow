@@ -73,9 +73,7 @@ class _UnusedReminderConfirmer:
 
     def confirm(self, *, account_id: str, schedule_id: str) -> ReminderDispositionResult:
         """这些装配测试不应确认提醒。"""
-        raise AssertionError(
-            f"unexpected reminder confirmation for {account_id!r}/{schedule_id!r}"
-        )
+        raise AssertionError(f"unexpected reminder confirmation for {account_id!r}/{schedule_id!r}")
 
 
 class _ReminderConfirmer:
