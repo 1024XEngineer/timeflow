@@ -113,4 +113,57 @@ describe('LocalScheduleWriter', () => {
     const stored = await repository.getSchedule('account-a', 'schedule-a');
     expect(stored).toBeNull();
   });
+
+  it('writes every schedule when the command carries the plural field', async () => {
+    const writer = new LocalScheduleWriter(repository);
+    await writer.applyCommandResult(
+      'account-a',
+      appliedCommand({
+        schedule: undefined,
+        schedules: [
+          appliedCommand().schedule!,
+          { ...appliedCommand().schedule!, id: 'schedule-b', title: 'Follow-up' },
+        ],
+      }),
+    );
+
+    expect((await repository.getSchedule('account-a', 'schedule-a'))?.title).toBe('Team sync');
+    expect((await repository.getSchedule('account-a', 'schedule-b'))?.title).toBe('Follow-up');
+  });
+
+  it('does not write a list_schedules query result even if it carries schedules', async () => {
+    const writer = new LocalScheduleWriter(repository);
+    await writer.applyCommandResult(
+      'account-a',
+      appliedCommand({
+        operation: 'list_schedules',
+        schedule: undefined,
+        schedules: [appliedCommand().schedule!],
+      }),
+    );
+
+    expect(await repository.getSchedule('account-a', 'schedule-a')).toBeNull();
+  });
+
+  it('rolls back the schedule write when a later override write fails', async () => {
+    const writer = new LocalScheduleWriter(repository);
+    const command = appliedCommand({
+      occurrence_overrides: [
+        {
+          id: 'override-a',
+          // upsertOccurrenceOverride 找不到这个 schedule_id 对应的本地日程，返回 false。
+          schedule_id: 'schedule-does-not-exist',
+          occurrence_start: '2026-08-19T07:00:00Z',
+          action: 'cancel',
+          replacement_schedule_id: null,
+        },
+      ],
+    });
+
+    await expect(writer.applyCommandResult('account-a', command)).rejects.toThrow(
+      'Could not apply occurrence override override-a',
+    );
+    // schedule 那一半本来会写成功，但事务应该把它也回滚掉，不留半吊子状态。
+    expect(await repository.getSchedule('account-a', 'schedule-a')).toBeNull();
+  });
 });

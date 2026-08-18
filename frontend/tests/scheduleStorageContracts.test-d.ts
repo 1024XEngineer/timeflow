@@ -106,6 +106,7 @@ export type LocalRepositoryOperationsContract = Assert<
     keyof ScheduleLocalRepository,
     | 'getSchedule'
     | 'listSchedules'
+    | 'withTransaction'
     | 'applyCloudSchedule'
     | 'updateReminderRuntime'
     | 'purgeSchedule'
