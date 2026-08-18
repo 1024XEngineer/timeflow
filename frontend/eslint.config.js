@@ -8,11 +8,26 @@ module.exports = defineConfig([
   expoConfig,
   prettierConfig,
   {
-    ignores: ['dist/**', 'dist-web/**', '.expo/**', 'web-build/**', 'node_modules/**'],
+    ignores: [
+      'dist/**',
+      'dist-web/**',
+      '.expo/**',
+      'web-build/**',
+      'node_modules/**',
+      'modules/**',
+    ],
   },
   {
     rules: {
       'no-console': ['warn', { allow: ['warn', 'error'] }],
+    },
+  },
+  {
+    files: ['react-native.config.js'],
+    languageOptions: {
+      globals: {
+        __dirname: 'readonly',
+      },
     },
   },
 ]);
