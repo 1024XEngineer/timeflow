@@ -153,6 +153,11 @@ class CommandOutcome(Protocol):
         """Matches a query found, when the command was a query."""
         ...
 
+    @property
+    def occurrence_overrides(self) -> list[dict[str, Any]] | None:
+        """Per-occurrence exceptions (cancel/replace) a recurring-schedule mutation produced."""
+        ...
+
 
 class AudioReplyInfo(Protocol):
     """Format and purpose of a spoken reply, announced before its audio."""

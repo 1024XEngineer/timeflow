@@ -399,6 +399,7 @@ class _Turn:
                     status=str(outcome["status"]),
                     schedule=outcome.get("schedule"),
                     schedules=outcome.get("schedules"),
+                    occurrence_overrides=outcome.get("occurrence_overrides"),
                 ),
                 self._stream,
             )
