@@ -59,6 +59,22 @@ describe('parseScheduleSnapshotResponse', () => {
     });
   });
 
+  it('accepts finite coordinates', () => {
+    const response = {
+      schedules: [{ ...validSchedule(), latitude: 31.2304, longitude: 121.4737 }],
+      occurrence_overrides: [],
+    };
+
+    expect(parseScheduleSnapshotResponse(response)).toEqual(response);
+  });
+
+  it.each([
+    ['schedules', { schedules: {}, occurrence_overrides: [] }],
+    ['occurrence overrides', { schedules: [], occurrence_overrides: {} }],
+  ])('rejects non-array %s collection', (_name, response) => {
+    expect(parseScheduleSnapshotResponse(response)).toBeUndefined();
+  });
+
   it.each([
     ['non-object', []],
     ['missing top-level field', { schedules: [] }],

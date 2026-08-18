@@ -62,6 +62,19 @@ describe('ScheduleSnapshotBootstrapService', () => {
     expect(test.schedules.countSchedules).not.toHaveBeenCalled();
   });
 
+  it('stops before reading local schedules when already aborted', async () => {
+    const test = harness(0);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      test.service.ensureLocalSnapshot('account-a', controller.signal),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(test.schedules.countSchedules).not.toHaveBeenCalled();
+    expect(test.access.getAccountSnapshot).not.toHaveBeenCalled();
+    expect(test.sync.applyFullScheduleSnapshotToSqlite).not.toHaveBeenCalled();
+  });
+
   it('surfaces a failed full-snapshot transaction', async () => {
     const test = harness(0);
     test.sync.applyFullScheduleSnapshotToSqlite.mockResolvedValueOnce({
