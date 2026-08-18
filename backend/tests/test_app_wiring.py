@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 
 from timeflow.business.auth import AuthAccessResult
+from timeflow.business.calendar import AccountScheduleSnapshot
 from timeflow.gateway.websocket.ports import StreamContext
 from timeflow.infrastructure.settings import get_settings
 from timeflow.main import create_app
@@ -40,6 +41,26 @@ class _UnusedAuthAccess:
     def access(self, username: str, password: str) -> AuthAccessResult:
         """这些装配测试不应调用账户访问用例。"""
         raise AssertionError(f"unexpected auth access for {username!r} and password")
+
+
+class _UnusedScheduleSnapshotReader:
+    """隔离数据库装配，使无关测试不会读取日程快照。"""
+
+    def get_account_snapshot(self, *, account_id: str) -> AccountScheduleSnapshot:
+        """这些装配测试不应读取账户日程。"""
+        raise AssertionError(f"unexpected schedule snapshot read for {account_id!r}")
+
+
+class _CapturingScheduleSnapshotReader:
+    """返回空快照并记录路由传入的可信账户。"""
+
+    def __init__(self) -> None:
+        self.account_ids: list[str] = []
+
+    def get_account_snapshot(self, *, account_id: str) -> AccountScheduleSnapshot:
+        """记录读取目标并返回完整的空快照。"""
+        self.account_ids.append(account_id)
+        return AccountScheduleSnapshot((), ())
 
 
 class _FakeAsyncClient:
@@ -95,6 +116,7 @@ def _build_with_environment(
     try:
         with mock.patch.dict(os.environ, environment_values, clear=False):
             auth_access = injected.pop("auth_access", _UnusedAuthAccess())
+            injected.setdefault("schedule_snapshot_reader", _UnusedScheduleSnapshotReader())
             return create_app(auth_access=auth_access, **injected)
     finally:
         get_settings.cache_clear()
@@ -137,6 +159,32 @@ def test_injected_token_service_is_shared_by_http_and_websocket() -> None:
 
     dependency = application.state.authenticated_account_dependency
     assert dependency(f"Bearer {issued.access_token}").account_id == "acc_shared"
+
+
+def test_schedule_snapshot_route_uses_the_shared_authenticated_account() -> None:
+    """快照路由复用正式认证依赖，只把令牌中的可信账户交给 reader。"""
+    tokens = build_test_token_service()
+    issued = tokens.issue("acc_snapshot")
+    reader = _CapturingScheduleSnapshotReader()
+    application = _build_with_environment(
+        "development",
+        jwt_secret="",
+        access_token_service=tokens,
+        audio_sink=_Sink(),
+        schedule_snapshot_reader=reader,
+    )
+
+    with TestClient(application) as client:
+        response = client.get(
+            "/api/v1/schedule/snapshot",
+            headers={"Authorization": f"Bearer {issued.access_token}"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"schedules": [], "occurrence_overrides": []}
+    assert reader.account_ids == ["acc_snapshot"]
+    dependency = application.state.authenticated_account_dependency
+    assert dependency(f"Bearer {issued.access_token}").account_id == "acc_snapshot"
 
 
 def test_building_in_development_still_works_without_a_real_model() -> None:

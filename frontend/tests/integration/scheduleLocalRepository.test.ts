@@ -1,5 +1,5 @@
 import initSqlJs, { type SqlJsStatic } from 'sql.js';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ScheduleLocalRepository,
@@ -86,6 +86,23 @@ describe('ScheduleLocalRepository SQLite behavior', () => {
       'local_schedule_occurrence_overrides',
       'local_schedules',
     ]);
+  });
+
+  it('initializes the schema when SQLite returns no user version row', async () => {
+    const emptyVersionDatabase = new SqlJsExpoDatabase(new sql.Database());
+    const sqliteDatabase = emptyVersionDatabase.asSQLiteDatabase();
+    vi.spyOn(sqliteDatabase, 'getFirstAsync').mockResolvedValueOnce(null);
+
+    try {
+      await migrateScheduleDatabase(sqliteDatabase);
+
+      const version = await emptyVersionDatabase.getFirstAsync<{ user_version: number }>(
+        'PRAGMA user_version',
+      );
+      expect(version?.user_version).toBe(CURRENT_DATABASE_VERSION);
+    } finally {
+      emptyVersionDatabase.close();
+    }
   });
 
   it('inserts a cloud schedule with safe local runtime defaults', async () => {

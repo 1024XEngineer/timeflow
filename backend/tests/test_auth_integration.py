@@ -3,6 +3,7 @@
 import threading
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Annotated, cast
 from uuid import uuid4
 
@@ -18,8 +19,15 @@ from sqlalchemy import Engine, create_engine, delete, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from timeflow.business.calendar import (
+    CreateScheduleCommand,
+    ScheduleApplicationService,
+    ScheduleKind,
+    ScheduleType,
+)
 from timeflow.data.database import Base, build_session_factory
-from timeflow.data.models import Account
+from timeflow.data.models import Account, Schedule
+from timeflow.data.schedule_unit_of_work import SqlAlchemyScheduleUnitOfWork
 from timeflow.gateway.http import (
     AuthenticatedAccount,
     AuthenticatedAccountDependency,
@@ -251,6 +259,84 @@ def test_postgres_http_access_persists_account_and_jwt_opens_websocket(
         assert account.id == registered.account_id
         assert account.password_hash.startswith("$argon2id$")
         assert PASSWORD not in account.password_hash
+    finally:
+        with postgres_engine.begin() as connection:
+            connection.execute(delete(Account).where(Account.username == username))
+
+
+def test_postgres_jwt_returns_only_its_committed_schedule_snapshot(
+    postgres_engine: Engine,
+) -> None:
+    """真实 JWT 只读取其账户经生产 UoW 提交的日程。"""
+    suffix = uuid4().hex
+    usernames = (f"snapshot-owner-{suffix}", f"snapshot-other-{suffix}")
+    schedule_ids = (f"schedule_snapshot_{suffix}", f"schedule_other_{suffix}")
+    tokens = build_test_token_service()
+    application = create_app(
+        engine=postgres_engine,
+        access_token_service=tokens,
+        audio_sink=_CapturingAudioSink(),
+    )
+    sessions = build_session_factory(postgres_engine)
+    generated_ids = iter(schedule_ids)
+    schedule_service = ScheduleApplicationService(
+        lambda: SqlAlchemyScheduleUnitOfWork(sessions),
+        id_factory=lambda: next(generated_ids),
+    )
+
+    try:
+        with TestClient(application) as client:
+            owner = _access(client, username=usernames[0])
+            other = _access(client, username=usernames[1])
+            command = CreateScheduleCommand(
+                schedule_type=ScheduleType.TIME,
+                schedule_kind=ScheduleKind.ONCE,
+                title="Cloud schedule",
+                timezone="Asia/Shanghai",
+                start_time=datetime(2026, 8, 17, 1, 0, tzinfo=UTC),
+            )
+            schedule_service.create_schedule(account_id=owner.account_id, command=command)
+            schedule_service.create_schedule(account_id=other.account_id, command=command)
+
+            response = client.get(
+                "/api/v1/schedule/snapshot",
+                headers={"Authorization": f"Bearer {owner.access_token}"},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert [schedule["id"] for schedule in body["schedules"]] == [schedule_ids[0]]
+        assert {schedule["account_id"] for schedule in body["schedules"]} == {owner.account_id}
+        assert body["occurrence_overrides"] == []
+    finally:
+        with postgres_engine.begin() as connection:
+            account_ids = select(Account.id).where(Account.username.in_(usernames))
+            connection.execute(delete(Schedule).where(Schedule.account_id.in_(account_ids)))
+            connection.execute(delete(Account).where(Account.username.in_(usernames)))
+
+
+def test_postgres_empty_account_returns_an_empty_schedule_snapshot(
+    postgres_engine: Engine,
+) -> None:
+    """真实空账户通过生产 reader 得到两个空集合。"""
+    username = f"snapshot-empty-{uuid4().hex}"
+    tokens = build_test_token_service()
+    application = create_app(
+        engine=postgres_engine,
+        access_token_service=tokens,
+        audio_sink=_CapturingAudioSink(),
+    )
+
+    try:
+        with TestClient(application) as client:
+            access = _access(client, username=username)
+            response = client.get(
+                "/api/v1/schedule/snapshot",
+                headers={"Authorization": f"Bearer {access.access_token}"},
+            )
+
+        assert response.status_code == 200
+        assert response.json() == {"schedules": [], "occurrence_overrides": []}
     finally:
         with postgres_engine.begin() as connection:
             connection.execute(delete(Account).where(Account.username == username))
