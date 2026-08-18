@@ -5,6 +5,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
+import sqlalchemy as sa
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 
@@ -20,7 +21,7 @@ from timeflow.business.calendar import (
     ScheduleType,
 )
 from timeflow.data.database import Base
-from timeflow.data.models import Account
+from timeflow.data.models import Account, Schedule
 from timeflow.data.repositories import ScheduleRepository, ScheduleRevisionConflictError
 
 
@@ -362,6 +363,45 @@ def test_duplicate_reminder_confirmation_is_a_no_op(session: Session) -> None:
     assert persisted is not None
     assert persisted.updated_at == first_time.replace(tzinfo=None)
     assert persisted.revision == 6
+
+
+def test_losing_reminder_confirmation_expires_stale_identity_map(session: Session) -> None:
+    """A failed conditional update must not return Session-local loser values."""
+    repository = ScheduleRepository(session)
+    original = repository.add_schedule(
+        replace(
+            _schedule("schedule-a", "account-a", revision=5),
+            reminder_type=ReminderType.BEFORE_START,
+            reminder_offset_minutes=10,
+            reminder_strength=ReminderStrength.MEDIUM,
+        )
+    )
+    assert repository.get_schedule(account_id="account-a", schedule_id=original.id) is not None
+    winner_time = datetime(2026, 8, 17, 4, tzinfo=UTC)
+    loser_time = datetime(2026, 8, 17, 4, 1, tzinfo=UTC)
+    session.execute(
+        sa.update(Schedule)
+        .where(Schedule.id == original.id)
+        .values(
+            reminder_disposition_state=ReminderDispositionState.CONFIRMED.value,
+            updated_at=winner_time,
+            revision=Schedule.revision + 1,
+        )
+        .execution_options(synchronize_session=False)
+    )
+
+    missed = repository.confirm_reminder_disposition(
+        account_id="account-a",
+        schedule_id=original.id,
+        confirmed_at=loser_time,
+    )
+    reread = repository.get_schedule(account_id="account-a", schedule_id=original.id)
+
+    assert missed is None
+    assert reread is not None
+    assert reread.updated_at == winner_time.replace(tzinfo=None)
+    assert reread.updated_at != loser_time.replace(tzinfo=None)
+    assert reread.revision == 6
 
 
 @pytest.mark.parametrize("case", ["cross-account", "deleted", "no-reminder"])

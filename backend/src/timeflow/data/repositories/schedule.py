@@ -204,8 +204,11 @@ class ScheduleRepository:
                 revision=Schedule.revision + 1,
             )
             .returning(Schedule)
+            .execution_options(synchronize_session=False)
         )
         model = self._session.scalars(statement).one_or_none()
+        if model is None:
+            self._session.expire_all()
         return None if model is None else _to_schedule_snapshot(model)
 
     def add_occurrence_override(
