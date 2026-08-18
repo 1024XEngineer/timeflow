@@ -13,12 +13,17 @@ from timeflow.infrastructure.settings import get_settings
 BACKEND_ROOT = Path(__file__).parents[1]
 
 
-def test_legacy_data_blocks_replacement_and_survives(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def _database_url() -> str:
     database_url = os.getenv("TIMEFLOW_TEST_DATABASE_URL")
     if database_url is None:
         pytest.skip("TIMEFLOW_TEST_DATABASE_URL is not set")
+    return database_url
+
+
+def test_legacy_data_blocks_replacement_and_survives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _database_url()
 
     monkeypatch.setenv("TIMEFLOW_DATABASE_URL", database_url)
     get_settings.cache_clear()
@@ -63,5 +68,63 @@ def test_legacy_data_blocks_replacement_and_survives(
         with engine.begin() as connection:
             connection.execute(sa.text("DELETE FROM schedules WHERE id = 'legacy-test'"))
         command.upgrade(config, "head")
+        engine.dispose()
+        get_settings.cache_clear()
+
+
+def test_schedule_category_migration_keeps_existing_rows_unclassified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _database_url()
+    monkeypatch.setenv("TIMEFLOW_DATABASE_URL", database_url)
+    get_settings.cache_clear()
+    config = Config(str(BACKEND_ROOT / "alembic.ini"))
+    engine = sa.create_engine(database_url)
+    now = "2026-08-17T00:00:00Z"
+
+    command.downgrade(config, "20260810_0005")
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                sa.text(
+                    """
+                    INSERT INTO accounts (
+                        id, username, password_hash, created_at, updated_at
+                    ) VALUES (
+                        'category-account', 'category-user', 'test-hash', :now, :now
+                    )
+                    """
+                ),
+                {"now": now},
+            )
+            connection.execute(
+                sa.text(
+                    """
+                    INSERT INTO schedules (
+                        id, account_id, schedule_type, title, start_time,
+                        timezone, status, created_at, updated_at
+                    ) VALUES (
+                        'category-schedule', 'category-account', 'time', 'legacy schedule',
+                        :now, 'UTC', 'active', :now, :now
+                    )
+                    """
+                ),
+                {"now": now},
+            )
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as connection:
+            assert (
+                connection.scalar(
+                    sa.text("SELECT category FROM schedules WHERE id = 'category-schedule'")
+                )
+                is None
+            )
+    finally:
+        command.upgrade(config, "head")
+        with engine.begin() as connection:
+            connection.execute(sa.text("DELETE FROM schedules WHERE id = 'category-schedule'"))
+            connection.execute(sa.text("DELETE FROM accounts WHERE id = 'category-account'"))
         engine.dispose()
         get_settings.cache_clear()

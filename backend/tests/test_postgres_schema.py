@@ -23,6 +23,7 @@ EXPECTED_COLUMNS = {
         "account_id": ("VARCHAR(64)", False),
         "schedule_type": ("VARCHAR(16)", False),
         "schedule_kind": ("VARCHAR(16)", False),
+        "category": ("VARCHAR(16)", True),
         "title": ("VARCHAR(255)", False),
         "is_all_day": ("BOOLEAN", False),
         "start_time": ("TIMESTAMP WITH TIME ZONE", True),
@@ -58,6 +59,7 @@ EXPECTED_SCHEDULE_CHECKS = {
     "ck_schedules_all_day_requirements",
     "ck_schedules_at_time_reminder",
     "ck_schedules_before_start_reminder",
+    "ck_schedules_category",
     "ck_schedules_coordinates_pair",
     "ck_schedules_deleted_at_consistency",
     "ck_schedules_latitude_range",
@@ -136,7 +138,7 @@ def test_postgres_has_exact_business_tables_and_head(postgres_engine: Engine) ->
     }
     with postgres_engine.connect() as connection:
         revision = connection.scalar(sa.text("SELECT version_num FROM alembic_version"))
-    assert revision == "20260810_0005"
+    assert revision == "20260817_0006"
 
 
 def test_postgres_columns_match_document(postgres_engine: Engine) -> None:
@@ -150,6 +152,7 @@ def test_postgres_columns_match_document(postgres_engine: Engine) -> None:
 
     schedules = {column["name"]: column for column in inspector.get_columns("schedules")}
     assert "once" in schedules["schedule_kind"]["default"]
+    assert schedules["category"]["default"] is None
     assert schedules["is_all_day"]["default"] == "false"
     assert schedules["revision"]["default"] == "1"
 
@@ -235,12 +238,13 @@ def test_postgres_applies_schedule_server_defaults(
         .values(_schedule_values())
         .returning(
             Schedule.__table__.c.schedule_kind,
+            Schedule.__table__.c.category,
             Schedule.__table__.c.is_all_day,
             Schedule.__table__.c.revision,
         )
     ).one()
 
-    assert row._tuple() == ("once", False, 1)
+    assert row._tuple() == ("once", None, False, 1)
 
 
 @pytest.mark.parametrize(
@@ -249,6 +253,7 @@ def test_postgres_applies_schedule_server_defaults(
         {"account_id": "missing-account"},
         {"schedule_type": "unknown"},
         {"schedule_kind": "recurring", "recurrence_rule": None},
+        {"category": "unknown"},
         {"is_all_day": True, "end_time": None},
         {"schedule_type": "location", "start_time": None},
         {"latitude": 31.2304, "longitude": None},

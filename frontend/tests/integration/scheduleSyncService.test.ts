@@ -20,6 +20,7 @@ function scheduleSnapshot(overrides: Partial<ScheduleSnapshot> = {}): ScheduleSn
     account_id: 'account-a',
     schedule_type: 'time',
     schedule_kind: 'once',
+    category: 'work',
     title: 'Cloud schedule',
     is_all_day: false,
     start_time: '2026-08-17T02:00:00Z',
@@ -104,6 +105,7 @@ describe('SqliteScheduleSyncService', () => {
       changedScheduleIds: ['series-a', 'replacement-a'],
     });
     expect(await repository.getSchedule('account-a', 'series-a')).toMatchObject({
+      category: 'work',
       cloud_revision: 1,
       status: 'active',
     });
@@ -116,6 +118,36 @@ describe('SqliteScheduleSyncService', () => {
         replacement_schedule_id: 'replacement-a',
       },
     ]);
+  });
+
+  it('rejects an unknown category before writing to SQLite', async () => {
+    const result = await service.applyScheduleSnapshotToSqlite({
+      messageId: 'unknown-category',
+      accountId: 'account-a',
+      snapshot: {
+        schedules: [scheduleSnapshot({ category: 'unsupported' as ScheduleSnapshot['category'] })],
+        occurrence_overrides: [],
+      },
+    });
+
+    expect(result).toMatchObject({ status: 'failed', errorCode: 'invalid_snapshot' });
+    expect(await repository.getSchedule('account-a', 'schedule-a')).toBeNull();
+  });
+
+  it('synchronizes a null category without converting it to other', async () => {
+    const result = await service.applyScheduleSnapshotToSqlite({
+      messageId: 'null-category',
+      accountId: 'account-a',
+      snapshot: {
+        schedules: [scheduleSnapshot({ category: null })],
+        occurrence_overrides: [],
+      },
+    });
+
+    expect(result.status).toBe('applied');
+    expect(await repository.getSchedule('account-a', 'schedule-a')).toMatchObject({
+      category: null,
+    });
   });
 
   it('preserves local reminder runtime while applying newer cloud fields and soft deletion', async () => {

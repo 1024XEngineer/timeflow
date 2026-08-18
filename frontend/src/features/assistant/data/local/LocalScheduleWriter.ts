@@ -1,3 +1,4 @@
+import { SCHEDULE_CATEGORIES, type ScheduleCategory } from '../../../../contracts/schedule';
 import type {
   CloudScheduleRow,
   LocalScheduleOccurrenceOverrideRow,
@@ -74,6 +75,7 @@ function toCloudScheduleRow(accountId: string, raw: Record<string, unknown>): Cl
       raw.schedule_kind,
       'schedule_kind',
     ) as CloudScheduleRow['schedule_kind'],
+    category: scheduleCategory(raw.category),
     title: requireString(raw.title, 'title'),
     is_all_day: raw.is_all_day === true ? 1 : 0,
     start_time: optionalString(raw.start_time),
@@ -122,4 +124,14 @@ function optionalString(value: unknown): string | null {
 
 function optionalNumber(value: unknown): number | null {
   return typeof value === 'number' ? value : null;
+}
+
+function scheduleCategory(value: unknown): CloudScheduleRow['category'] {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== 'string' || !SCHEDULE_CATEGORIES.includes(value as ScheduleCategory)) {
+    throw new TypeError('command.result.schedule.category has an unsupported value');
+  }
+  return value as ScheduleCategory;
 }

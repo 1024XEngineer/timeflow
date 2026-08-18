@@ -9,6 +9,7 @@ import type {
 import type {
   OccurrenceOverrideAction,
   ReminderDispositionState as CloudReminderDispositionState,
+  ScheduleCategory,
   ScheduleKind,
   ScheduleStatus,
   ScheduleType,
@@ -22,6 +23,7 @@ export interface CloudScheduleRow {
   account_id: string;
   schedule_type: ScheduleType;
   schedule_kind: ScheduleKind;
+  category: ScheduleCategory | null;
   title: string;
   is_all_day: 0 | 1;
   start_time: string | null;
@@ -107,14 +109,14 @@ export class ScheduleLocalRepository {
   public async applyCloudSchedule(row: CloudScheduleRow): Promise<boolean> {
     const result = await this.database.runAsync(
       `INSERT INTO local_schedules (
-         id, account_id, schedule_type, schedule_kind, title, is_all_day,
+         id, account_id, schedule_type, schedule_kind, category, title, is_all_day,
          start_time, end_time, timezone, recurrence_rule, location_name,
          latitude, longitude, reminder_type, reminder_trigger_at,
          reminder_offset_minutes, reminder_strength, reminder_disposition_state,
          next_trigger_at, snoozed_until, geofence_armed, disposition_updated_at,
          sync_status, status, cloud_revision, updated_at
        ) VALUES (
-         $id, $account_id, $schedule_type, $schedule_kind, $title, $is_all_day,
+         $id, $account_id, $schedule_type, $schedule_kind, $category, $title, $is_all_day,
          $start_time, $end_time, $timezone, $recurrence_rule, $location_name,
          $latitude, $longitude, $reminder_type, $reminder_trigger_at,
          $reminder_offset_minutes, $reminder_strength, $reminder_disposition_state,
@@ -123,6 +125,7 @@ export class ScheduleLocalRepository {
        ON CONFLICT(id) DO UPDATE SET
          schedule_type = excluded.schedule_type,
          schedule_kind = excluded.schedule_kind,
+         category = excluded.category,
          title = excluded.title,
          is_all_day = excluded.is_all_day,
          start_time = excluded.start_time,
@@ -145,6 +148,7 @@ export class ScheduleLocalRepository {
         $account_id: row.account_id,
         $schedule_type: row.schedule_type,
         $schedule_kind: row.schedule_kind,
+        $category: row.category,
         $title: row.title,
         $is_all_day: row.is_all_day,
         $start_time: row.start_time,

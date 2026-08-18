@@ -17,6 +17,7 @@ from timeflow.business.calendar.contracts import (
     RecurringDeleteScope,
     ReminderType,
     ScheduleBusinessError,
+    ScheduleCategory,
     ScheduleErrorCode,
     ScheduleKind,
     ScheduleMutationResult,
@@ -158,6 +159,7 @@ class ScheduleApplicationService(ScheduleAgentService):
             revision=1,
             created_at=now,
             updated_at=now,
+            category=None,
             start_time=command.start_time,
             end_time=command.end_time,
             recurrence_rule=_normalize_optional_recurrence_rule(command.recurrence_rule),
@@ -681,6 +683,8 @@ def validate_schedule_snapshot(snapshot: ScheduleSnapshot) -> None:
 
 
 def _validate_snapshot_basic_fields(snapshot: ScheduleSnapshot) -> ZoneInfo:
+    if snapshot.category is not None and not isinstance(snapshot.category, ScheduleCategory):
+        _validation_error("category has an unsupported value", field="category")
     if not snapshot.title.strip() or len(snapshot.title) > 255:
         _validation_error("title must contain 1 to 255 characters", field="title")
     if not snapshot.timezone.strip() or len(snapshot.timezone) > 64:

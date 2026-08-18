@@ -1,9 +1,10 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
-import type {
-  CloudScheduleSnapshot,
-  ScheduleOccurrenceOverrideSnapshot,
-  ScheduleSnapshot,
+import {
+  SCHEDULE_CATEGORIES,
+  type CloudScheduleSnapshot,
+  type ScheduleOccurrenceOverrideSnapshot,
+  type ScheduleSnapshot,
 } from '../../../contracts/schedule';
 import {
   ScheduleLocalRepository,
@@ -345,6 +346,7 @@ function isValidSchedule(schedule: ScheduleSnapshot): boolean {
   const reminderTrigger = parseIsoInstant(schedule.reminder_trigger_at);
   if (
     !['time', 'location'].includes(schedule.schedule_type) ||
+    (schedule.category !== null && !SCHEDULE_CATEGORIES.includes(schedule.category)) ||
     !['once', 'recurring'].includes(schedule.schedule_kind) ||
     !['active', 'deleted'].includes(schedule.status) ||
     schedule.id.trim().length === 0 ||
@@ -617,6 +619,7 @@ function toCloudRow(schedule: ScheduleSnapshot): CloudScheduleRow {
     account_id: schedule.account_id,
     schedule_type: schedule.schedule_type,
     schedule_kind: schedule.schedule_kind,
+    category: schedule.category,
     title: schedule.title,
     is_all_day: schedule.is_all_day ? 1 : 0,
     start_time: schedule.start_time,

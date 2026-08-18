@@ -1,5 +1,5 @@
 import initSqlJs, { type SqlJsStatic } from 'sql.js';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ScheduleLocalRepository,
@@ -19,6 +19,7 @@ function cloudSchedule(overrides: Partial<CloudScheduleRow> = {}): CloudSchedule
     account_id: 'account-a',
     schedule_type: 'time',
     schedule_kind: 'once',
+    category: 'work',
     title: 'Original title',
     is_all_day: 0,
     start_time: '2026-08-12T07:00:00Z',
@@ -87,11 +88,42 @@ describe('ScheduleLocalRepository SQLite behavior', () => {
     ]);
   });
 
+  it('initializes the schema when SQLite returns no user version row', async () => {
+    const emptyVersionDatabase = new SqlJsExpoDatabase(new sql.Database());
+    const sqliteDatabase = emptyVersionDatabase.asSQLiteDatabase();
+    vi.spyOn(sqliteDatabase, 'getFirstAsync').mockResolvedValueOnce(null);
+
+    try {
+      await migrateScheduleDatabase(sqliteDatabase);
+
+      const version = await emptyVersionDatabase.getFirstAsync<{ user_version: number }>(
+        'PRAGMA user_version',
+      );
+      expect(version?.user_version).toBe(CURRENT_DATABASE_VERSION);
+    } finally {
+      emptyVersionDatabase.close();
+    }
+  });
+
+  it('rejects a database version newer than the supported schema', async () => {
+    const futureDatabase = new SqlJsExpoDatabase(new sql.Database());
+    try {
+      await futureDatabase.execAsync('PRAGMA user_version = 3');
+
+      await expect(migrateScheduleDatabase(futureDatabase.asSQLiteDatabase())).rejects.toThrow(
+        'Unsupported Timeflow database version 3',
+      );
+    } finally {
+      futureDatabase.close();
+    }
+  });
+
   it('inserts a cloud schedule with safe local runtime defaults', async () => {
     expect(await repository.applyCloudSchedule(cloudSchedule())).toBe(true);
 
     const stored = await repository.getSchedule('account-a', 'schedule-a');
     expect(stored).toMatchObject({
+      category: 'work',
       title: 'Original title',
       cloud_revision: 1,
       reminder_disposition_state: null,
@@ -102,6 +134,52 @@ describe('ScheduleLocalRepository SQLite behavior', () => {
       sync_status: 'synced',
       status: 'active',
     });
+  });
+
+  it('migrates version 1 schedules to a null category without deleting rows', async () => {
+    const legacyDatabase = new SqlJsExpoDatabase(new sql.Database());
+    try {
+      await legacyDatabase.execAsync(`
+        CREATE TABLE local_schedules (
+          id TEXT PRIMARY KEY NOT NULL,
+          title TEXT NOT NULL
+        );
+        INSERT INTO local_schedules (id, title) VALUES ('legacy-a', 'Legacy schedule');
+        PRAGMA user_version = 1;
+      `);
+
+      await migrateScheduleDatabase(legacyDatabase.asSQLiteDatabase());
+
+      const row = await legacyDatabase.getFirstAsync<{ category: string | null; title: string }>(
+        `SELECT category, title FROM local_schedules WHERE id = 'legacy-a'`,
+      );
+      const version = await legacyDatabase.getFirstAsync<{ user_version: number }>(
+        'PRAGMA user_version',
+      );
+      expect(row).toEqual({ category: null, title: 'Legacy schedule' });
+      expect(version?.user_version).toBe(2);
+    } finally {
+      legacyDatabase.close();
+    }
+  });
+
+  it('persists a null cloud category without normalizing it to other', async () => {
+    await expect(repository.applyCloudSchedule(cloudSchedule({ category: null }))).resolves.toBe(
+      true,
+    );
+
+    await expect(repository.getSchedule('account-a', 'schedule-a')).resolves.toMatchObject({
+      category: null,
+    });
+  });
+
+  it('rejects a category outside the shared enum at the SQLite boundary', async () => {
+    await expect(
+      repository.applyCloudSchedule(
+        cloudSchedule({ category: 'unsupported' as CloudScheduleRow['category'] }),
+      ),
+    ).rejects.toThrow();
+    expect(await repository.getSchedule('account-a', 'schedule-a')).toBeNull();
   });
 
   it('applies cloud fields without overwriting device runtime state', async () => {

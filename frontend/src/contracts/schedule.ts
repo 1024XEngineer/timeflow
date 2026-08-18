@@ -1,5 +1,18 @@
 export type ScheduleType = 'time' | 'location';
 
+export const SCHEDULE_CATEGORIES = [
+  'work',
+  'study',
+  'exercise',
+  'entertainment',
+  'social',
+  'rest',
+  'personal',
+  'other',
+] as const;
+
+export type ScheduleCategory = (typeof SCHEDULE_CATEGORIES)[number];
+
 export type ScheduleKind = 'once' | 'recurring';
 
 export type RecurringDeleteScope = 'this_occurrence' | 'this_and_future' | 'entire_series';
@@ -21,6 +34,7 @@ export interface ScheduleSnapshot {
   account_id: string;
   schedule_type: ScheduleType;
   schedule_kind: ScheduleKind;
+  category: ScheduleCategory | null;
   title: string;
   is_all_day: boolean;
   start_time: string | null;

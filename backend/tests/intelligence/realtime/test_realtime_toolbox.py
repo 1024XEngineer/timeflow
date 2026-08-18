@@ -176,6 +176,34 @@ def test_every_registered_tool_has_a_name_and_parameters() -> None:
         assert tool["function"]["parameters"]["type"] == "object"
 
 
+def test_schedule_create_schema_does_not_expose_category() -> None:
+    schemas = {tool["function"]["name"]: tool for tool in refusing_toolbox().tools()}
+    properties = schemas["schedule_create"]["function"]["parameters"]["properties"]
+
+    assert set(properties) == {
+        "schedule_type",
+        "schedule_kind",
+        "title",
+        "is_all_day",
+        "start_time",
+        "end_time",
+        "timezone",
+        "recurrence_rule",
+        "location_name",
+        "latitude",
+        "longitude",
+        "reminder_type",
+        "reminder_trigger_at",
+        "reminder_offset_minutes",
+        "reminder_strength",
+    }
+    assert "category" not in schemas["schedule_query"]["function"]["parameters"]["properties"]
+    update_properties = schemas["schedule_update"]["function"]["parameters"]["properties"]
+    assert "category" not in update_properties
+    assert "category" not in update_properties["changes"]["properties"]
+    assert "category" not in schemas["schedule_delete"]["function"]["parameters"]["properties"]
+
+
 def test_a_tool_that_is_not_offered_is_refused() -> None:
     result = run("schedule_teleport", {})
     assert json.loads(result.output)["status"] == "failed"
@@ -404,8 +432,10 @@ def test_a_committed_write_speaks_the_local_time_and_hides_the_audit_fields() ->
     payload = json.loads(result.output)
     assert payload["status"] == "applied"
     assert payload["schedule"]["starts_at_local"] == "2026-09-08 15:00"
+    assert "category" not in payload["schedule"]
     assert result.outcome is not None
     assert result.outcome["operation"] == "create_schedule"
+    assert result.outcome["schedule"]["category"] is None
     # The client is not told which account the row belongs to, nor when it was audited.
     assert "account_id" not in result.outcome["schedule"]
     assert "created_at" not in result.outcome["schedule"]

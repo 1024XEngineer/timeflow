@@ -339,7 +339,30 @@ def test_create_schedule_returns_the_committed_cloud_snapshot() -> None:
     assert snapshot.revision == 1
     assert snapshot.created_at == NOW
     assert snapshot.updated_at == NOW
+    assert snapshot.category is None
     assert store.schedules[snapshot.id] == snapshot
+
+
+def test_update_rejects_an_existing_snapshot_with_an_invalid_category() -> None:
+    service, store = _service()
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+    invalid = replace(created, category="unsupported")  # type: ignore[arg-type]
+    store.schedules[created.id] = invalid
+
+    error = _assert_error(
+        ScheduleErrorCode.VALIDATION_FAILED,
+        lambda: service.update_schedule(
+            account_id="account-a",
+            command=UpdateScheduleCommand(
+                schedule_id=created.id,
+                expected_revision=created.revision,
+                changes={"title": "Must not persist"},
+            ),
+        ),
+    )
+
+    assert error.field == "category"
+    assert store.schedules[created.id] == invalid
 
 
 @pytest.mark.parametrize(
