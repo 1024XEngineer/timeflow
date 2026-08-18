@@ -70,8 +70,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${EXPO_PUBLIC_API_URL}" ]; then
-            echo "Set repository variable EXPO_PUBLIC_API_URL to a publicly reachable HTTP API, e.g. https://api.example.com/api/v1" >&2
-            exit 1
+            echo "EXPO_PUBLIC_API_URL is unset; APK will keep localhost defaults."
+            exit 0
           fi
           python3 <<'PY'
           import os
@@ -107,10 +107,12 @@ jobs:
           ORG_GRADLE_PROJECT_reactNativeArchitectures: arm64-v8a,x86_64
         run: |
           set -euo pipefail
-          set -a
-          # shellcheck disable=SC1091
-          . .env
-          set +a
+          if [ -f .env ]; then
+            set -a
+            # shellcheck disable=SC1091
+            . .env
+            set +a
+          fi
           export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           export ANDROID_SDK_ROOT="$ANDROID_HOME"
           printf 'sdk.dir=%s\n' "$ANDROID_HOME" > android/local.properties
