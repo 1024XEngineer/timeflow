@@ -167,6 +167,14 @@ class ScheduleOccurrenceOverrideSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class AccountScheduleSnapshot:
+    """All persisted schedules and occurrence overrides for one account."""
+
+    schedules: tuple[ScheduleSnapshot, ...]
+    occurrence_overrides: tuple[ScheduleOccurrenceOverrideSnapshot, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class CreateScheduleCommand:
     """Structured, user-confirmed input used to create a schedule."""
 
@@ -241,6 +249,7 @@ class ScheduleSearchResult:
 
 
 __all__ = [
+    "AccountScheduleSnapshot",
     "CreateScheduleCommand",
     "DeleteOnceScheduleCommand",
     "DeleteRecurringScheduleCommand",
