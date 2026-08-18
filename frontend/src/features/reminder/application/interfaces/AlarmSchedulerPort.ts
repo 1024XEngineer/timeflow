@@ -36,6 +36,8 @@ export interface AlarmSchedulerPort {
   stopRinging?(): Promise<void>;
   /** 订阅原生响铃/停铃事件；无原生桥时可不实现。 */
   subscribe?(listener: (event: AlarmNativeEvent) => void): () => void;
-  /** 拉取并清空进程外写入的处置状态（冷启动补水）。 */
-  consumeNativeDispositions?(): Promise<readonly AlarmNativeDisposition[]>;
+  /** 只读取进程外写入的处置状态（冷启动补水），不清空原生缓冲区。 */
+  peekNativeDispositions?(): Promise<readonly AlarmNativeDisposition[]>;
+  /** 确认对应 schedule_id 已经在 JS 侧落盘成功，原生缓冲区才真正删除这批记录。 */
+  ackNativeDispositions?(scheduleIds: readonly string[]): Promise<void>;
 }

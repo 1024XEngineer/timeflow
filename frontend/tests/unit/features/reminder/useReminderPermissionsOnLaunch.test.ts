@@ -61,6 +61,7 @@ function createDevice(
       return true;
     }),
     openSettings: jest.fn(async () => true),
+    onAppActive: jest.fn(() => () => {}),
   };
   return device;
 }

@@ -765,7 +765,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   }
 
   private async hydrateNativeDispositions(): Promise<void> {
-    const rows = await this.dependencies.alarms.consumeNativeDispositions?.();
+    const rows = await this.dependencies.alarms.peekNativeDispositions?.();
     if (rows == null || rows.length === 0) return;
 
     for (const row of rows) {
@@ -779,6 +779,10 @@ export class LocalReminderApplication implements ReminderApplicationPort {
       }
       await this.acknowledgeNativeFire(row.schedule_id, row.updated_at);
     }
+    // ack 放在整批落盘都成功之后：peek 不清空原生缓冲区，中途某一条抛错就整批
+    // 不 ack，下次冷启动重新 peek 到、重放同样的 confirm/snooze/acknowledgeNativeFire
+    // ——这几个都是幂等的状态转换，重放安全，比"读完立刻清空"丢数据的窗口好。
+    await this.dependencies.alarms.ackNativeDispositions?.(rows.map((row) => row.schedule_id));
   }
 
   private async cancelScheduledAlarm(scheduleId: string): Promise<void> {
