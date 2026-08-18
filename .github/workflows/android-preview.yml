@@ -1,0 +1,139 @@
+# Unprivileged Android PR build. This workflow runs PR-controlled code
+# (checkout, npm, Expo config plugins, generated Gradle) and must never
+# reference APPETIZE_API_TOKEN or any other repository secret.
+# Upload and PR comments live in android-preview-publish.yml (workflow_run).
+name: Android Preview
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "20.20.2"
+  JAVA_VERSION: "17"
+
+jobs:
+  build:
+    name: Build preview APK
+    # Drafts wait for ready_for_review. Fork PRs still skip to save CI minutes;
+    # they never receive secrets because this workflow does not read any.
+    if: >
+      github.event.pull_request.draft == false
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      # android/ is gitignored; generate it from app.config.js on the runner.
+      - name: Generate Android project
+        env:
+          EXPO_NO_GIT_STATUS: "1"
+        run: npx expo prebuild --platform android --clean --non-interactive --no-install
+
+      # Debug APKs set BuildConfig.DEBUG and still contact Metro at runtime,
+      # which Appetize cannot reach. Release embeds JS and loads it offline.
+      # Expo's prebuild template signs release with the debug keystore.
+      - name: Bake Appetize backend URLs
+        env:
+          EXPO_PUBLIC_API_URL: ${{ vars.EXPO_PUBLIC_API_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${EXPO_PUBLIC_API_URL}" ]; then
+            echo "Set repository variable EXPO_PUBLIC_API_URL to a publicly reachable HTTP API, e.g. https://api.example.com/api/v1" >&2
+            exit 1
+          fi
+          python3 <<'PY'
+          import os
+          from pathlib import Path
+          from urllib.parse import urlparse, urlunparse
+
+          api = os.environ["EXPO_PUBLIC_API_URL"].strip()
+          parsed = urlparse(api)
+          if parsed.scheme not in ("http", "https") or not parsed.netloc:
+              raise SystemExit(f"invalid EXPO_PUBLIC_API_URL: {api}")
+          ws_scheme = "wss" if parsed.scheme == "https" else "ws"
+          path = parsed.path.rstrip("/")
+          ws_path = path[: -len("/api/v1")] + "/ws" if path.endswith("/api/v1") else "/ws"
+          ws = urlunparse((ws_scheme, parsed.netloc, ws_path, "", "", ""))
+          Path(".env").write_text(
+              "\n".join(
+                  [
+                      f"EXPO_PUBLIC_API_URL={api}",
+                      f"EXPO_PUBLIC_WS_URL={ws}",
+                      "EXPO_PUBLIC_DEVICE_ID=appetize-preview",
+                      "",
+                  ]
+              ),
+              encoding="utf-8",
+          )
+          print(f"Preview API: {api}")
+          print(f"Preview WS: {ws}")
+          PY
+
+      - name: Assemble release APK
+        env:
+          # Cover Appetize ARM devices and x86_64 emulator images.
+          ORG_GRADLE_PROJECT_reactNativeArchitectures: arm64-v8a,x86_64
+        run: |
+          set -euo pipefail
+          set -a
+          # shellcheck disable=SC1091
+          . .env
+          set +a
+          export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          printf 'sdk.dir=%s\n' "$ANDROID_HOME" > android/local.properties
+          chmod +x android/gradlew
+          (cd android && ./gradlew :app:assembleRelease --build-cache --stacktrace)
+
+      - name: Locate preview APK
+        id: apk
+        run: |
+          set -euo pipefail
+          apk="$GITHUB_WORKSPACE/frontend/android/app/build/outputs/apk/release/app-release.apk"
+          if [ ! -f "$apk" ]; then
+            echo "Expected APK missing: $apk" >&2
+            find "$GITHUB_WORKSPACE/frontend/android/app/build/outputs" -type f -name '*.apk' >&2 || true
+            exit 1
+          fi
+          echo "path=$apk" >> "$GITHUB_OUTPUT"
+          ls -lh "$apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-preview-apk
+          path: frontend/android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 7
