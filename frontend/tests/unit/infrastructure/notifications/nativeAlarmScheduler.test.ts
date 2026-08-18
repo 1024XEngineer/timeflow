@@ -173,7 +173,7 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
       schedule_id: 'schedule-1',
       scheduled: true,
     });
-    expect(native.schedule).toHaveBeenCalledWith(Date.parse(FUTURE), '晨会');
+    expect(native.schedule).toHaveBeenCalledWith(Date.parse(FUTURE), '晨会', 'schedule-1');
   });
 
   it('maps a native schedule rejection to unscheduled', async () => {
@@ -247,11 +247,12 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
       { alarm_id: 'alarm-later', schedule_id: 'later', scheduled: true },
     ]);
     expect(native.schedule).toHaveBeenCalledTimes(2);
-    expect(native.schedule).toHaveBeenNthCalledWith(1, Date.parse(FUTURE), '晨会');
+    expect(native.schedule).toHaveBeenNthCalledWith(1, Date.parse(FUTURE), '晨会', 'ok');
     expect(native.schedule).toHaveBeenNthCalledWith(
       2,
       Date.parse('2026-08-13T10:00:00.000Z'),
       '午会',
+      'later',
     );
   });
 });

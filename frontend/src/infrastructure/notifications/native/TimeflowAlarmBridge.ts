@@ -9,7 +9,11 @@ export type NativeAlarmPermissionStatus = {
 };
 
 type TimeflowAlarmNative = {
-  schedule: (triggerAtMillis: number, title?: string | null) => Promise<{ alarmId: string }>;
+  schedule: (
+    triggerAtMillis: number,
+    title?: string | null,
+    scheduleId?: string | null,
+  ) => Promise<{ alarmId: string }>;
   cancel: (alarmId: string) => Promise<boolean>;
   getPermissionStatus: () => Promise<NativeAlarmPermissionStatus>;
   openPermissionSettings: (
@@ -27,10 +31,11 @@ export function isTimeflowAlarmAvailable(): boolean {
 export async function nativeScheduleAlarm(
   triggerAtMillis: number,
   title: string,
+  scheduleId?: string,
 ): Promise<string | null> {
   if (!isTimeflowAlarmAvailable() || NativeAlarm == null) return null;
   try {
-    const result = await NativeAlarm.schedule(triggerAtMillis, title);
+    const result = await NativeAlarm.schedule(triggerAtMillis, title, scheduleId ?? '');
     const alarmId = result?.alarmId;
     if (alarmId == null || alarmId.length === 0) return null;
     return alarmId;
