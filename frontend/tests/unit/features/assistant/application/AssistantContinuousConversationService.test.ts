@@ -252,6 +252,23 @@ describe('AssistantContinuousConversationService', () => {
     ]);
   });
 
+  it('does not create a history turn when a reply arrives before any transcript', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '好的' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getReplyText()).toBe('好的');
+    expect(service.getTurns()).toEqual([]);
+  });
+
   it('clears turn history when a new call starts', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });

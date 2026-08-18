@@ -131,4 +131,20 @@ describe('AssistantVoiceOverlay layout', () => {
 
     expect(screen.getByText('已打断')).toBeTruthy();
   });
+
+  it('shows a generic paused label instead of reply content', () => {
+    mockPttApplication = createApplication();
+    const continuousApplication = createApplication();
+    mockCallState = { conversationId: 'c1', phase: 'paused' };
+    render(
+      <AssistantVoiceOverlay
+        continuousApplication={continuousApplication}
+        pushToTalkApplication={mockPttApplication}
+      />,
+    );
+
+    fireEvent.press(screen.getByLabelText('进入免提通话'));
+
+    expect(screen.getByText('已暂停，点一下继续')).toBeTruthy();
+  });
 });
