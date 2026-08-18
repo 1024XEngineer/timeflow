@@ -1,3 +1,26 @@
+diff --git a/node_modules/@irvingouj/expo-audio-stream/android/build.gradle b/node_modules/@irvingouj/expo-audio-stream/android/build.gradle
+index c3038e4..dde8fe9 100644
+--- a/node_modules/@irvingouj/expo-audio-stream/android/build.gradle
++++ b/node_modules/@irvingouj/expo-audio-stream/android/build.gradle
+@@ -63,6 +63,18 @@ android {
+     kotlinOptions {
+       jvmTarget = JavaVersion.VERSION_11.majorVersion
+     }
++  } else {
++    // AGP>=8 时 javac 走 AGP 自己的默认值（17），但这个模块的 buildscript 单独
++    // pin 了一份 Kotlin Gradle Plugin，没有显式 jvmTarget 就会用跑 Gradle 的
++    // JDK（这台机器是 21）当目标，跟 javac 对不上，编译直接失败。
++    compileOptions {
++      sourceCompatibility JavaVersion.VERSION_17
++      targetCompatibility JavaVersion.VERSION_17
++    }
++
++    kotlinOptions {
++      jvmTarget = JavaVersion.VERSION_17.majorVersion
++    }
+   }
+ 
+   namespace "expo.modules.audiostream"
 diff --git a/node_modules/@irvingouj/expo-audio-stream/android/src/main/java/expo/modules/audiostream/AudioRecorderManager.kt b/node_modules/@irvingouj/expo-audio-stream/android/src/main/java/expo/modules/audiostream/AudioRecorderManager.kt
 index 9ee227e..0373656 100644
 --- a/node_modules/@irvingouj/expo-audio-stream/android/src/main/java/expo/modules/audiostream/AudioRecorderManager.kt
