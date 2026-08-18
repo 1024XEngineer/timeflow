@@ -182,17 +182,17 @@ jobs:
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const body = [
               marker,
-              '## Android 预览（Appetize）',
+              '## Android preview (Appetize)',
               '',
-              '在浏览器中打开并操作本次提交构建的 Debug APK（无需安装）：',
+              'Open and interact with the debug APK from this commit in your browser (no install required):',
               '',
-              `**[打开预览](${previewUrl})**`,
+              `**[Open preview](${previewUrl})**`,
               '',
-              `- 提交：[\`${shortSha}\`](${headRepo}/commit/${sha})`,
-              `- Build ID：\`${buildId}\``,
-              `- 工作流：[本次运行](${runUrl})`,
+              `- Commit: [\`${shortSha}\`](${headRepo}/commit/${sha})`,
+              `- Build ID: \`${buildId}\``,
+              `- Workflow: [this run](${runUrl})`,
               '',
-              '新的提交会更新本条评论中的链接；请勿手动编辑。',
+              'New commits update the link in this comment. Please do not edit it manually.',
               '',
             ].join('\n');
 
