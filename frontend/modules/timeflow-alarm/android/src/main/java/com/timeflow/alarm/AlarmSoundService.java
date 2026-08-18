@@ -39,13 +39,14 @@ public final class AlarmSoundService extends Service {
     private boolean destroyed;
     private File bundledSpeechFile;
     private WindowManager overlayWindowManager;
-    private View overlayView;
-    private String alarmId;
-    private String scheduleId;
-    private String alarmTitle;
+    /** 包内可见（而非 private）：AlarmSoundServiceTest 需要直接读取当前展示/排队状态。 */
+    View overlayView;
+    String alarmId;
+    String scheduleId;
+    String alarmTitle;
     private int requestCode;
     /** 已经通知过 JS "fired" 的 alarmId 集合；service 实例可能被多个不同闹钟复用。 */
-    private final Set<String> firedNotifiedAlarmIds = new HashSet<>();
+    final Set<String> firedNotifiedAlarmIds = new HashSet<>();
     /**
      * 界面/音频被占用时到达的闹钟排在这里，而不是被 overlayView != null 的检查直接
      * 丢弃——每条闹钟一进 onStartCommand 就已经从持久化列表删除、也通知过 JS
@@ -53,7 +54,7 @@ public final class AlarmSoundService extends Service {
      * disposition 卡在 pending 上再也等不到确认/延后。confirm/snooze 处理完当前
      * 这条后从队首取下一条顶上，队列空了才真正 stopSelf()。
      */
-    private final ArrayDeque<AlarmContract.ExtractedExtras> pendingQueue = new ArrayDeque<>();
+    final ArrayDeque<AlarmContract.ExtractedExtras> pendingQueue = new ArrayDeque<>();
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -109,8 +110,12 @@ public final class AlarmSoundService extends Service {
         }
     }
 
-    /** 当前这条处理完了：队列里还有就顶上下一条，没有才真正停服务。 */
-    private void advanceOrStop() {
+    /**
+     * 当前这条处理完了：队列里还有就顶上下一条，没有才真正停服务。
+     * 包内可见（而非 private）：AlarmSoundServiceTest 直接调用来模拟"用户处理完当前这条"，
+     * 不经过真实悬浮窗按钮点击链路。
+     */
+    void advanceOrStop() {
         AlarmContract.ExtractedExtras next = pendingQueue.poll();
         if (next == null) {
             stopSelf();
