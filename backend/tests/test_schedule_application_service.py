@@ -346,7 +346,7 @@ def test_create_schedule_returns_the_committed_cloud_snapshot() -> None:
     assert snapshot.revision == 1
     assert snapshot.created_at == NOW
     assert snapshot.updated_at == NOW
-    assert snapshot.category is ScheduleCategory.OTHER
+    assert snapshot.category is None
     assert store.schedules[snapshot.id] == snapshot
 
 
@@ -380,7 +380,7 @@ def test_classification_failure_never_blocks_schedule_creation(
 
     snapshot = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
 
-    assert snapshot.category is ScheduleCategory.OTHER
+    assert snapshot.category is None
     assert store.schedules[snapshot.id] == snapshot
     assert llm.calls == 1
 
@@ -409,7 +409,7 @@ def test_missing_category_llm_configuration_never_blocks_schedule_creation(
 
     snapshot = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
 
-    assert snapshot.category is ScheduleCategory.OTHER
+    assert snapshot.category is None
     assert store.schedules[snapshot.id] == snapshot
 
 
@@ -426,6 +426,16 @@ def test_recurring_schedule_is_classified_once_on_creation() -> None:
     ).schedules[0]
 
     assert snapshot.category is ScheduleCategory.WORK
+    assert llm.calls == 1
+
+
+def test_explicit_other_from_llm_is_saved_as_a_successful_business_category() -> None:
+    llm = _FakeJsonLlm('{"category":"other"}')
+    service, _ = _service(category_classifier=LlmScheduleCategoryClassifier(llm))
+
+    snapshot = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert snapshot.category is ScheduleCategory.OTHER
     assert llm.calls == 1
 
 
@@ -447,28 +457,45 @@ def test_schedule_update_preserves_category_without_reclassification() -> None:
     assert llm.calls == 1
 
 
+def test_schedule_update_preserves_a_null_category_without_reclassification() -> None:
+    service, _ = _service()
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    updated = service.update_schedule(
+        account_id="account-a",
+        command=UpdateScheduleCommand(
+            schedule_id=created.id,
+            expected_revision=created.revision,
+            changes={"title": "修改后的标题"},
+        ),
+    ).schedules[0]
+
+    assert created.category is None
+    assert updated.category is None
+
+
 def test_service_catches_an_unexpected_classifier_exception() -> None:
     class BrokenClassifier:
-        def classify(self, command: CreateScheduleCommand) -> ScheduleCategory:
+        def classify(self, command: CreateScheduleCommand) -> ScheduleCategory | None:
             raise RuntimeError("classifier bug")
 
     service, _ = _service(category_classifier=BrokenClassifier())
 
     snapshot = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
 
-    assert snapshot.category is ScheduleCategory.OTHER
+    assert snapshot.category is None
 
 
 def test_service_rejects_an_invalid_classifier_return_without_blocking_creation() -> None:
     class InvalidClassifier:
-        def classify(self, command: CreateScheduleCommand) -> ScheduleCategory:
+        def classify(self, command: CreateScheduleCommand) -> ScheduleCategory | None:
             return "work"  # type: ignore[return-value]
 
     service, _ = _service(category_classifier=InvalidClassifier())
 
     snapshot = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
 
-    assert snapshot.category is ScheduleCategory.OTHER
+    assert snapshot.category is None
 
 
 @pytest.mark.parametrize(

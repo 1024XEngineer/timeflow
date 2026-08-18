@@ -230,7 +230,9 @@ def test_missing_category_llm_configuration_logs_fallback_without_blocking_start
         application = _build_with_environment("production", audio_configured=True)
 
     assert application is not None
-    assert "schedule category classification is not configured; using other" in caplog.text
+    assert (
+        "schedule category classification is not configured; leaving category null" in caplog.text
+    )
     assert "key-for-test" not in caplog.text
 
 

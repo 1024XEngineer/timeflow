@@ -106,7 +106,7 @@ describe('ScheduleLocalRepository SQLite behavior', () => {
     });
   });
 
-  it('migrates version 1 schedules to category other without deleting rows', async () => {
+  it('migrates version 1 schedules to a null category without deleting rows', async () => {
     const legacyDatabase = new SqlJsExpoDatabase(new sql.Database());
     try {
       await legacyDatabase.execAsync(`
@@ -120,17 +120,27 @@ describe('ScheduleLocalRepository SQLite behavior', () => {
 
       await migrateScheduleDatabase(legacyDatabase.asSQLiteDatabase());
 
-      const row = await legacyDatabase.getFirstAsync<{ category: string; title: string }>(
+      const row = await legacyDatabase.getFirstAsync<{ category: string | null; title: string }>(
         `SELECT category, title FROM local_schedules WHERE id = 'legacy-a'`,
       );
       const version = await legacyDatabase.getFirstAsync<{ user_version: number }>(
         'PRAGMA user_version',
       );
-      expect(row).toEqual({ category: 'other', title: 'Legacy schedule' });
+      expect(row).toEqual({ category: null, title: 'Legacy schedule' });
       expect(version?.user_version).toBe(2);
     } finally {
       legacyDatabase.close();
     }
+  });
+
+  it('persists a null cloud category without normalizing it to other', async () => {
+    await expect(repository.applyCloudSchedule(cloudSchedule({ category: null }))).resolves.toBe(
+      true,
+    );
+
+    await expect(repository.getSchedule('account-a', 'schedule-a')).resolves.toMatchObject({
+      category: null,
+    });
   });
 
   it('rejects a category outside the shared enum at the SQLite boundary', async () => {

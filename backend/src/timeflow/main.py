@@ -223,7 +223,7 @@ def _build_realtime_agent(
 
         if not settings.openai_is_configured():
             logger.warning(
-                "schedule category classification is not configured; using other",
+                "schedule category classification is not configured; leaving category null",
                 extra={
                     "needs": (
                         "TIMEFLOW_OPENAI_BASE_URL, TIMEFLOW_OPENAI_API_KEY, "

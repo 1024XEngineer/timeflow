@@ -32,7 +32,7 @@ describe('LocalScheduleWriter', () => {
     );
   });
 
-  it('defaults a legacy command result without category to other', async () => {
+  it('preserves an unclassified legacy command result as null', async () => {
     const applyCloudSchedule = jest.fn(async () => true);
     const repository = { applyCloudSchedule } as unknown as ScheduleLocalRepository;
     const writer = new LocalScheduleWriter(repository);
@@ -49,7 +49,7 @@ describe('LocalScheduleWriter', () => {
       },
     });
 
-    expect(applyCloudSchedule).toHaveBeenCalledWith(expect.objectContaining({ category: 'other' }));
+    expect(applyCloudSchedule).toHaveBeenCalledWith(expect.objectContaining({ category: null }));
   });
 
   it('rejects an unsupported category before local persistence', async () => {

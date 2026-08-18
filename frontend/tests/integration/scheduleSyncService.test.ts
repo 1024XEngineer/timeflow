@@ -134,6 +134,22 @@ describe('SqliteScheduleSyncService', () => {
     expect(await repository.getSchedule('account-a', 'schedule-a')).toBeNull();
   });
 
+  it('synchronizes a null category without converting it to other', async () => {
+    const result = await service.applyScheduleSnapshotToSqlite({
+      messageId: 'null-category',
+      accountId: 'account-a',
+      snapshot: {
+        schedules: [scheduleSnapshot({ category: null })],
+        occurrence_overrides: [],
+      },
+    });
+
+    expect(result.status).toBe('applied');
+    expect(await repository.getSchedule('account-a', 'schedule-a')).toMatchObject({
+      category: null,
+    });
+  });
+
   it('preserves local reminder runtime while applying newer cloud fields and soft deletion', async () => {
     await service.applyScheduleSnapshotToSqlite({
       messageId: 'initial',

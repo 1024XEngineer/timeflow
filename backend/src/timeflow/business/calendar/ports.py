@@ -16,7 +16,7 @@ from timeflow.business.calendar.contracts import (
 class ScheduleCategoryClassifier(Protocol):
     """Classify one already-structured create command by its schedule semantics."""
 
-    def classify(self, command: CreateScheduleCommand) -> ScheduleCategory: ...
+    def classify(self, command: CreateScheduleCommand) -> ScheduleCategory | None: ...
 
 
 class ScheduleRevisionConflictError(RuntimeError):

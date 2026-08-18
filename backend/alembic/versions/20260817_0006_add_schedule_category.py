@@ -18,21 +18,20 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    """Backfill existing schedules as other and constrain future values."""
+    """Add a nullable category; existing schedules remain unclassified."""
 
     op.add_column(
         "schedules",
         sa.Column(
             "category",
             sa.String(length=16),
-            server_default=sa.text("'other'"),
-            nullable=False,
+            nullable=True,
         ),
     )
     op.create_check_constraint(
         "ck_schedules_category",
         "schedules",
-        "category IN ('work', 'study', 'exercise', 'entertainment', "
+        "category IS NULL OR category IN ('work', 'study', 'exercise', 'entertainment', "
         "'social', 'rest', 'personal', 'other')",
     )
 

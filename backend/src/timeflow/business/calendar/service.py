@@ -165,7 +165,7 @@ class ScheduleApplicationService(ScheduleAgentService):
             revision=1,
             created_at=now,
             updated_at=now,
-            category=ScheduleCategory.OTHER,
+            category=None,
             start_time=command.start_time,
             end_time=command.end_time,
             recurrence_rule=_normalize_optional_recurrence_rule(command.recurrence_rule),
@@ -185,20 +185,22 @@ class ScheduleApplicationService(ScheduleAgentService):
             unit_of_work.commit()
         return ScheduleMutationResult(schedules=(persisted,))
 
-    def _classify_category(self, command: CreateScheduleCommand) -> ScheduleCategory:
+    def _classify_category(self, command: CreateScheduleCommand) -> ScheduleCategory | None:
         if self._category_classifier is None:
-            return ScheduleCategory.OTHER
+            return None
         try:
             category = self._category_classifier.classify(command)
         except Exception as exc:
             logger.warning(
-                "schedule category classifier raised unexpectedly; using other",
+                "schedule category classifier raised unexpectedly; leaving category null",
                 extra={"error_type": type(exc).__name__},
             )
-            return ScheduleCategory.OTHER
+            return None
         if not isinstance(category, ScheduleCategory):
-            logger.warning("schedule category classifier returned an invalid value; using other")
-            return ScheduleCategory.OTHER
+            logger.warning(
+                "schedule category classifier returned an invalid value; leaving category null"
+            )
+            return None
         return category
 
     def find_schedules(
@@ -695,7 +697,7 @@ def _validate_update_patch(command: UpdateScheduleCommand) -> None:
 
 
 def _validate_snapshot(snapshot: ScheduleSnapshot) -> None:
-    if not isinstance(snapshot.category, ScheduleCategory):
+    if snapshot.category is not None and not isinstance(snapshot.category, ScheduleCategory):
         _validation_error("category has an unsupported value", field="category")
     if not snapshot.title.strip() or len(snapshot.title) > 255:
         _validation_error("title must contain 1 to 255 characters", field="title")

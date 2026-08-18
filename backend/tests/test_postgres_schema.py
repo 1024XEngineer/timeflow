@@ -23,7 +23,7 @@ EXPECTED_COLUMNS = {
         "account_id": ("VARCHAR(64)", False),
         "schedule_type": ("VARCHAR(16)", False),
         "schedule_kind": ("VARCHAR(16)", False),
-        "category": ("VARCHAR(16)", False),
+        "category": ("VARCHAR(16)", True),
         "title": ("VARCHAR(255)", False),
         "is_all_day": ("BOOLEAN", False),
         "start_time": ("TIMESTAMP WITH TIME ZONE", True),
@@ -152,7 +152,7 @@ def test_postgres_columns_match_document(postgres_engine: Engine) -> None:
 
     schedules = {column["name"]: column for column in inspector.get_columns("schedules")}
     assert "once" in schedules["schedule_kind"]["default"]
-    assert "other" in schedules["category"]["default"]
+    assert schedules["category"]["default"] is None
     assert schedules["is_all_day"]["default"] == "false"
     assert schedules["revision"]["default"] == "1"
 
@@ -244,7 +244,7 @@ def test_postgres_applies_schedule_server_defaults(
         )
     ).one()
 
-    assert row._tuple() == ("once", "other", False, 1)
+    assert row._tuple() == ("once", None, False, 1)
 
 
 @pytest.mark.parametrize(

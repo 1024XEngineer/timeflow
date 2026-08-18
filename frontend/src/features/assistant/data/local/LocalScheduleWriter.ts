@@ -1,4 +1,4 @@
-import { SCHEDULE_CATEGORIES } from '../../../../contracts/schedule';
+import { SCHEDULE_CATEGORIES, type ScheduleCategory } from '../../../../contracts/schedule';
 import type { CloudScheduleRow, ScheduleLocalRepository } from '../../../schedule/data';
 import type { LocalScheduleWriterPort } from '../../application/interfaces/LocalScheduleWriterPort';
 import type { AppliedCommand } from '../../domain/ConversationTurn';
@@ -89,13 +89,10 @@ function optionalNumber(value: unknown): number | null {
 
 function scheduleCategory(value: unknown): CloudScheduleRow['category'] {
   if (value === undefined || value === null) {
-    return 'other';
+    return null;
   }
-  if (
-    typeof value !== 'string' ||
-    !SCHEDULE_CATEGORIES.includes(value as CloudScheduleRow['category'])
-  ) {
+  if (typeof value !== 'string' || !SCHEDULE_CATEGORIES.includes(value as ScheduleCategory)) {
     throw new TypeError('command.result.schedule.category has an unsupported value');
   }
-  return value as CloudScheduleRow['category'];
+  return value as ScheduleCategory;
 }

@@ -92,6 +92,16 @@ def test_schedule_category_round_trips_through_the_repository(session: Session) 
     assert loaded.category is ScheduleCategory.STUDY
 
 
+def test_unclassified_schedule_category_round_trips_as_null(session: Session) -> None:
+    repository = ScheduleRepository(session)
+    persisted = repository.add_schedule(_schedule("schedule-unclassified", "account-a"))
+    loaded = repository.get_schedule(account_id="account-a", schedule_id="schedule-unclassified")
+
+    assert persisted.category is None
+    assert loaded is not None
+    assert loaded.category is None
+
+
 def test_schedule_table_rejects_an_unknown_category(session: Session) -> None:
     now = datetime.now(UTC)
     session.add(

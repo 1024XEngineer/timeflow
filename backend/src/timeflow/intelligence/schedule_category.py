@@ -15,18 +15,19 @@ logger = logging.getLogger(__name__)
 _SYSTEM_PROMPT = """Classify the schedule's content. Return JSON only in this exact shape:
 {"category":"work"}
 The category must be exactly one of: work, study, exercise, entertainment, social, rest,
-personal, other. Use other when the schedule meaning is uncertain. Do not add other fields.
+    personal, other. If the schedule meaning is understandable but does not reliably fit the first
+    seven categories, return other. Never return null and do not add other fields.
 Examples: product review meeting=work; study Go=study; run five kilometers=exercise;
 watch a movie=entertainment; dinner with friends=social; sleep=rest; haircut=personal."""
 
 
 class LlmScheduleCategoryClassifier(ScheduleCategoryClassifier):
-    """Classify a structured create command, degrading every failure to ``other``."""
+    """Classify a structured create command, degrading every failure to ``None``."""
 
     def __init__(self, llm: JsonLlmPort) -> None:
         self._llm = llm
 
-    def classify(self, command: CreateScheduleCommand) -> ScheduleCategory:
+    def classify(self, command: CreateScheduleCommand) -> ScheduleCategory | None:
         try:
             raw = self._llm.complete_json(
                 (
@@ -43,10 +44,10 @@ class LlmScheduleCategoryClassifier(ScheduleCategoryClassifier):
             return ScheduleCategory(category)
         except Exception as exc:
             logger.warning(
-                "schedule category classification failed; using other",
+                "schedule category classification failed; leaving category null",
                 extra={"error_type": type(exc).__name__},
             )
-            return ScheduleCategory.OTHER
+            return None
 
 
 def _classification_input(command: CreateScheduleCommand) -> str:

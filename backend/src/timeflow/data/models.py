@@ -48,7 +48,7 @@ class Schedule(Base):
             name="ck_schedules_schedule_kind",
         ),
         CheckConstraint(
-            "category IN ('work', 'study', 'exercise', 'entertainment', "
+            "category IS NULL OR category IN ('work', 'study', 'exercise', 'entertainment', "
             "'social', 'rest', 'personal', 'other')",
             name="ck_schedules_category",
         ),
@@ -159,9 +159,7 @@ class Schedule(Base):
     schedule_kind: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default=text("'once'")
     )
-    category: Mapped[str] = mapped_column(
-        String(16), nullable=False, server_default=text("'other'")
-    )
+    category: Mapped[str | None] = mapped_column(String(16), nullable=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     is_all_day: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

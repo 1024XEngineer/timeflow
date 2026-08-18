@@ -78,14 +78,14 @@ def test_classifier_accepts_every_supported_category(
     ],
     ids=["timeout", "provider-exception", "invalid-json", "unknown-enum", "empty"],
 )
-def test_classifier_falls_back_to_other_for_every_failure(
+def test_classifier_returns_null_for_every_failure(
     result: str | BaseException,
 ) -> None:
     llm = _FakeJsonLlm(result)
 
     category = LlmScheduleCategoryClassifier(llm).classify(_command("任意日程"))
 
-    assert category is ScheduleCategory.OTHER
+    assert category is None
     assert llm.calls == 1
 
 
@@ -94,13 +94,13 @@ def test_classifier_rejects_json_with_additional_fields() -> None:
         _FakeJsonLlm('{"category":"work","reason":"meeting"}')
     )
 
-    assert classifier.classify(_command("开会")) is ScheduleCategory.OTHER
+    assert classifier.classify(_command("开会")) is None
 
 
 def test_classifier_rejects_a_non_string_category() -> None:
     classifier = LlmScheduleCategoryClassifier(_FakeJsonLlm('{"category":7}'))
 
-    assert classifier.classify(_command("开会")) is ScheduleCategory.OTHER
+    assert classifier.classify(_command("开会")) is None
 
 
 def test_classifier_sends_only_structured_schedule_semantics() -> None:
