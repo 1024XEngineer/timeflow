@@ -65,8 +65,9 @@ describe('VoiceCallScreen', () => {
     expect(screen.getByText('谁参加')).toBeTruthy();
   });
 
-  it('shows no history section when the call has no turns yet', () => {
+  it('shows a placeholder in the history area when the call has no turns yet', () => {
     renderScreen({ turns: [] });
     expect(screen.queryByText('明天几点开会')).toBeNull();
+    expect(screen.getByText('对话开始后，这里会显示完整记录')).toBeTruthy();
   });
 });

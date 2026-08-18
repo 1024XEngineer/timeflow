@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import { StyleSheet } from 'react-native';
 
 import type { AssistantApplicationPort } from '../../../../../src/features/assistant/application/AssistantApplication';
+import type { ConversationTurnState } from '../../../../../src/features/assistant/domain/ConversationTurn';
 import { AssistantVoiceOverlay } from '../../../../../src/features/assistant/presentation/AssistantVoiceOverlay';
 
 jest.mock('../../../../../src/features/assistant/presentation/useAssistantConversation', () => ({
@@ -13,8 +14,9 @@ jest.mock('../../../../../src/features/assistant/presentation/useAssistantConver
     replyText: application === mockPttApplication ? '已创建' : null,
     soundLevel: null,
     startTurn: application.startTurn,
-    state: { phase: 'idle' as const },
+    state: application === mockPttApplication ? { phase: 'idle' as const } : mockCallState,
     togglePause: () => {},
+    turns: [],
   }),
 }));
 jest.mock('react-native-safe-area-context', () => ({
@@ -23,6 +25,7 @@ jest.mock('react-native-safe-area-context', () => ({
 
 let mockPttApplication: AssistantApplicationPort;
 let mockBottomInset = 0;
+let mockCallState: ConversationTurnState = { phase: 'idle' };
 const mockDismissReply = jest.fn<AssistantApplicationPort['dismissReply']>();
 
 function createApplication(): AssistantApplicationPort {
@@ -42,7 +45,12 @@ function createApplication(): AssistantApplicationPort {
 describe('AssistantVoiceOverlay layout', () => {
   beforeEach(() => {
     mockBottomInset = 0;
+    mockCallState = { phase: 'idle' };
     mockDismissReply.mockClear();
+  });
+
+  afterEach(() => {
+    mockCallState = { phase: 'idle' };
   });
 
   it('does not add a fullscreen reply dismiss target over the calendar', () => {
@@ -90,5 +98,37 @@ describe('AssistantVoiceOverlay layout', () => {
     expect(
       StyleSheet.flatten(screen.getByTestId('assistant-voice-overlay').props.style).paddingBottom,
     ).toBe(expectedPadding);
+  });
+
+  it('shows only a generic status label while replying, never the reply content', () => {
+    mockPttApplication = createApplication();
+    const continuousApplication = createApplication();
+    mockCallState = { conversationId: 'c1', phase: 'speaking' };
+    render(
+      <AssistantVoiceOverlay
+        continuousApplication={continuousApplication}
+        pushToTalkApplication={mockPttApplication}
+      />,
+    );
+
+    fireEvent.press(screen.getByLabelText('进入免提通话'));
+
+    expect(screen.getByText('回答中…')).toBeTruthy();
+  });
+
+  it('shows a generic "已打断" label when the reply is interrupted', () => {
+    mockPttApplication = createApplication();
+    const continuousApplication = createApplication();
+    mockCallState = { conversationId: 'c1', phase: 'interrupted' };
+    render(
+      <AssistantVoiceOverlay
+        continuousApplication={continuousApplication}
+        pushToTalkApplication={mockPttApplication}
+      />,
+    );
+
+    fireEvent.press(screen.getByLabelText('进入免提通话'));
+
+    expect(screen.getByText('已打断')).toBeTruthy();
   });
 });

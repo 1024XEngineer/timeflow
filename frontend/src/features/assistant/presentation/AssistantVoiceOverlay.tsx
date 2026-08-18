@@ -51,10 +51,11 @@ const PTT_BUSY_PHASES: ReadonlySet<ConversationTurnState['phase']> = new Set([
   'awaiting_result',
 ]);
 
-function titleFor(state: ConversationTurnState, replyText: string | null): string {
+// 只返回通用状态文案，不带具体说了什么/回复了什么——那些内容都在
+// VoiceCallScreen 的聊天记录区里，标题只负责报状态。
+function titleFor(state: ConversationTurnState): string {
   if (state.phase === 'asking') return state.speechText;
   if (state.phase === 'error') return state.message;
-  if (replyText !== null) return replyText;
   switch (state.phase) {
     case 'connecting':
       return '连接中…';
@@ -63,9 +64,9 @@ function titleFor(state: ConversationTurnState, replyText: string | null): strin
     case 'interrupted':
       return '已打断';
     case 'speaking':
-      return '正在回复…';
+      return '回答中…';
     case 'paused':
-      return '已暂停，点击圆圈继续';
+      return '已暂停，点一下继续';
     default:
       return '';
   }
@@ -113,7 +114,7 @@ export function AssistantVoiceOverlay({
         onEnd={() => void call.endTurn()}
         onTogglePause={() => call.togglePause()}
         status={callStatusFor(call.state.phase)}
-        title={titleFor(call.state, call.replyText)}
+        title={titleFor(call.state)}
         turns={call.turns}
       />
     );
