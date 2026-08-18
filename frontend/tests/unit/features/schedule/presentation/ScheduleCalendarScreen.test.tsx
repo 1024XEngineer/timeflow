@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import { describe, expect, it, jest } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { StyleSheet } from 'react-native';
 
 import type {
@@ -7,6 +7,12 @@ import type {
   ScheduleOccurrenceView,
 } from '../../../../../src/features/schedule/application';
 import { ScheduleCalendarScreen } from '../../../../../src/features/schedule/presentation/ScheduleCalendarScreen';
+
+let mockBottomInset = 0;
+
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ bottom: mockBottomInset, left: 0, right: 0, top: 0 }),
+}));
 
 function occurrenceOnSelectedDay(
   hourUtc: number,
@@ -59,6 +65,29 @@ function createService(
 }
 
 describe('ScheduleCalendarScreen location schedules', () => {
+  afterEach(() => {
+    mockBottomInset = 0;
+  });
+
+  it('leaves enough scroll space for the floating voice controls and system navigation', async () => {
+    mockBottomInset = 34;
+    const service = createService();
+    render(
+      <ScheduleCalendarScreen
+        accountId="account-a"
+        onSignOut={() => {}}
+        service={service}
+        timezone="Asia/Shanghai"
+        username="Sarah"
+      />,
+    );
+
+    await waitFor(() => expect(service.getLocationSchedules).toHaveBeenCalled());
+    expect(
+      StyleSheet.flatten(screen.getByTestId('schedule-calendar-scroll').props.contentContainerStyle),
+    ).toMatchObject({ paddingBottom: 118, paddingTop: 0 });
+  });
+
   it('keeps accountId in the calendar data flow without rendering it', async () => {
     const service = createService();
     const accountId = 'internal-account-id-not-for-display';

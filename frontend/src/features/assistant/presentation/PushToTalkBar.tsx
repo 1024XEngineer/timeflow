@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Animated, Easing, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { FLOATING_VOICE_BAR_HEIGHT } from '../../../shared/ui/floatingVoiceBarLayout';
 import { colors, spacing } from '../../../shared/ui/theme';
 
 const WAVE_BAR_HEIGHTS = [10, 16, 22, 16, 10] as const;
@@ -104,7 +105,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.text,
     borderRadius: 999,
     flex: 1,
-    height: 52,
+    height: FLOATING_VOICE_BAR_HEIGHT,
     justifyContent: 'center',
   },
   barActive: {

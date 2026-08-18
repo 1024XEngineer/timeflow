@@ -53,7 +53,7 @@ describe('AssistantVoiceOverlay layout', () => {
     mockCallState = { phase: 'idle' };
   });
 
-  it('does not add a fullscreen reply dismiss target over the calendar', () => {
+  it('dismisses the reply from the bubble or surrounding overlay', () => {
     mockPttApplication = createApplication();
     const continuousApplication = createApplication();
     render(
@@ -63,7 +63,8 @@ describe('AssistantVoiceOverlay layout', () => {
       />,
     );
 
-    expect(screen.queryByLabelText('关闭回复')).toBeNull();
+    fireEvent.press(screen.getByLabelText('关闭回复'));
+    expect(mockDismissReply).toHaveBeenCalledTimes(1);
     expect(screen.getByText('按住说话')).toBeTruthy();
   });
 
