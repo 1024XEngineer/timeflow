@@ -8,11 +8,11 @@ import { ExpoAudioCapture } from '../features/assistant/data/audio/ExpoAudioCapt
 import { ExpoAudioPlayback } from '../features/assistant/data/audio/ExpoAudioPlayback';
 import { AuthenticatedVoiceTransport } from '../features/assistant/data/websocket/AuthenticatedVoiceTransport';
 import { LocalScheduleWriter } from '../features/assistant/data/local/LocalScheduleWriter';
-import type { AuthController } from '../features/auth/application';
 import { useAuth } from '../features/auth/presentation/AuthProvider';
 import { SqliteScheduleClientService } from '../features/schedule/application';
-import { ScheduleLocalRepository } from '../features/schedule/data';
+import type { ScheduleLocalRepository } from '../features/schedule/data';
 import { RNAppStateProvider } from '../infrastructure/appState/RNAppStateProvider';
+import type { ApiRequest } from '../infrastructure/network/client';
 import type { AuthenticatedWebSocketClient } from '../infrastructure/websocket';
 import { openTimeflowDatabase } from '../infrastructure/database';
 import { ExpoLocationProvider } from '../infrastructure/location/ExpoLocationProvider';
@@ -21,30 +21,30 @@ import { LoginScreen } from '../screens/LoginScreen';
 import { colors, spacing } from '../shared/ui/theme';
 import { AppProviders } from './AppProviders';
 import { createAppServices, type AppServices } from './composition/createAppServices';
+import { createScheduleSnapshotPreparation } from './composition/createScheduleSnapshotPreparation';
 
-export function AppRoot({
-  authController,
-  services: providedServices,
-}: {
-  authController?: AuthController;
-  services?: AppServices;
-}) {
+export function AppRoot({ services: providedServices }: { services?: AppServices }) {
   const services = useMemo(() => providedServices ?? createAppServices(), [providedServices]);
-  const controller = authController ?? services.auth.controller;
+  const controller = services.auth.controller;
   return (
     <AppProviders
       authController={controller}
-      invalidationCoordinator={authController ? undefined : services.auth.invalidationCoordinator}
+      invalidationCoordinator={services.auth.invalidationCoordinator}
       services={services}
     >
-      <AuthRoute webSocketClient={services.webSocketClient} />
+      <AuthRoute
+        protectedClient={services.protectedClient}
+        webSocketClient={services.webSocketClient}
+      />
     </AppProviders>
   );
 }
 
 function AuthRoute({
+  protectedClient,
   webSocketClient,
 }: {
+  readonly protectedClient: ApiRequest;
   readonly webSocketClient: AuthenticatedWebSocketClient;
 }) {
   const { retryInitialization, viewState } = useAuth();
@@ -77,6 +77,7 @@ function AuthRoute({
     <AuthenticatedScheduleRoute
       accountId={viewState.accountId}
       key={viewState.accountId}
+      protectedClient={protectedClient}
       username={viewState.username}
       webSocketClient={webSocketClient}
     />
@@ -96,10 +97,12 @@ type ScheduleLoadState =
 
 function AuthenticatedScheduleRoute({
   accountId,
+  protectedClient,
   username,
   webSocketClient,
 }: {
   readonly accountId: string;
+  readonly protectedClient: ApiRequest;
   readonly username: string;
   readonly webSocketClient: AuthenticatedWebSocketClient;
 }) {
@@ -110,25 +113,30 @@ function AuthenticatedScheduleRoute({
 
   useEffect(() => {
     let active = true;
-    openTimeflowDatabase()
-      .then((database) => {
+    const abortController = new AbortController();
+    void (async () => {
+      try {
+        const database = await openTimeflowDatabase();
+        const preparation = createScheduleSnapshotPreparation(database, protectedClient);
+        await preparation.bootstrap.ensureLocalSnapshot(accountId, abortController.signal);
         if (active) {
           setLoadState({
-            repository: new ScheduleLocalRepository(database),
+            repository: preparation.repository,
             retryToken,
             status: 'ready',
           });
         }
-      })
-      .catch(() => {
+      } catch {
         if (active) setLoadState({ retryToken, status: 'error' });
-      });
+      }
+    })();
     return () => {
       active = false;
+      abortController.abort();
     };
-  }, [retryToken]);
+  }, [accountId, protectedClient, retryToken]);
 
-  const retryDatabase = useCallback(() => {
+  const retryPreparation = useCallback(() => {
     setRetryToken((value) => value + 1);
   }, []);
   const handleSignOut = useCallback(async () => {
@@ -227,10 +235,10 @@ function AuthenticatedScheduleRoute({
       ) : (
         <View style={styles.authenticatedScreen}>
           <Text style={styles.title}>
-            {currentLoadState?.status === 'error' ? '本地日程存储初始化失败' : '正在准备日程'}
+            {currentLoadState?.status === 'error' ? '日程同步失败' : '正在准备日程'}
           </Text>
           {currentLoadState?.status === 'error' ? (
-            <Pressable accessibilityRole="button" onPress={retryDatabase} style={styles.retry}>
+            <Pressable accessibilityRole="button" onPress={retryPreparation} style={styles.retry}>
               <Text style={styles.retryText}>重试</Text>
             </Pressable>
           ) : null}

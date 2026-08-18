@@ -182,6 +182,22 @@ describe('ScheduleLocalRepository SQLite behavior', () => {
     expect(await repository.getSchedule('account-a', 'schedule-a')).toBeNull();
   });
 
+  it('counts only schedules owned by the requested account', async () => {
+    expect(await repository.countSchedules('account-a')).toBe(0);
+
+    await repository.applyCloudSchedule(cloudSchedule({ id: 'schedule-a' }));
+    await repository.applyCloudSchedule(
+      cloudSchedule({ id: 'schedule-b', account_id: 'account-b' }),
+    );
+    await repository.applyCloudSchedule(
+      cloudSchedule({ id: 'schedule-deleted', status: 'deleted' }),
+    );
+
+    expect(await repository.countSchedules('account-a')).toBe(2);
+    expect(await repository.countSchedules('account-b')).toBe(1);
+    expect(await repository.countSchedules('account-c')).toBe(0);
+  });
+
   it('applies cloud fields without overwriting device runtime state', async () => {
     await repository.applyCloudSchedule(cloudSchedule());
     await repository.updateReminderRuntime('account-a', 'schedule-a', snoozedRuntime());
