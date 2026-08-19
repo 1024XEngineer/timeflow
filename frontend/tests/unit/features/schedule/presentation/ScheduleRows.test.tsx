@@ -70,6 +70,39 @@ describe('ScheduleOccurrenceRow', () => {
     expect(screen.getByText('重复')).toBeTruthy();
   });
 
+  it('extends the timeline rail when another occurrence follows', () => {
+    render(<ScheduleOccurrenceRow isLast={false} item={occurrence()} />);
+
+    expect(
+      StyleSheet.flatten(screen.getByTestId('schedule-occurrence-row').props.style),
+    ).toMatchObject({ paddingBottom: 10 });
+  });
+
+  it('omits meta when a one-time schedule has no location', () => {
+    render(<ScheduleOccurrenceRow item={occurrence({ locationName: null })} />);
+
+    expect(screen.queryByText('上海科技馆')).toBeNull();
+    expect(screen.queryByText('重复')).toBeNull();
+  });
+
+  it('shows repeating without a location line', () => {
+    render(
+      <ScheduleOccurrenceRow
+        item={occurrence({ locationName: null, recurrenceMode: 'recurring' })}
+      />,
+    );
+
+    expect(screen.getByText('重复')).toBeTruthy();
+    expect(screen.queryByText('上海科技馆')).toBeNull();
+  });
+
+  it('hides the end time when a timed occurrence has no end', () => {
+    render(<ScheduleOccurrenceRow item={occurrence({ occurrenceEnd: null })} />);
+
+    expect(screen.getByText('14:00')).toBeTruthy();
+    expect(screen.queryByText('15:00')).toBeNull();
+  });
+
   it('shows an explicit all-day label for an all-day schedule', () => {
     render(
       <ScheduleOccurrenceRow

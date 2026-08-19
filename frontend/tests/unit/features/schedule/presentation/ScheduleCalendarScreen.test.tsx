@@ -2,8 +2,33 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 import { describe, expect, it, jest } from '@jest/globals';
 import { StyleSheet } from 'react-native';
 
-import type { ScheduleCalendarReadService } from '../../../../../src/features/schedule/application';
+import type {
+  ScheduleCalendarReadService,
+  ScheduleOccurrenceView,
+} from '../../../../../src/features/schedule/application';
 import { ScheduleCalendarScreen } from '../../../../../src/features/schedule/presentation/ScheduleCalendarScreen';
+
+function occurrenceOnSelectedDay(
+  hourUtc: number,
+  overrides: Partial<ScheduleOccurrenceView> = {},
+): ScheduleOccurrenceView {
+  const now = new Date();
+  const start = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), hourUtc, 0, 0));
+  return {
+    scheduleId: 'schedule-a',
+    scheduleCategory: 'time',
+    recurrenceMode: 'once',
+    title: '项目例会',
+    isAllDay: false,
+    timezone: 'Asia/Shanghai',
+    locationName: null,
+    reminderType: 'before_start',
+    reminderStrength: 'medium',
+    occurrenceStart: start.toISOString(),
+    occurrenceEnd: new Date(start.getTime() + 60 * 60 * 1000).toISOString(),
+    ...overrides,
+  };
+}
 
 function createService(): ScheduleCalendarReadService {
   return {
@@ -179,5 +204,34 @@ describe('ScheduleCalendarScreen location schedules', () => {
     expect(screen.getByText('提醒强度 · 强提醒')).toBeTruthy();
     expect(screen.queryByText('编辑')).toBeNull();
     expect(screen.queryByText('删除')).toBeNull();
+  });
+
+  it('connects multiple timed occurrences on a timeline and opens detail', async () => {
+    const first = occurrenceOnSelectedDay(1, { scheduleId: 'schedule-a', title: '项目例会' });
+    const second = occurrenceOnSelectedDay(4, { scheduleId: 'schedule-b', title: '方案讨论' });
+    const service = createService();
+    (service.getSchedulesByRange as jest.Mock).mockResolvedValue([first, second]);
+
+    render(
+      <ScheduleCalendarScreen
+        accountId="account-a"
+        onSignOut={() => {}}
+        service={service}
+        timezone="Asia/Shanghai"
+        username="Sarah"
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText('项目例会')).toBeTruthy());
+    expect(screen.getByText('方案讨论')).toBeTruthy();
+    expect(screen.getByText('2 项')).toBeTruthy();
+    expect(
+      StyleSheet.flatten(screen.getAllByTestId('schedule-occurrence-row')[0]?.props.style),
+    ).toMatchObject({ paddingBottom: 10 });
+
+    fireEvent.press(screen.getByLabelText(/项目例会$/));
+    expect(screen.getByText('时区 · Asia/Shanghai')).toBeTruthy();
+    fireEvent.press(screen.getByLabelText('关闭详情'));
+    await waitFor(() => expect(screen.queryByText('时区 · Asia/Shanghai')).toBeNull());
   });
 });
