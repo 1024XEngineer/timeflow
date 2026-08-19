@@ -283,6 +283,27 @@ describe('AssistantConversationService', () => {
     );
   });
 
+  it('ignores a failed asynchronous category patch', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({
+      applyCategoryUpdate: async () => {
+        throw new Error('disk full');
+      },
+      connection: fake.connection,
+    });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    const turn = service.startTurn();
+    await completeStreamStart(fake, turn);
+    fake.emitMessage({
+      payload: { category: 'work', schedule_id: 'schedule_001' },
+      type: 'schedule.category.updated',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getState()).toEqual({ phase: 'idle' });
+  });
+
   it('dispose() unsubscribes every listener registered on the connection', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });

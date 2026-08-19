@@ -432,6 +432,21 @@ def test_create_schedule_does_not_publish_category_event_when_classification_fai
     assert events == []
 
 
+def test_category_event_publisher_failure_does_not_escape_background_task() -> None:
+    def publish(_account_id: str, _schedule_id: str, _category: ScheduleCategory) -> None:
+        raise RuntimeError("websocket unavailable")
+
+    service, store = _service(
+        category_classifier=_FakeCategoryClassifier(ScheduleCategory.WORK),
+        category_task_submitter=lambda task: task(),
+        category_event_publisher=publish,
+    )
+
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert store.schedules[created.id].category is ScheduleCategory.WORK
+
+
 def test_create_schedule_classifier_failure_keeps_creation_successful_and_category_null() -> None:
     classifier = _FakeCategoryClassifier(error=TimeoutError("timed out"))
     service, store = _service(

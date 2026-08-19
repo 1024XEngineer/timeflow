@@ -126,6 +126,13 @@ def test_send_to_account_reaches_only_owned_sessions() -> None:
     asyncio.run(scenario())
 
 
+def test_send_to_account_reports_zero_when_account_has_no_sessions() -> None:
+    async def scenario() -> None:
+        assert await ConnectionManager().send_to_account("account-missing", {"type": "ping"}) == 0
+
+    asyncio.run(scenario())
+
+
 def test_publish_to_account_nowait_bridges_worker_event_to_event_loop() -> None:
     async def scenario() -> None:
         connections = ConnectionManager()
