@@ -1,17 +1,28 @@
-# Android PR preview. The build job runs PR-controlled code and must never
-# reference APPETIZE_API_TOKEN. Upload/comment is a separate job that only
-# downloads the APK artifact — no checkout, npm, Expo, or Gradle.
+# Android PR preview. On-demand only — not on pull_request.
+# Trigger with a PR comment `/android-preview`, or Actions → Run workflow.
+# Regular PR pushes keep using ci.yml and do not build an APK.
+#
+# issue_comment always runs this file from the default branch. The build job
+# then checks out the PR head SHA. That job runs PR-controlled code and must
+# never reference APPETIZE_API_TOKEN. Upload/comment is a separate job that
+# only downloads the APK artifact — no checkout, npm, Expo, or Gradle.
 name: Android Preview
 
 on:
-  pull_request:
-    types: [opened, reopened, synchronize, ready_for_review]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to build an Appetize Android preview for
+        required: true
+        type: number
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number || github.event.issue.number || github.run_id }}
   cancel-in-progress: true
 
 env:
@@ -19,13 +30,118 @@ env:
   JAVA_VERSION: "17"
 
 jobs:
+  resolve:
+    name: Resolve preview target
+    # Cheap filters only: slash command on a PR, not a bot. Write access is
+    # checked in the resolver via the collaborator permission API — association
+    # is not the same as repository write/maintain/admin.
+    if: >
+      github.event_name == 'workflow_dispatch'
+      || (
+        github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && github.event.comment.user.login != 'github-actions[bot]'
+        && contains(github.event.comment.body, '/android-preview')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ok: ${{ steps.target.outputs.ok }}
+      pr_number: ${{ steps.target.outputs.pr_number }}
+      head_sha: ${{ steps.target.outputs.head_sha }}
+      head_ref: ${{ steps.target.outputs.head_ref }}
+      head_repo: ${{ steps.target.outputs.head_repo }}
+      head_repo_url: ${{ steps.target.outputs.head_repo_url }}
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Resolve PR head
+        id: target
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const isCommandLine = (line) => {
+              const trimmed = line.trim();
+              return trimmed === '/android-preview' || trimmed.startsWith('/android-preview ');
+            };
+
+            if (context.eventName === 'issue_comment') {
+              const comment = context.payload.comment;
+              if (!comment || comment.user?.type === 'Bot') {
+                core.setOutput('ok', 'false');
+                return;
+              }
+              const body = comment.body || '';
+              if (!body.split(/\r?\n/).some(isCommandLine)) {
+                core.info('Comment mentions the command but is not a /android-preview line.');
+                core.setOutput('ok', 'false');
+                return;
+              }
+              const username = comment.user.login;
+              let role = 'none';
+              try {
+                const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner,
+                  repo,
+                  username,
+                });
+                role = data.role_name || data.permission || 'none';
+              } catch (error) {
+                core.info(`Ignoring /android-preview from ${username}: ${error.message}`);
+                core.setOutput('ok', 'false');
+                return;
+              }
+              const allowed = new Set(['admin', 'maintain', 'write']);
+              if (!allowed.has(role)) {
+                core.info(`Ignoring /android-preview from ${username} (${role})`);
+                core.setOutput('ok', 'false');
+                return;
+              }
+            }
+
+            const raw =
+              context.eventName === 'workflow_dispatch'
+                ? context.payload.inputs.pr_number
+                : String(context.issue.number);
+            const prNumber = Number(raw);
+            if (!Number.isInteger(prNumber) || prNumber <= 0) {
+              core.setFailed(`Invalid PR number: ${raw}`);
+              return;
+            }
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: prNumber,
+            });
+
+            if (pr.state !== 'open') {
+              core.setFailed(`PR #${prNumber} is ${pr.state}`);
+              return;
+            }
+
+            const headRepo = pr.head.repo && pr.head.repo.full_name;
+            if (!headRepo) {
+              core.setFailed(`PR #${prNumber} has no head repository`);
+              return;
+            }
+
+            core.setOutput('ok', 'true');
+            core.setOutput('pr_number', String(pr.number));
+            core.setOutput('head_sha', pr.head.sha);
+            core.setOutput('head_ref', pr.head.ref);
+            core.setOutput('head_repo', headRepo);
+            core.setOutput('head_repo_url', pr.head.repo.html_url);
+            core.info(`Preview target: PR #${pr.number} ${headRepo}@${pr.head.sha} (${pr.head.ref})`);
+
   build:
     name: Build preview APK
-    # Drafts wait for ready_for_review. Fork PRs still skip to save CI minutes;
-    # they never receive secrets because this workflow does not read any.
-    if: >
-      github.event.pull_request.draft == false
-      && github.event.pull_request.head.repo.full_name == github.repository
+    needs: resolve
+    if: needs.resolve.result == 'success' && needs.resolve.outputs.ok == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -37,6 +153,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          ref: ${{ needs.resolve.outputs.head_sha }}
+          repository: ${{ needs.resolve.outputs.head_repo }}
 
       - uses: actions/setup-node@v4
         with:
@@ -141,12 +259,12 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # Same pull_request workflow, separate runner: token is never in env while
-  # npm / Expo / Gradle run. This is enough to comment on the current PR;
-  # workflow_run is not required for that.
+  # Token is never in env while npm / Expo / Gradle run. This job only
+  # downloads the APK artifact from the current run.
   publish:
     name: Publish Appetize preview
-    needs: build
+    needs: [resolve, build]
+    if: needs.build.result == 'success' && needs.resolve.outputs.ok == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -215,19 +333,23 @@ jobs:
           COMMENT_MARKER: "<!-- timeflow-android-appetize-preview -->"
           PREVIEW_URL: ${{ steps.appetize.outputs.preview_url }}
           BUILD_ID: ${{ steps.appetize.outputs.build_id }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+          HEAD_REPO_URL: ${{ needs.resolve.outputs.head_repo_url }}
         with:
           script: |
             const marker = process.env.COMMENT_MARKER;
             const previewUrl = process.env.PREVIEW_URL;
             const buildId = process.env.BUILD_ID;
-            if (!previewUrl || !buildId) {
+            const prNumber = Number(process.env.PR_NUMBER);
+            const sha = process.env.HEAD_SHA;
+            const headRepo = process.env.HEAD_REPO_URL;
+            if (!previewUrl || !buildId || !prNumber || !sha || !headRepo) {
               core.setFailed('Appetize preview URL was not produced');
               return;
             }
 
-            const sha = context.payload.pull_request.head.sha;
             const shortSha = sha.slice(0, 7);
-            const headRepo = context.payload.pull_request.head.repo.html_url;
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const body = [
               marker,
@@ -241,14 +363,14 @@ jobs:
               `- Build ID：\`${buildId}\``,
               `- 工作流：[本次运行](${runUrl})`,
               '',
-              '新的提交会更新本条评论中的链接；请勿手动编辑。',
+              '再次发送同一命令，或在 Actions 里手动 Run workflow，会更新本条链接。日常推送不会自动打包。',
               '',
             ].join('\n');
 
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: prNumber,
               per_page: 100,
             });
             const existing = comments.find(
@@ -270,8 +392,7 @@ jobs:
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: context.issue.number,
+                issue_number: prNumber,
                 body,
               });
             }
-
