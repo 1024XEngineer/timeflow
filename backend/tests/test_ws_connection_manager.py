@@ -107,6 +107,40 @@ def test_send_to_an_unknown_session_reports_failure() -> None:
     asyncio.run(scenario())
 
 
+def test_send_to_account_reaches_only_owned_sessions() -> None:
+    async def scenario() -> None:
+        connections = ConnectionManager()
+        account_a = RecordingConnection()
+        account_b = RecordingConnection()
+        connections.register("ws_a", account_a, "account-a")
+        connections.register("ws_b", account_b, "account-b")
+
+        delivered = await connections.send_to_account(
+            "account-a", {"type": "schedule.category.updated"}
+        )
+
+        assert delivered == 1
+        assert account_a.shape() == ["schedule.category.updated"]
+        assert account_b.frames == []
+
+    asyncio.run(scenario())
+
+
+def test_publish_to_account_nowait_bridges_worker_event_to_event_loop() -> None:
+    async def scenario() -> None:
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register("ws_a", connection, "account-a")
+
+        connections.publish_to_account_nowait("account-a", {"type": "schedule.category.updated"})
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert connection.shape() == ["schedule.category.updated"]
+
+    asyncio.run(scenario())
+
+
 def test_unregister_keeps_a_replacement_connection() -> None:
     """A late unregister from the old connection must not evict the new one.
 

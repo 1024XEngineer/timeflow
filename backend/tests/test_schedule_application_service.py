@@ -248,6 +248,7 @@ def _service(
     now: datetime = NOW,
     category_classifier: ScheduleCategoryClassifier | None = None,
     category_task_submitter: Callable[[Callable[[], None]], object] | None = None,
+    category_event_publisher: Callable[[str, str, ScheduleCategory], None] | None = None,
 ) -> tuple[ScheduleApplicationService, _Store]:
     store = _Store({}, {})
     sequence = count(1)
@@ -255,6 +256,7 @@ def _service(
         lambda: _UnitOfWork(store),
         category_classifier=category_classifier,
         category_task_submitter=category_task_submitter,
+        category_event_publisher=category_event_publisher,
         clock=lambda: now,
         id_factory=lambda: f"generated-{next(sequence)}",
     )
@@ -396,6 +398,38 @@ def test_create_schedule_persists_the_classifier_result() -> None:
     assert snapshot.category is None
     assert store.schedules[snapshot.id].category is ScheduleCategory.WORK
     assert classifier.calls == 1
+
+
+def test_create_schedule_publishes_category_event_after_background_commit() -> None:
+    events: list[tuple[str, str, ScheduleCategory]] = []
+    service, store = _service(
+        category_classifier=_FakeCategoryClassifier(ScheduleCategory.WORK),
+        category_task_submitter=lambda task: task(),
+        category_event_publisher=lambda account_id, schedule_id, category: events.append(
+            (account_id, schedule_id, category)
+        ),
+    )
+
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert store.schedules[created.id].category is ScheduleCategory.WORK
+    assert events == [("account-a", created.id, ScheduleCategory.WORK)]
+
+
+def test_create_schedule_does_not_publish_category_event_when_classification_fails() -> None:
+    events: list[tuple[str, str, ScheduleCategory]] = []
+    service, store = _service(
+        category_classifier=_FakeCategoryClassifier(),
+        category_task_submitter=lambda task: task(),
+        category_event_publisher=lambda account_id, schedule_id, category: events.append(
+            (account_id, schedule_id, category)
+        ),
+    )
+
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert store.schedules[created.id].category is None
+    assert events == []
 
 
 def test_create_schedule_classifier_failure_keeps_creation_successful_and_category_null() -> None:

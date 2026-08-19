@@ -95,6 +95,7 @@ function createFakeConnection() {
 function createDeps(
   overrides: {
     applyCommandResult?: () => Promise<void>;
+    applyCategoryUpdate?: () => Promise<boolean>;
     connection?: VoiceTransportConnection;
     requestPermission?: () => Promise<boolean>;
   } = {},
@@ -124,6 +125,7 @@ function createDeps(
   };
   const localScheduleWriter: LocalScheduleWriterPort = {
     applyCommandResult: jest.fn(overrides.applyCommandResult ?? (async () => undefined)),
+    applyCategoryUpdate: jest.fn(overrides.applyCategoryUpdate ?? (async () => true)),
   };
   const appState: AppStateProvider = {
     subscribe: jest.fn((listener: (status: AppLifecycleStatus) => void) => {
@@ -288,6 +290,27 @@ describe('AssistantContinuousConversationService', () => {
     expect(fake.sent).not.toContainEqual(
       expect.objectContaining({ message_id: 'msg_failed', type: 'message.ack' }),
     );
+    service.dispose();
+  });
+
+  it('patches an asynchronous category update while the call remains active', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      payload: { category: 'work', schedule_id: 'schedule_001' },
+      type: 'schedule.category.updated',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(deps.localScheduleWriter.applyCategoryUpdate).toHaveBeenCalledWith(
+      'acc_001',
+      'schedule_001',
+      'work',
+    );
+    expect(service.getState()).toMatchObject({ phase: 'listening' });
     service.dispose();
   });
 
