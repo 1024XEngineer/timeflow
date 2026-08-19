@@ -39,8 +39,13 @@ async function ensureAndroidChannel(Notifications: NotificationsModule): Promise
 
 /** 基于 expo-notifications 的轻度提醒系统通知。 */
 export class ExpoSystemNotification implements SystemNotificationPort {
+  /** 默认走真实的动态 import；测试注入一个假实现，绕开 expo-notifications 这个原生模块。 */
+  constructor(
+    private readonly loadNotificationsModule: () => Promise<NotificationsModule | null> = loadNotifications,
+  ) {}
+
   async show(request: SystemNotificationRequest): Promise<SystemNotificationReceipt> {
-    const Notifications = await loadNotifications();
+    const Notifications = await this.loadNotificationsModule();
     if (Notifications == null) {
       return { notification_id: request.notification_id, shown: false };
     }
@@ -69,7 +74,7 @@ export class ExpoSystemNotification implements SystemNotificationPort {
   }
 
   async cancel(notificationId: string): Promise<void> {
-    const Notifications = await loadNotifications();
+    const Notifications = await this.loadNotificationsModule();
     if (Notifications == null) return;
     await Notifications.dismissNotificationAsync(notificationId).catch(() => undefined);
     await Notifications.cancelScheduledNotificationAsync(notificationId).catch(() => undefined);
