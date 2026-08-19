@@ -32,6 +32,9 @@ env:
 jobs:
   resolve:
     name: Resolve preview target
+    # Cheap filters only: slash command on a PR, not a bot. Write access is
+    # checked in the resolver via the collaborator permission API — association
+    # is not the same as repository write/maintain/admin.
     if: >
       github.event_name == 'workflow_dispatch'
       || (
@@ -39,11 +42,6 @@ jobs:
         && github.event.issue.pull_request
         && github.event.comment.user.login != 'github-actions[bot]'
         && contains(github.event.comment.body, '/android-preview')
-        && (
-          github.event.comment.author_association == 'OWNER'
-          || github.event.comment.author_association == 'MEMBER'
-          || github.event.comment.author_association == 'COLLABORATOR'
-        )
       )
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -82,11 +80,23 @@ jobs:
                 core.setOutput('ok', 'false');
                 return;
               }
-              const allowed = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
-              if (!allowed.has(comment.author_association)) {
-                core.info(
-                  `Ignoring /android-preview from ${comment.user.login} (${comment.author_association})`,
-                );
+              const username = comment.user.login;
+              let role = 'none';
+              try {
+                const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner,
+                  repo,
+                  username,
+                });
+                role = data.role_name || data.permission || 'none';
+              } catch (error) {
+                core.info(`Ignoring /android-preview from ${username}: ${error.message}`);
+                core.setOutput('ok', 'false');
+                return;
+              }
+              const allowed = new Set(['admin', 'maintain', 'write']);
+              if (!allowed.has(role)) {
+                core.info(`Ignoring /android-preview from ${username} (${role})`);
                 core.setOutput('ok', 'false');
                 return;
               }
