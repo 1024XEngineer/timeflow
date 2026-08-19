@@ -1,7 +1,8 @@
-import type {
-  CloudScheduleSnapshot,
-  ScheduleOccurrenceOverrideSnapshot,
-  ScheduleSnapshot,
+import {
+  SCHEDULE_CATEGORIES,
+  type CloudScheduleSnapshot,
+  type ScheduleOccurrenceOverrideSnapshot,
+  type ScheduleSnapshot,
 } from './schedule';
 
 const SCHEDULE_KEYS = [
@@ -9,6 +10,7 @@ const SCHEDULE_KEYS = [
   'account_id',
   'schedule_type',
   'schedule_kind',
+  'category',
   'title',
   'is_all_day',
   'start_time',
@@ -60,6 +62,7 @@ function isScheduleSnapshot(value: unknown): value is ScheduleSnapshot {
     isNonBlankString(value.account_id) &&
     isOneOf(value.schedule_type, ['time', 'location']) &&
     isOneOf(value.schedule_kind, ['once', 'recurring']) &&
+    isNullableOneOf(value.category, SCHEDULE_CATEGORIES) &&
     isNonBlankString(value.title) &&
     typeof value.is_all_day === 'boolean' &&
     isNullableAwareTimestamp(value.start_time) &&

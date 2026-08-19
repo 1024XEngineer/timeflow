@@ -8,6 +8,7 @@ function validSchedule() {
     account_id: 'account-a',
     schedule_type: 'time',
     schedule_kind: 'recurring',
+    category: 'work',
     title: 'Planning',
     is_all_day: false,
     start_time: '2026-08-18T01:00:00Z',
@@ -86,6 +87,10 @@ describe('parseScheduleSnapshotResponse', () => {
     [
       'unknown enum',
       { schedules: [{ ...validSchedule(), status: 'archived' }], occurrence_overrides: [] },
+    ],
+    [
+      'unknown category',
+      { schedules: [{ ...validSchedule(), category: 'unsupported' }], occurrence_overrides: [] },
     ],
     [
       'invalid aware timestamp',
