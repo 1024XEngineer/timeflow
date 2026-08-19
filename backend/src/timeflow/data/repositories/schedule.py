@@ -182,6 +182,29 @@ class ScheduleRepository:
             )
         return None
 
+    def set_schedule_category_if_unclassified(
+        self,
+        *,
+        account_id: str,
+        schedule_id: str,
+        category: ScheduleCategory,
+        updated_at: datetime,
+    ) -> ScheduleSnapshot | None:
+        """Persist a background classification without changing business revision."""
+        statement = (
+            update(Schedule)
+            .where(
+                Schedule.id == schedule_id,
+                Schedule.account_id == account_id,
+                Schedule.status == ScheduleStatus.ACTIVE.value,
+                Schedule.category.is_(None),
+            )
+            .values(category=category.value, updated_at=updated_at)
+            .returning(Schedule)
+        )
+        model = self._session.scalars(statement).one_or_none()
+        return None if model is None else _to_schedule_snapshot(model)
+
     def confirm_reminder_disposition(
         self,
         *,

@@ -3,6 +3,7 @@
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import NoReturn
@@ -48,6 +49,10 @@ from timeflow.business.calendar.recurrence import (
 )
 
 logger = logging.getLogger(__name__)
+_CATEGORY_EXECUTOR = ThreadPoolExecutor(
+    max_workers=4,
+    thread_name_prefix="timeflow-schedule-category",
+)
 
 
 class ScheduleAgentService(ABC):
@@ -136,11 +141,13 @@ class ScheduleApplicationService(ScheduleAgentService):
         unit_of_work_factory: ScheduleUnitOfWorkFactory,
         *,
         category_classifier: ScheduleCategoryClassifier | None = None,
+        category_task_submitter: Callable[[Callable[[], None]], object] | None = None,
         clock: Callable[[], datetime] | None = None,
         id_factory: Callable[[], str] | None = None,
     ) -> None:
         self._unit_of_work_factory = unit_of_work_factory
         self._category_classifier = category_classifier
+        self._category_task_submitter = category_task_submitter or _CATEGORY_EXECUTOR.submit
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_factory = id_factory or (lambda: uuid4().hex)
 
@@ -178,13 +185,51 @@ class ScheduleApplicationService(ScheduleAgentService):
             reminder_strength=command.reminder_strength,
         )
         validate_schedule_snapshot(snapshot)
-        snapshot = replace(snapshot, category=self._classify_category(command))
-        validate_schedule_snapshot(snapshot)
 
         with self._unit_of_work_factory() as unit_of_work:
             persisted = unit_of_work.schedules.add_schedule(snapshot)
             unit_of_work.commit()
+        if self._category_classifier is not None:
+            try:
+                self._category_task_submitter(
+                    lambda: self._classify_and_persist_category(
+                        account_id=account_id,
+                        schedule_id=persisted.id,
+                        command=command,
+                    )
+                )
+            except Exception as exc:
+                logger.warning(
+                    "schedule category task could not be submitted; leaving category null",
+                    extra={"error_type": type(exc).__name__},
+                )
         return ScheduleMutationResult(schedules=(persisted,))
+
+    def _classify_and_persist_category(
+        self,
+        *,
+        account_id: str,
+        schedule_id: str,
+        command: CreateScheduleCommand,
+    ) -> None:
+        category = self._classify_category(command)
+        if category is None:
+            return
+        try:
+            with self._unit_of_work_factory() as unit_of_work:
+                persisted = unit_of_work.schedules.set_schedule_category_if_unclassified(
+                    account_id=account_id,
+                    schedule_id=schedule_id,
+                    category=category,
+                    updated_at=_aware_now(self._clock),
+                )
+                if persisted is not None:
+                    unit_of_work.commit()
+        except Exception as exc:
+            logger.warning(
+                "schedule category result could not be persisted; leaving category null",
+                extra={"error_type": type(exc).__name__},
+            )
 
     def _classify_category(self, command: CreateScheduleCommand) -> ScheduleCategory | None:
         if self._category_classifier is None:

@@ -79,6 +79,15 @@ class ScheduleRepositoryPort(Protocol):
         expected_revision: int,
     ) -> ScheduleSnapshot | None: ...
 
+    def set_schedule_category_if_unclassified(
+        self,
+        *,
+        account_id: str,
+        schedule_id: str,
+        category: ScheduleCategory,
+        updated_at: datetime,
+    ) -> ScheduleSnapshot | None: ...
+
     def confirm_reminder_disposition(
         self,
         *,

@@ -134,6 +134,26 @@ class _Repository:
         self._store.schedules[persisted.id] = persisted
         return persisted
 
+    def set_schedule_category_if_unclassified(
+        self,
+        *,
+        account_id: str,
+        schedule_id: str,
+        category: ScheduleCategory,
+        updated_at: datetime,
+    ) -> ScheduleSnapshot | None:
+        current = self._store.schedules.get(schedule_id)
+        if (
+            current is None
+            or current.account_id != account_id
+            or current.status is not ScheduleStatus.ACTIVE
+            or current.category is not None
+        ):
+            return None
+        persisted = replace(current, category=category, updated_at=updated_at)
+        self._store.schedules[schedule_id] = persisted
+        return persisted
+
     def add_occurrence_override(
         self,
         *,
@@ -227,12 +247,14 @@ def _service(
     *,
     now: datetime = NOW,
     category_classifier: ScheduleCategoryClassifier | None = None,
+    category_task_submitter: Callable[[Callable[[], None]], object] | None = None,
 ) -> tuple[ScheduleApplicationService, _Store]:
     store = _Store({}, {})
     sequence = count(1)
     service = ScheduleApplicationService(
         lambda: _UnitOfWork(store),
         category_classifier=category_classifier,
+        category_task_submitter=category_task_submitter,
         clock=lambda: now,
         id_factory=lambda: f"generated-{next(sequence)}",
     )
@@ -364,18 +386,24 @@ class _FakeCategoryClassifier:
 
 def test_create_schedule_persists_the_classifier_result() -> None:
     classifier = _FakeCategoryClassifier(ScheduleCategory.WORK)
-    service, store = _service(category_classifier=classifier)
+    service, store = _service(
+        category_classifier=classifier,
+        category_task_submitter=lambda task: task(),
+    )
 
     snapshot = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
 
-    assert snapshot.category is ScheduleCategory.WORK
+    assert snapshot.category is None
     assert store.schedules[snapshot.id].category is ScheduleCategory.WORK
     assert classifier.calls == 1
 
 
 def test_create_schedule_classifier_failure_keeps_creation_successful_and_category_null() -> None:
     classifier = _FakeCategoryClassifier(error=TimeoutError("timed out"))
-    service, store = _service(category_classifier=classifier)
+    service, store = _service(
+        category_classifier=classifier,
+        category_task_submitter=lambda task: task(),
+    )
 
     snapshot = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
 
@@ -386,7 +414,10 @@ def test_create_schedule_classifier_failure_keeps_creation_successful_and_catego
 
 def test_recurring_schedule_is_classified_once_on_creation() -> None:
     classifier = _FakeCategoryClassifier(ScheduleCategory.STUDY)
-    service, _ = _service(category_classifier=classifier)
+    service, _ = _service(
+        category_classifier=classifier,
+        category_task_submitter=lambda task: task(),
+    )
 
     snapshot = service.create_schedule(
         account_id="account-a",
@@ -396,13 +427,16 @@ def test_recurring_schedule_is_classified_once_on_creation() -> None:
         ),
     ).schedules[0]
 
-    assert snapshot.category is ScheduleCategory.STUDY
+    assert snapshot.category is None
     assert classifier.calls == 1
 
 
 def test_update_does_not_reclassify_an_existing_schedule() -> None:
     classifier = _FakeCategoryClassifier(ScheduleCategory.WORK)
-    service, _ = _service(category_classifier=classifier)
+    service, _ = _service(
+        category_classifier=classifier,
+        category_task_submitter=lambda task: task(),
+    )
     created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
 
     updated = service.update_schedule(
@@ -415,6 +449,81 @@ def test_update_does_not_reclassify_an_existing_schedule() -> None:
     ).schedules[0]
 
     assert updated.category is ScheduleCategory.WORK
+    assert classifier.calls == 1
+
+
+def test_create_returns_before_background_classification_finishes() -> None:
+    classifier = _FakeCategoryClassifier(ScheduleCategory.WORK)
+    pending: list[Callable[[], None]] = []
+    service, store = _service(
+        category_classifier=classifier,
+        category_task_submitter=lambda task: pending.append(task),
+    )
+
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert created.category is None
+    assert store.schedules[created.id].category is None
+    assert classifier.calls == 0
+    assert len(pending) == 1
+
+    pending.pop()()
+
+    assert classifier.calls == 1
+    assert store.schedules[created.id].category is ScheduleCategory.WORK
+    assert store.schedules[created.id].revision == created.revision
+
+
+def test_category_task_submission_failure_does_not_block_creation() -> None:
+    classifier = _FakeCategoryClassifier(ScheduleCategory.WORK)
+
+    def reject_task(_task: Callable[[], None]) -> object:
+        raise RuntimeError("executor unavailable")
+
+    service, store = _service(
+        category_classifier=classifier,
+        category_task_submitter=reject_task,
+    )
+
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert created.category is None
+    assert store.schedules[created.id] == created
+    assert classifier.calls == 0
+
+
+def test_background_category_persistence_failure_does_not_escape_to_creation() -> None:
+    store = _Store({}, {})
+    classifier = _FakeCategoryClassifier(ScheduleCategory.WORK)
+
+    class BrokenCategoryRepository(_Repository):
+        def set_schedule_category_if_unclassified(
+            self,
+            *,
+            account_id: str,
+            schedule_id: str,
+            category: ScheduleCategory,
+            updated_at: datetime,
+        ) -> ScheduleSnapshot | None:
+            raise RuntimeError("database unavailable")
+
+    class BrokenCategoryUnitOfWork(_UnitOfWork):
+        def __init__(self, committed: _Store) -> None:
+            super().__init__(committed)
+            self.schedules = BrokenCategoryRepository(self._working)
+
+    service = ScheduleApplicationService(
+        lambda: BrokenCategoryUnitOfWork(store),
+        category_classifier=classifier,
+        category_task_submitter=lambda task: task(),
+        clock=lambda: NOW,
+        id_factory=lambda: "generated-1",
+    )
+
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert created.category is None
+    assert store.schedules[created.id].category is None
     assert classifier.calls == 1
 
 
