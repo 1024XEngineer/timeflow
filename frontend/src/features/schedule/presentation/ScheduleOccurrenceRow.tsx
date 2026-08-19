@@ -4,7 +4,8 @@ import type { ScheduleOccurrenceView } from '../application';
 import { colors, spacing } from '../../../shared/ui/theme';
 import { formatRange, formatTime } from './scheduleDisplay';
 
-const CARD_MIN_HEIGHT = 72;
+const CARD_HEIGHT = 88;
+const ROW_FOLLOW_GAP = 10;
 
 export function ScheduleOccurrenceRow({
   item,
@@ -41,7 +42,10 @@ export function ScheduleOccurrenceRow({
       </View>
 
       <View accessible={false} style={styles.rail}>
-        <View style={[styles.railLine, isLast && styles.railLineLast]} />
+        <View
+          style={[styles.railLine, isLast ? styles.railLineLast : styles.railLineFollow]}
+          testID="schedule-occurrence-rail-line"
+        />
         <View
           style={[styles.railDot, item.isAllDay && styles.railDotAllDay]}
           testID="schedule-occurrence-indicator"
@@ -75,9 +79,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     flex: 1,
     gap: 4,
+    height: CARD_HEIGHT,
     justifyContent: 'center',
-    minHeight: CARD_MIN_HEIGHT,
     minWidth: 0,
+    overflow: 'hidden',
     paddingHorizontal: 14,
     paddingVertical: 12,
   },
@@ -109,6 +114,7 @@ const styles = StyleSheet.create({
   rail: {
     alignItems: 'center',
     alignSelf: 'stretch',
+    overflow: 'visible',
     width: 14,
   },
   railDot: {
@@ -124,12 +130,12 @@ const styles = StyleSheet.create({
   railDotAllDay: { backgroundColor: colors.text },
   railLine: {
     backgroundColor: colors.focus,
-    bottom: 0,
     left: 6,
     position: 'absolute',
     top: 12,
     width: 2,
   },
+  railLineFollow: { bottom: -ROW_FOLLOW_GAP },
   railLineLast: { bottom: 18 },
   repeat: {
     color: colors.mutedText,
@@ -142,8 +148,9 @@ const styles = StyleSheet.create({
     alignItems: 'stretch',
     flexDirection: 'row',
     gap: 12,
+    overflow: 'visible',
   },
-  rowFollow: { paddingBottom: 10 },
+  rowFollow: { paddingBottom: ROW_FOLLOW_GAP },
   startTime: {
     color: colors.text,
     fontSize: 15,
@@ -153,5 +160,11 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   timeColumn: { paddingTop: 6, width: 52 },
-  title: { color: colors.text, fontSize: 16, fontWeight: '700', lineHeight: 22 },
+  title: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '700',
+    includeFontPadding: false,
+    lineHeight: 22,
+  },
 });

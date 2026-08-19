@@ -47,21 +47,31 @@ describe('ScheduleOccurrenceRow', () => {
       StyleSheet.flatten(screen.getByTestId('schedule-occurrence-card').props.style),
     ).toMatchObject({
       backgroundColor: colors.surface,
-      minHeight: 72,
+      height: 88,
     });
   });
 
-  it('keeps the same card height for different durations', () => {
+  it('keeps the same card height for different durations and content', () => {
     const short = render(
-      <ScheduleOccurrenceRow item={occurrence({ occurrenceEnd: '2026-08-13T06:30:00.000Z' })} />,
+      <ScheduleOccurrenceRow item={occurrence({ locationName: null, occurrenceEnd: null })} />,
     );
     const long = render(
-      <ScheduleOccurrenceRow item={occurrence({ occurrenceEnd: '2026-08-13T09:00:00.000Z' })} />,
+      <ScheduleOccurrenceRow
+        item={occurrence({
+          locationName: '远程会议室 A',
+          occurrenceEnd: '2026-08-13T09:00:00.000Z',
+          recurrenceMode: 'recurring',
+          title: '与产品团队确认下一阶段的发布计划和风险清单',
+        })}
+      />,
     );
 
     expect(
-      StyleSheet.flatten(short.getByTestId('schedule-occurrence-card').props.style).minHeight,
-    ).toBe(StyleSheet.flatten(long.getByTestId('schedule-occurrence-card').props.style).minHeight);
+      StyleSheet.flatten(short.getByTestId('schedule-occurrence-card').props.style).height,
+    ).toBe(88);
+    expect(
+      StyleSheet.flatten(long.getByTestId('schedule-occurrence-card').props.style).height,
+    ).toBe(StyleSheet.flatten(short.getByTestId('schedule-occurrence-card').props.style).height);
   });
 
   it('shows a recurrence badge for a recurring schedule', () => {
@@ -76,6 +86,17 @@ describe('ScheduleOccurrenceRow', () => {
     expect(
       StyleSheet.flatten(screen.getByTestId('schedule-occurrence-row').props.style),
     ).toMatchObject({ paddingBottom: 10 });
+    expect(
+      StyleSheet.flatten(screen.getByTestId('schedule-occurrence-rail-line').props.style),
+    ).toMatchObject({ bottom: -10, top: 12 });
+  });
+
+  it('stops the timeline rail at the last occurrence', () => {
+    render(<ScheduleOccurrenceRow item={occurrence()} />);
+
+    expect(
+      StyleSheet.flatten(screen.getByTestId('schedule-occurrence-rail-line').props.style),
+    ).toMatchObject({ bottom: 18 });
   });
 
   it('omits meta when a one-time schedule has no location', () => {
@@ -127,7 +148,7 @@ describe('ScheduleOccurrenceRow', () => {
       StyleSheet.flatten(screen.getByTestId('schedule-occurrence-card').props.style),
     ).toMatchObject({
       backgroundColor: colors.surface,
-      minHeight: 72,
+      height: 88,
     });
   });
 });
