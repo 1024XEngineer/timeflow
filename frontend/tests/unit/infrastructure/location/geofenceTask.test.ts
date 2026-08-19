@@ -36,8 +36,9 @@ function loadModule(): {
 } {
   mockIsTaskDefined.mockReturnValue(false);
   jest.resetModules();
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const module = require('../../../../src/infrastructure/location/geofenceTask') as typeof import('../../../../src/infrastructure/location/geofenceTask');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- fresh module registry per test needs require(), not static import
+  const required = require('../../../../src/infrastructure/location/geofenceTask');
+  const module: typeof import('../../../../src/infrastructure/location/geofenceTask') = required;
   const executor = mockDefineTask.mock.calls.at(-1)?.[1] as TaskExecutor;
   return { module, executor };
 }
