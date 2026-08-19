@@ -4,13 +4,13 @@ import type {
   ReminderApplicationDependencies,
   ReminderApplicationPort,
 } from '../../features/reminder/application/interfaces';
+import { LocalReminderApplication } from '../../features/reminder/application';
 import {
   MockLocalScheduleReader,
-  MockReminderApplication,
   MockReminderDispositionSync,
   MockReminderStateStore,
 } from '../../features/reminder/data/local';
-import { MockAudioPlayback } from '../../infrastructure/audio';
+import { ExpoAudioPlayback } from '../../infrastructure/audio';
 import { MockLocationMonitor } from '../../infrastructure/location';
 import {
   MockPopup,
@@ -21,7 +21,7 @@ import {
   NativeAlarmScheduler,
   NativeDeviceCapability,
 } from '../../infrastructure/notifications';
-import { MockTimeListener } from '../../infrastructure/time';
+import { IntervalTimeListener } from '../../infrastructure/time';
 import { MockReminderPresenter } from '../../features/reminder/presentation';
 import { ScheduleViewStore } from '../../features/schedule/presentation';
 
@@ -44,11 +44,11 @@ export function createAppServices(options: CreateAppServicesOptions = {}): AppSe
   const auth = createAuthRuntime(options.auth);
   const reminderPorts: ReminderApplicationDependencies = {
     schedules: new MockLocalScheduleReader(),
-    time: new MockTimeListener(),
+    time: new IntervalTimeListener(),
     location: new MockLocationMonitor(),
     alarms: new NativeAlarmScheduler(),
     delivery: new MockReminderDelivery(),
-    audio: new MockAudioPlayback(),
+    audio: new ExpoAudioPlayback(),
     device: new NativeDeviceCapability(),
     presenter: new MockReminderPresenter(),
     systemNotification: new MockSystemNotification(),
@@ -58,7 +58,7 @@ export function createAppServices(options: CreateAppServicesOptions = {}): AppSe
     state: new MockReminderStateStore(),
     dispositionSync: new MockReminderDispositionSync(),
   };
-  const reminder = new MockReminderApplication(reminderPorts);
+  const reminder = new LocalReminderApplication(reminderPorts);
   const scheduleView = new ScheduleViewStore();
   const runtime = new AppRuntime([
     {
