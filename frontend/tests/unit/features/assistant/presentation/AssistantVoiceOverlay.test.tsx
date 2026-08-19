@@ -11,7 +11,7 @@ jest.mock('../../../../../src/features/assistant/presentation/useAssistantConver
     dismissReply: mockDismissReply,
     endTurn: application.endTurn,
     lastAppliedCommand: null,
-    replyText: application === mockPttApplication ? '已创建' : null,
+    replyText: application === mockPttApplication ? mockReplyText : null,
     soundLevel: null,
     startTurn: application.startTurn,
     state: application === mockPttApplication ? { phase: 'idle' as const } : mockCallState,
@@ -25,6 +25,7 @@ jest.mock('react-native-safe-area-context', () => ({
 
 let mockPttApplication: AssistantApplicationPort;
 let mockBottomInset = 0;
+let mockReplyText: string | null = '已创建';
 let mockCallState: ConversationTurnState = { phase: 'idle' };
 const mockDismissReply = jest.fn<AssistantApplicationPort['dismissReply']>();
 
@@ -45,6 +46,7 @@ function createApplication(): AssistantApplicationPort {
 describe('AssistantVoiceOverlay layout', () => {
   beforeEach(() => {
     mockBottomInset = 0;
+    mockReplyText = '已创建';
     mockCallState = { phase: 'idle' };
     mockDismissReply.mockClear();
   });
@@ -82,6 +84,22 @@ describe('AssistantVoiceOverlay layout', () => {
     expect(mockDismissReply).toHaveBeenCalledTimes(1);
   });
 
+  it('renders the controls without a reply bubble when there is no reply', () => {
+    mockReplyText = null;
+    mockPttApplication = createApplication();
+    const continuousApplication = createApplication();
+
+    render(
+      <AssistantVoiceOverlay
+        continuousApplication={continuousApplication}
+        pushToTalkApplication={mockPttApplication}
+      />,
+    );
+
+    expect(screen.queryByText('已创建')).toBeNull();
+    expect(screen.getByText('按住说话')).toBeTruthy();
+  });
+
   it.each([
     ['keeps a comfortable offset on devices with a small inset', 8, 32],
     ['moves controls above the system navigation area', 34, 50],
@@ -117,6 +135,22 @@ describe('AssistantVoiceOverlay layout', () => {
     fireEvent.press(screen.getByLabelText('进入免提通话'));
 
     expect(screen.getByText('回答中…')).toBeTruthy();
+  });
+
+  it('starts the continuous conversation when entering from idle', () => {
+    mockPttApplication = createApplication();
+    const startTurn = jest.fn<AssistantApplicationPort['startTurn']>(async () => {});
+    const continuousApplication = { ...createApplication(), startTurn };
+    render(
+      <AssistantVoiceOverlay
+        continuousApplication={continuousApplication}
+        pushToTalkApplication={mockPttApplication}
+      />,
+    );
+
+    fireEvent.press(screen.getByLabelText('进入免提通话'));
+
+    expect(startTurn).toHaveBeenCalledTimes(1);
   });
 
   it('shows a generic "已打断" label when the reply is interrupted', () => {
