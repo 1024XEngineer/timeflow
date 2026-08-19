@@ -30,14 +30,16 @@ function occurrenceOnSelectedDay(
   };
 }
 
-function createService(): ScheduleCalendarReadService {
+function createService(
+  occurrences: readonly ScheduleOccurrenceView[] = [],
+): ScheduleCalendarReadService {
   return {
     getSchedulesByDay: jest
       .fn<ScheduleCalendarReadService['getSchedulesByDay']>()
       .mockResolvedValue([]),
     getSchedulesByRange: jest
       .fn<ScheduleCalendarReadService['getSchedulesByRange']>()
-      .mockResolvedValue([]),
+      .mockResolvedValue(occurrences),
     getLocationSchedules: jest
       .fn<ScheduleCalendarReadService['getLocationSchedules']>()
       .mockResolvedValue([
@@ -209,8 +211,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
   it('connects multiple timed occurrences on a timeline and opens detail', async () => {
     const first = occurrenceOnSelectedDay(1, { scheduleId: 'schedule-a', title: '项目例会' });
     const second = occurrenceOnSelectedDay(4, { scheduleId: 'schedule-b', title: '方案讨论' });
-    const service = createService();
-    (service.getSchedulesByRange as jest.Mock).mockResolvedValue([first, second]);
+    const service = createService([first, second]);
 
     render(
       <ScheduleCalendarScreen
