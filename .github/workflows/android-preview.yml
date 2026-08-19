@@ -50,6 +50,7 @@ jobs:
       pr_number: ${{ steps.target.outputs.pr_number }}
       head_sha: ${{ steps.target.outputs.head_sha }}
       head_ref: ${{ steps.target.outputs.head_ref }}
+      head_repo: ${{ steps.target.outputs.head_repo }}
       head_repo_url: ${{ steps.target.outputs.head_repo_url }}
     permissions:
       contents: read
@@ -124,9 +125,8 @@ jobs:
             }
 
             const headRepo = pr.head.repo && pr.head.repo.full_name;
-            if (headRepo !== `${owner}/${repo}`) {
-              core.info(`Skipping fork PR #${prNumber} from ${headRepo}`);
-              core.setOutput('ok', 'false');
+            if (!headRepo) {
+              core.setFailed(`PR #${prNumber} has no head repository`);
               return;
             }
 
@@ -134,8 +134,9 @@ jobs:
             core.setOutput('pr_number', String(pr.number));
             core.setOutput('head_sha', pr.head.sha);
             core.setOutput('head_ref', pr.head.ref);
+            core.setOutput('head_repo', headRepo);
             core.setOutput('head_repo_url', pr.head.repo.html_url);
-            core.info(`Preview target: PR #${pr.number} ${pr.head.sha} (${pr.head.ref})`);
+            core.info(`Preview target: PR #${pr.number} ${headRepo}@${pr.head.sha} (${pr.head.ref})`);
 
   build:
     name: Build preview APK
@@ -151,8 +152,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.resolve.outputs.head_sha }}
           persist-credentials: false
+          ref: ${{ needs.resolve.outputs.head_sha }}
+          repository: ${{ needs.resolve.outputs.head_repo }}
 
       - uses: actions/setup-node@v4
         with:
