@@ -187,9 +187,9 @@ describe('ScheduleLocalRepository SQLite behavior', () => {
   });
 
   it('ignores a category patch for a missing or different-account schedule', async () => {
-    await expect(
-      repository.patchScheduleCategory('account-a', 'missing', 'study'),
-    ).resolves.toBe(false);
+    await expect(repository.patchScheduleCategory('account-a', 'missing', 'study')).resolves.toBe(
+      false,
+    );
     await repository.applyCloudSchedule(cloudSchedule({ category: null }));
     await expect(
       repository.patchScheduleCategory('account-b', 'schedule-a', 'study'),
