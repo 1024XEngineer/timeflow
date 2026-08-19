@@ -225,12 +225,19 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
       return;
     }
 
-    const { status: foreground } = await Location.getForegroundPermissionsAsync();
+    let { status: foreground } = await Location.getForegroundPermissionsAsync();
+    if (foreground !== 'granted') {
+      ({ status: foreground } = await Location.requestForegroundPermissionsAsync());
+    }
     if (foreground !== 'granted') {
       console.warn('[geofence] syncRegions skipped: foreground permission not granted');
       return;
     }
-    const { status: background } = await Location.getBackgroundPermissionsAsync();
+    // Android 要求先拿到前台权限才能申请后台权限，所以这两步不能对调顺序。
+    let { status: background } = await Location.getBackgroundPermissionsAsync();
+    if (background !== 'granted') {
+      ({ status: background } = await Location.requestBackgroundPermissionsAsync());
+    }
     if (background !== 'granted') {
       console.warn('[geofence] syncRegions skipped: background permission not granted');
       return;
