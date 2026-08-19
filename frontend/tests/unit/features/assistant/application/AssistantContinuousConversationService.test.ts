@@ -168,10 +168,18 @@ function createService(deps: ReturnType<typeof createDeps>) {
   return service;
 }
 
+function disposeService(service: AssistantContinuousConversationService) {
+  const index = liveServices.indexOf(service);
+  if (index >= 0) {
+    liveServices.splice(index, 1);
+  }
+  service.dispose();
+}
+
 describe('AssistantContinuousConversationService', () => {
   afterEach(() => {
     for (const service of liveServices.splice(0)) {
-      service.dispose();
+      disposeService(service);
     }
     jest.clearAllTimers();
     jest.useRealTimers();
@@ -300,7 +308,7 @@ describe('AssistantContinuousConversationService', () => {
     expect(fake.sent).not.toContainEqual(
       expect.objectContaining({ message_id: 'msg_failed', type: 'message.ack' }),
     );
-    service.dispose();
+    disposeService(service);
   });
 
   it('stops forwarding microphone frames while paused, and resumes them after togglePause()', async () => {
@@ -324,7 +332,7 @@ describe('AssistantContinuousConversationService', () => {
     expect(fake.sentAudioFrames).toHaveLength(2);
     // 关掉 startListening() 里 armIdleTimer() 挂的真实 setTimeout，不然会在
     // 进程里悬空，让 jest 报"未正常退出"。
-    service.dispose();
+    disposeService(service);
   });
 
   it('auto-pauses an active call when the app moves to the background', async () => {
@@ -339,7 +347,7 @@ describe('AssistantContinuousConversationService', () => {
     const chunk = new ArrayBuffer(4);
     deps.emitMicChunk(chunk);
     expect(fake.sentAudioFrames).toHaveLength(0);
-    service.dispose();
+    disposeService(service);
   });
 
   it('ignores a background transition while idle', () => {
@@ -359,7 +367,7 @@ describe('AssistantContinuousConversationService', () => {
     const service = createService(deps);
 
     await startListening(fake, service);
-    service.dispose();
+    disposeService(service);
     await advanceAndFlush(SESSION_IDLE_TIMEOUT_MS);
 
     expect(deps.unsubscribeAppState).toHaveBeenCalled();
@@ -382,7 +390,7 @@ describe('AssistantContinuousConversationService', () => {
     deps.emitMicChunk(chunk);
 
     expect(fake.sentAudioFrames).toHaveLength(1);
-    service.dispose();
+    disposeService(service);
   });
 
   it('guards endTurn() against being run twice concurrently', async () => {
@@ -462,7 +470,7 @@ describe('AssistantContinuousConversationService', () => {
     await flushAsync();
 
     expect(calls).toEqual([1, 2]);
-    service.dispose();
+    disposeService(service);
   });
 
   it('waits for startStream() to finish before pushing the first audio chunk', async () => {
@@ -504,7 +512,7 @@ describe('AssistantContinuousConversationService', () => {
     await flushAsync();
 
     expect(calls).toEqual(['startStream', 'pushChunk']);
-    service.dispose();
+    disposeService(service);
   });
 
   it('handleClose() unsubscribes from the shared connection before nulling it, even when a real disconnect races endTurn()', async () => {
@@ -552,7 +560,7 @@ describe('AssistantContinuousConversationService', () => {
     expect(deps.transport.connect).toHaveBeenCalledTimes(1);
     expect(fake.sent.filter((message) => message.type === 'voice.stream.start')).toHaveLength(1);
     expect(service.getState()).toEqual({ conversationId: 'conv_001', phase: 'listening' });
-    service.dispose();
+    disposeService(service);
   });
 
   it('ends the server stream and closes the connection when capture.start() rejects', async () => {
