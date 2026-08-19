@@ -41,15 +41,9 @@ export function ScheduleOccurrenceDetailSheet({
     detailOccurrence.occurrenceEnd,
     detailOccurrence.timezone,
   );
-  const badges = [
-    detailOccurrence.scheduleCategory === 'time' ? '时间日程' : '地点日程',
-    detailOccurrence.recurrenceMode === 'recurring' ? '周期日程' : '一次性',
-    ...(detailOccurrence.isAllDay ? ['全天'] : []),
-  ];
 
   return (
     <ScheduleDetailSheet
-      badges={badges}
       onClose={onClose}
       title={detailOccurrence.title}
       visible={occurrence !== null}
@@ -188,9 +182,18 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     height: 30,
     justifyContent: 'center',
+    overflow: 'hidden',
     width: 30,
   },
-  timeIconText: { color: colors.text, fontSize: 17, fontWeight: '700' },
+  timeIconText: {
+    color: colors.text,
+    fontSize: 17,
+    height: 17,
+    includeFontPadding: false,
+    lineHeight: 17,
+    textAlign: 'center',
+    textAlignVertical: 'center',
+  },
   timeLabel: { color: colors.mutedText, fontSize: 12, fontWeight: '700' },
   timePoint: { flex: 1, minWidth: 96 },
   timePointDate: { color: colors.mutedText, fontSize: 13, fontWeight: '600', marginTop: 5 },

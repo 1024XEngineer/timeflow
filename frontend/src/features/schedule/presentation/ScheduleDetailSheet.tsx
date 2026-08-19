@@ -4,13 +4,11 @@ import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import { colors, spacing } from '../../../shared/ui/theme';
 
 export function ScheduleDetailSheet({
-  badges,
   children,
   onClose,
   title,
   visible,
 }: {
-  badges: readonly string[];
   children: ReactNode;
   onClose: () => void;
   title: string;
@@ -36,15 +34,6 @@ export function ScheduleDetailSheet({
           <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
             <View style={styles.titleBlock}>
               <Text style={styles.title}>{title}</Text>
-              <View style={styles.badges}>
-                {badges.map((badge, index) => (
-                  <View key={badge} style={[styles.badge, index === 0 && styles.primaryBadge]}>
-                    <Text style={[styles.badgeText, index === 0 && styles.primaryBadgeText]}>
-                      {badge}
-                    </Text>
-                  </View>
-                ))}
-              </View>
             </View>
             {children}
           </ScrollView>
@@ -121,14 +110,6 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'flex-end',
   },
-  badge: {
-    backgroundColor: colors.input,
-    borderRadius: 999,
-    paddingHorizontal: 11,
-    paddingVertical: 6,
-  },
-  badgeText: { color: colors.mutedText, fontSize: 12, fontWeight: '700' },
-  badges: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   closeButton: {
     alignItems: 'center',
     backgroundColor: colors.input,
@@ -170,8 +151,6 @@ const styles = StyleSheet.create({
   metaIcon: { color: colors.mutedText, fontSize: 15 },
   metaText: { color: colors.mutedText, flex: 1, fontSize: 12 },
   pressed: { opacity: 0.62 },
-  primaryBadge: { backgroundColor: colors.accent },
-  primaryBadgeText: { color: colors.text },
   section: {
     alignItems: 'flex-start',
     backgroundColor: colors.background,
@@ -189,9 +168,18 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     height: 38,
     justifyContent: 'center',
+    overflow: 'hidden',
     width: 38,
   },
-  sectionIconText: { color: colors.text, fontSize: 18, fontWeight: '700' },
+  sectionIconText: {
+    color: colors.text,
+    fontSize: 18,
+    height: 18,
+    includeFontPadding: false,
+    lineHeight: 18,
+    textAlign: 'center',
+    textAlignVertical: 'center',
+  },
   sectionLabel: { color: colors.mutedText, fontSize: 12, fontWeight: '700', marginBottom: 4 },
   sectionPrimary: { color: colors.text, fontSize: 16, fontWeight: '700', lineHeight: 22 },
   sectionSecondary: { color: colors.mutedText, fontSize: 13, lineHeight: 19, marginTop: 3 },

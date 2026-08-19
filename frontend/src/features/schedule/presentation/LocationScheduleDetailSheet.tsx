@@ -33,7 +33,6 @@ export function LocationScheduleDetailSheet({
 
   return (
     <ScheduleDetailSheet
-      badges={['地点日程']}
       onClose={onClose}
       title={detailSchedule.title}
       visible={schedule !== null}

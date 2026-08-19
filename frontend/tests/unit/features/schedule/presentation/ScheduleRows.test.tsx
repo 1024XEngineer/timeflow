@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react-native';
 import { describe, expect, it } from '@jest/globals';
+import { StyleSheet } from 'react-native';
 
 import type {
   LocationScheduleView,
@@ -7,6 +8,7 @@ import type {
 } from '../../../../../src/features/schedule/application';
 import { LocationScheduleRow } from '../../../../../src/features/schedule/presentation/LocationScheduleRow';
 import { ScheduleOccurrenceRow } from '../../../../../src/features/schedule/presentation/ScheduleOccurrenceRow';
+import { colors } from '../../../../../src/shared/ui/theme';
 
 function occurrence(overrides: Partial<ScheduleOccurrenceView> = {}): ScheduleOccurrenceView {
   return {
@@ -30,7 +32,36 @@ describe('ScheduleOccurrenceRow', () => {
     render(<ScheduleOccurrenceRow item={occurrence()} />);
 
     expect(screen.getByText('团队周会')).toBeTruthy();
+    expect(screen.getByText('14:00')).toBeTruthy();
+    expect(screen.getByText('15:00')).toBeTruthy();
+    expect(screen.queryByText(/至 /)).toBeNull();
     expect(screen.queryByText('重复')).toBeNull();
+    expect(StyleSheet.flatten(screen.getByTestId('schedule-occurrence-indicator').props.style)).toMatchObject({
+      backgroundColor: colors.focus,
+      height: 10,
+      width: 10,
+    });
+    expect(StyleSheet.flatten(screen.getByTestId('schedule-occurrence-card').props.style)).toMatchObject({
+      backgroundColor: colors.surface,
+      minHeight: 72,
+    });
+  });
+
+  it('keeps the same card height for different durations', () => {
+    const short = render(
+      <ScheduleOccurrenceRow
+        item={occurrence({ occurrenceEnd: '2026-08-13T06:30:00.000Z' })}
+      />,
+    );
+    const long = render(
+      <ScheduleOccurrenceRow
+        item={occurrence({ occurrenceEnd: '2026-08-13T09:00:00.000Z' })}
+      />,
+    );
+
+    expect(StyleSheet.flatten(short.getByTestId('schedule-occurrence-card').props.style).minHeight).toBe(
+      StyleSheet.flatten(long.getByTestId('schedule-occurrence-card').props.style).minHeight,
+    );
   });
 
   it('shows a recurrence badge for a recurring schedule', () => {
@@ -52,6 +83,15 @@ describe('ScheduleOccurrenceRow', () => {
     );
 
     expect(screen.getByText('全天')).toBeTruthy();
+    expect(StyleSheet.flatten(screen.getByTestId('schedule-occurrence-indicator').props.style)).toMatchObject({
+      backgroundColor: colors.text,
+      height: 10,
+      width: 10,
+    });
+    expect(StyleSheet.flatten(screen.getByTestId('schedule-occurrence-card').props.style)).toMatchObject({
+      backgroundColor: colors.surface,
+      minHeight: 72,
+    });
   });
 });
 
@@ -69,7 +109,7 @@ describe('LocationScheduleRow', () => {
 
     render(<LocationScheduleRow item={item} />);
 
-    expect(screen.getByText('位置日程')).toBeTruthy();
+    expect(screen.queryByText('位置日程')).toBeNull();
     expect(screen.getByText('到公司提醒我打卡')).toBeTruthy();
     expect(screen.getByText('公司')).toBeTruthy();
     expect(screen.queryByText('location')).toBeNull();
