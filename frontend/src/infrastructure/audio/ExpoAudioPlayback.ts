@@ -32,7 +32,9 @@ export class ExpoAudioPlayback implements AudioPlaybackPort {
   private modeReady: Promise<void> | null = null;
 
   /** 默认走真实的动态 import；测试注入一个假实现，绕开 expo-audio 这个原生模块。 */
-  constructor(private readonly loadExpoAudioModule: () => Promise<ExpoAudioModule | null> = loadExpoAudio) {}
+  constructor(
+    private readonly loadExpoAudioModule: () => Promise<ExpoAudioModule | null> = loadExpoAudio,
+  ) {}
 
   async isTtsAvailable(): Promise<boolean> {
     // TTS 字节管线尚未接入；有 data 时由 playTts 直接播放。

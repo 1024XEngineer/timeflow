@@ -16,9 +16,7 @@ describe('ExpoAudioPlayback (no native audio module available)', () => {
 
   it('playTts resolves played: false without touching native audio when data is empty', async () => {
     const audio = new ExpoAudioPlayback();
-    await expect(
-      audio.playTts({ schedule_id: 'sch-1', data: new Uint8Array() }),
-    ).resolves.toEqual({
+    await expect(audio.playTts({ schedule_id: 'sch-1', data: new Uint8Array() })).resolves.toEqual({
       playback_id: 'tts-empty-sch-1',
       played: false,
       used_local_fallback: false,
@@ -41,7 +39,11 @@ describe('ExpoAudioPlayback (no native audio module available)', () => {
       data: new Uint8Array([1, 2, 3]),
       format: 'wav',
     });
-    expect(receipt).toEqual({ playback_id: 'tts-sch-1', played: false, used_local_fallback: false });
+    expect(receipt).toEqual({
+      playback_id: 'tts-sch-1',
+      played: false,
+      used_local_fallback: false,
+    });
   });
 
   it('playLocalFallback resolves played: false with data when native audio cannot load', async () => {
