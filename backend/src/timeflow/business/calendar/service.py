@@ -142,12 +142,14 @@ class ScheduleApplicationService(ScheduleAgentService):
         *,
         category_classifier: ScheduleCategoryClassifier | None = None,
         category_task_submitter: Callable[[Callable[[], None]], object] | None = None,
+        category_event_publisher: Callable[[str, str, ScheduleCategory], None] | None = None,
         clock: Callable[[], datetime] | None = None,
         id_factory: Callable[[], str] | None = None,
     ) -> None:
         self._unit_of_work_factory = unit_of_work_factory
         self._category_classifier = category_classifier
         self._category_task_submitter = category_task_submitter or _CATEGORY_EXECUTOR.submit
+        self._category_event_publisher = category_event_publisher
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_factory = id_factory or (lambda: uuid4().hex)
 
@@ -225,6 +227,14 @@ class ScheduleApplicationService(ScheduleAgentService):
                 )
                 if persisted is not None:
                     unit_of_work.commit()
+                    if self._category_event_publisher is not None:
+                        try:
+                            self._category_event_publisher(account_id, schedule_id, category)
+                        except Exception as exc:
+                            logger.warning(
+                                "schedule category event could not be published",
+                                extra={"error_type": type(exc).__name__},
+                            )
         except Exception as exc:
             logger.warning(
                 "schedule category result could not be persisted; leaving category null",

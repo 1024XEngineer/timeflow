@@ -1,4 +1,5 @@
 import { isTransportError, type AssistantServerMessage } from '../../../contracts/conversation';
+import type { ScheduleCategory } from '../../../contracts/schedule';
 import type { AppLifecycleStatus } from '../../../infrastructure/appState/AppStateProvider';
 import type { AppliedCommand, ConversationTurnState } from '../domain/ConversationTurn';
 
@@ -351,6 +352,9 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         this.setState({ conversationId: message.conversation_id, phase: 'listening' });
         return;
       }
+      case 'schedule.category.updated':
+        void this.applyCategoryUpdate(message.payload.schedule_id, message.payload.category);
+        return;
       case 'voice.dialogue.question':
         this.setState({
           conversationId: message.conversation_id,
@@ -410,6 +414,18 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     this.lastAppliedCommand = command;
     this.notifyListeners();
     this.connection?.send({ message_id: messageId, status: 'applied', type: 'message.ack' });
+  }
+
+  private async applyCategoryUpdate(scheduleId: string, category: ScheduleCategory): Promise<void> {
+    try {
+      await this.deps.localScheduleWriter.applyCategoryUpdate?.(
+        this.options.accountId,
+        scheduleId,
+        category,
+      );
+    } catch {
+      // A category push is an enhancement; a missing/deleted local row is safe to ignore.
+    }
   }
 
   private handleAudioFrame(chunk: ArrayBuffer): void {

@@ -1,4 +1,5 @@
 import { isTransportError, type AssistantServerMessage } from '../../../contracts/conversation';
+import type { ScheduleCategory } from '../../../contracts/schedule';
 import type { AppliedCommand, ConversationTurnState } from '../domain/ConversationTurn';
 
 import type {
@@ -232,6 +233,9 @@ export class AssistantConversationService implements AssistantApplicationPort {
         this.setState({ phase: 'idle' });
         return;
       }
+      case 'schedule.category.updated':
+        void this.applyCategoryUpdate(message.payload.schedule_id, message.payload.category);
+        return;
       case 'voice.dialogue.question':
         this.setState({
           conversationId: message.conversation_id,
@@ -276,6 +280,18 @@ export class AssistantConversationService implements AssistantApplicationPort {
     this.lastAppliedCommand = command;
     this.notifyListeners();
     this.connection?.send({ message_id: messageId, status: 'applied', type: 'message.ack' });
+  }
+
+  private async applyCategoryUpdate(scheduleId: string, category: ScheduleCategory): Promise<void> {
+    try {
+      await this.deps.localScheduleWriter.applyCategoryUpdate?.(
+        this.options.accountId,
+        scheduleId,
+        category,
+      );
+    } catch {
+      // A category push is an enhancement; a missing/deleted local row is safe to ignore.
+    }
   }
 
   private handleAudioFrame(chunk: ArrayBuffer): void {

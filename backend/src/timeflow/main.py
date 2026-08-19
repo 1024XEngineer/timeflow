@@ -159,10 +159,9 @@ def create_app(
 
     if audio_sink is None:
         assert session_factory is not None
+        result_sink = WebSocketResultSink(connections)
         audio_sink = AgentAudioSink(
-            _build_agent(
-                settings, WebSocketResultSink(connections), session_factory, location_service
-            )
+            _build_agent(settings, result_sink, session_factory, location_service)
         )
 
     voice_streams = VoiceStreamHandlers(
@@ -256,7 +255,15 @@ def _build_realtime_agent(
     if settings.aliyun_audio_is_configured():
         logger.info("using the realtime model", extra={"model": settings.aliyun_audio_model})
 
-        if not settings.openai_is_configured():
+        category_classifier = None
+        if settings.openai_is_configured():
+            category_classifier = LlmScheduleCategoryClassifier(
+                OpenAICompatibleJsonLlm(
+                    settings,
+                    timeout_seconds=settings.schedule_category_timeout_seconds,
+                )
+            )
+        else:
             logger.warning(
                 "schedule category classification is not configured; leaving category null",
                 extra={
@@ -269,12 +276,8 @@ def _build_realtime_agent(
 
         schedule_service = ScheduleApplicationService(
             lambda: SqlAlchemyScheduleUnitOfWork(session_factory),
-            category_classifier=LlmScheduleCategoryClassifier(
-                OpenAICompatibleJsonLlm(
-                    settings,
-                    timeout_seconds=settings.schedule_category_timeout_seconds,
-                )
-            ),
+            category_classifier=category_classifier,
+            category_event_publisher=result_sink.publish_schedule_category_updated,
         )
 
         async def bind_account(

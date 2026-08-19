@@ -3,6 +3,7 @@
 import logging
 from collections.abc import AsyncIterator
 
+from timeflow.business.calendar.contracts import ScheduleCategory
 from timeflow.gateway.websocket.agent_ports import (
     AudioCanceledInfo,
     AudioReplyInfo,
@@ -14,6 +15,8 @@ from timeflow.gateway.websocket.agent_ports import (
 )
 from timeflow.gateway.websocket.connection_manager import ConnectionManager
 from timeflow.gateway.websocket.messages.agent import (
+    ScheduleCategoryUpdated,
+    ScheduleCategoryUpdatedPayload,
     VoiceAsrCompleted,
     VoiceAsrCompletedPayload,
     VoiceCommandResult,
@@ -153,6 +156,17 @@ class WebSocketResultSink:
         """Push that this voice session should end now."""
         message = VoiceSessionEnd(conversation_id=stream.conversation_id)
         await self._send(stream.session_id, message.type, message.model_dump())
+
+    def publish_schedule_category_updated(
+        self, account_id: str, schedule_id: str, category: ScheduleCategory
+    ) -> None:
+        """Schedule a category-only push without coupling the business thread to asyncio."""
+        message = ScheduleCategoryUpdated(
+            payload=ScheduleCategoryUpdatedPayload(schedule_id=schedule_id, category=category)
+        )
+        # The classifier runs in a worker thread. The connection manager owns the
+        # event-loop bridge and safely ignores the event when no session is connected.
+        self._connections.publish_to_account_nowait(account_id, message.model_dump())
 
     async def _send(self, session_id: str, message_type: str, envelope: dict[str, object]) -> None:
         """Send one message, logging rather than raising when the session has gone."""

@@ -110,6 +110,7 @@ export type LocalRepositoryOperationsContract = Assert<
     | 'listSchedules'
     | 'withTransaction'
     | 'applyCloudSchedule'
+    | 'patchScheduleCategory'
     | 'updateReminderRuntime'
     | 'purgeSchedule'
     | 'upsertOccurrenceOverride'

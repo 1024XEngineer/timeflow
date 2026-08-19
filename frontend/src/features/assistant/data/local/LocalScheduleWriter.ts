@@ -61,6 +61,14 @@ export class LocalScheduleWriter implements LocalScheduleWriterPort {
       }
     });
   }
+
+  public applyCategoryUpdate(
+    accountId: string,
+    scheduleId: string,
+    category: ScheduleCategory,
+  ): Promise<boolean> {
+    return this.repository.patchScheduleCategory(accountId, scheduleId, category);
+  }
 }
 
 function toCloudScheduleRow(accountId: string, raw: Record<string, unknown>): CloudScheduleRow {

@@ -28,13 +28,23 @@ class ConnectionManager:
     def __init__(self) -> None:
         """Create an empty registry."""
         self._connections: dict[str, Sendable] = {}
+        self._session_accounts: dict[str, str] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._audio_locks: dict[str, asyncio.Lock] = {}
         self._pending_ends: set[asyncio.Task[bool]] = set()
+        self._loop: asyncio.AbstractEventLoop | None = None
 
-    def register(self, session_id: str, connection: Sendable) -> None:
+    def register(
+        self, session_id: str, connection: Sendable, account_id: str | None = None
+    ) -> None:
         """Record the connection serving a session."""
         self._connections[session_id] = connection
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        if account_id is not None:
+            self._session_accounts[session_id] = account_id
 
     def unregister(self, session_id: str, connection: Sendable) -> None:
         """Drop the session, but only if this exact connection still owns it.
@@ -44,8 +54,34 @@ class ConnectionManager:
         """
         if self._connections.get(session_id) is connection:
             self._connections.pop(session_id, None)
+            self._session_accounts.pop(session_id, None)
             self._locks.pop(session_id, None)
             self._audio_locks.pop(session_id, None)
+
+    async def send_to_account(self, account_id: str, message: dict[str, Any]) -> int:
+        """Send one message to every live session belonging to an account."""
+        session_ids = [
+            session_id
+            for session_id, owner in self._session_accounts.items()
+            if owner == account_id
+        ]
+        delivered = 0
+        for session_id in session_ids:
+            if await self.send(session_id, message):
+                delivered += 1
+        return delivered
+
+    def publish_to_account_nowait(self, account_id: str, message: dict[str, Any]) -> None:
+        """Bridge a worker-thread event onto the loop that owns live connections."""
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+
+        def schedule() -> None:
+            task = asyncio.create_task(self.send_to_account(account_id, message))
+            task.add_done_callback(_consume_task_exception)
+
+        loop.call_soon_threadsafe(schedule)
 
     def lock_for(self, session_id: str) -> asyncio.Lock:
         """Return the write lock for a session, creating it on first use."""
@@ -130,3 +166,9 @@ class ConnectionManager:
         ender.add_done_callback(self._pending_ends.discard)
         with contextlib.suppress(asyncio.CancelledError):
             await asyncio.shield(ender)
+
+
+def _consume_task_exception(task: asyncio.Task[object]) -> None:
+    """Prevent a disconnected client from surfacing an unhandled task exception."""
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        task.result()
