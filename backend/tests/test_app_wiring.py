@@ -440,6 +440,40 @@ def test_missing_category_llm_configuration_skips_background_task_submission() -
     assert repository.snapshot.category is None
 
 
+def test_configured_category_llm_is_injected_into_the_schedule_service() -> None:
+    captured: dict[str, Any] = {}
+    classifier = mock.Mock()
+
+    def capture_service(*args: Any, **kwargs: Any) -> ScheduleApplicationService:
+        from timeflow.business.calendar.service import ScheduleApplicationService as RealService
+
+        captured.update(kwargs)
+        return RealService(*args, **kwargs)
+
+    with (
+        mock.patch("timeflow.main.ScheduleApplicationService", side_effect=capture_service),
+        mock.patch(
+            "timeflow.main.LlmScheduleCategoryClassifier",
+            return_value=classifier,
+        ) as classifier_factory,
+        mock.patch("timeflow.main.OpenAICompatibleJsonLlm") as llm_factory,
+        mock.patch.dict(
+            os.environ,
+            {
+                "TIMEFLOW_OPENAI_BASE_URL": "https://llm.example.test/v1",
+                "TIMEFLOW_OPENAI_API_KEY": "category-key-for-test",
+                "TIMEFLOW_OPENAI_MODEL": "category-model-for-test",
+            },
+            clear=False,
+        ),
+    ):
+        _build_with_environment("production", audio_configured=True)
+
+    assert captured["category_classifier"] is classifier
+    llm_factory.assert_called_once()
+    classifier_factory.assert_called_once_with(llm_factory.return_value)
+
+
 def test_voice_agent_mode_two_fails_closed_until_conversation_agent_is_wired() -> None:
     """未实现 Agent 端口前，不能静默选择 LLM+ASR+TTS 模式。"""
     with pytest.raises(RuntimeError, match="TIMEFLOW_VOICE_AGENT_MODE=2"):

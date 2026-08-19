@@ -314,6 +314,60 @@ describe('AssistantContinuousConversationService', () => {
     service.dispose();
   });
 
+  it('applies a buffered category after the command result creates the local row', async () => {
+    const fake = createFakeConnection();
+    const applyCategoryUpdate = jest
+      .fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const deps = createDeps({ applyCategoryUpdate, connection: fake.connection });
+    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      payload: { category: 'work', schedule_id: 'schedule_001' },
+      type: 'schedule.category.updated',
+    } as AssistantServerMessage);
+    await flushAsync();
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_001',
+      payload: {
+        operation: 'create_schedule',
+        schedule: { id: 'schedule_001' },
+        status: 'applied',
+      },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(applyCategoryUpdate).toHaveBeenNthCalledWith(2, 'acc_001', 'schedule_001', 'work');
+    service.dispose();
+  });
+
+  it('does not retain a category update that finishes after dispose', async () => {
+    const fake = createFakeConnection();
+    let finishPatch!: () => void;
+    const pendingPatch = new Promise<boolean>((resolve) => {
+      finishPatch = () => resolve(false);
+    });
+    const applyCategoryUpdate = jest.fn<() => Promise<boolean>>(() => pendingPatch);
+    const deps = createDeps({ applyCategoryUpdate, connection: fake.connection });
+    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      payload: { category: 'work', schedule_id: 'schedule_001' },
+      type: 'schedule.category.updated',
+    } as AssistantServerMessage);
+    await flushAsync();
+    service.dispose();
+    finishPatch();
+    await flushAsync();
+
+    expect(applyCategoryUpdate).toHaveBeenCalledTimes(1);
+  });
+
   it('stops forwarding microphone frames while paused, and resumes them after togglePause()', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });

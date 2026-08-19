@@ -133,6 +133,20 @@ def test_send_to_account_reports_zero_when_account_has_no_sessions() -> None:
     asyncio.run(scenario())
 
 
+def test_send_to_account_does_not_count_a_failed_delivery() -> None:
+    class FailedDeliveryManager(ConnectionManager):
+        async def send(self, session_id: str, message: dict[str, Any]) -> bool:
+            return False
+
+    async def scenario() -> None:
+        connections = FailedDeliveryManager()
+        connections.register("ws_a", RecordingConnection(), "account-a")
+
+        assert await connections.send_to_account("account-a", {"type": "ping"}) == 0
+
+    asyncio.run(scenario())
+
+
 def test_publish_to_account_nowait_bridges_worker_event_to_event_loop() -> None:
     async def scenario() -> None:
         connections = ConnectionManager()
@@ -146,6 +160,26 @@ def test_publish_to_account_nowait_bridges_worker_event_to_event_loop() -> None:
         assert connection.shape() == ["schedule.category.updated"]
 
     asyncio.run(scenario())
+
+
+def test_register_and_publish_without_a_running_loop_are_safe() -> None:
+    connections = ConnectionManager()
+    connections.register("ws_a", RecordingConnection(), "account-a")
+
+    connections.publish_to_account_nowait("account-a", {"type": "ping"})
+
+
+def test_publish_ignores_a_closed_owning_loop() -> None:
+    connections = ConnectionManager()
+    loop = asyncio.new_event_loop()
+
+    async def register() -> None:
+        connections.register("ws_a", RecordingConnection(), "account-a")
+
+    loop.run_until_complete(register())
+    loop.close()
+
+    connections.publish_to_account_nowait("account-a", {"type": "ping"})
 
 
 def test_unregister_keeps_a_replacement_connection() -> None:

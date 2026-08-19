@@ -432,6 +432,28 @@ def test_create_schedule_does_not_publish_category_event_when_classification_fai
     assert events == []
 
 
+def test_category_helper_returns_none_without_a_classifier() -> None:
+    service, _ = _service()
+
+    assert service._classify_category(_time_command()) is None
+
+
+def test_invalid_classifier_value_keeps_category_null() -> None:
+    class InvalidCategoryClassifier:
+        def classify(self, _command: CreateScheduleCommand) -> ScheduleCategory | None:
+            return "unsupported"  # type: ignore[return-value]
+
+    service, store = _service(
+        category_classifier=InvalidCategoryClassifier(),
+        category_task_submitter=lambda task: task(),
+    )
+
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert created.category is None
+    assert store.schedules[created.id].category is None
+
+
 def test_category_event_publisher_failure_does_not_escape_background_task() -> None:
     def publish(_account_id: str, _schedule_id: str, _category: ScheduleCategory) -> None:
         raise RuntimeError("websocket unavailable")
@@ -521,6 +543,33 @@ def test_create_returns_before_background_classification_finishes() -> None:
     assert classifier.calls == 1
     assert store.schedules[created.id].category is ScheduleCategory.WORK
     assert store.schedules[created.id].revision == created.revision
+
+
+def test_deleted_schedule_ignores_a_late_background_classification() -> None:
+    events: list[tuple[str, str, ScheduleCategory]] = []
+    pending: list[Callable[[], None]] = []
+    service, store = _service(
+        category_classifier=_FakeCategoryClassifier(ScheduleCategory.WORK),
+        category_task_submitter=lambda task: pending.append(task),
+        category_event_publisher=lambda account_id, schedule_id, category: events.append(
+            (account_id, schedule_id, category)
+        ),
+    )
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+    deleted = service.delete_once_schedule(
+        account_id="account-a",
+        command=DeleteOnceScheduleCommand(
+            schedule_id=created.id,
+            expected_revision=created.revision,
+        ),
+    ).schedules[0]
+
+    pending.pop()()
+
+    assert store.schedules[created.id] == deleted
+    assert deleted.status is ScheduleStatus.DELETED
+    assert deleted.category is None
+    assert events == []
 
 
 def test_category_task_submission_failure_does_not_block_creation() -> None:

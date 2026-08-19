@@ -199,6 +199,22 @@ describe('ScheduleLocalRepository SQLite behavior', () => {
     });
   });
 
+  it('ignores a delayed category patch for a deleted schedule', async () => {
+    await repository.applyCloudSchedule(cloudSchedule({ category: null }));
+    await repository.applyCloudSchedule(
+      cloudSchedule({ category: null, status: 'deleted', cloud_revision: 2 }),
+    );
+
+    await expect(
+      repository.patchScheduleCategory('account-a', 'schedule-a', 'study'),
+    ).resolves.toBe(false);
+    await expect(repository.getSchedule('account-a', 'schedule-a')).resolves.toMatchObject({
+      category: null,
+      cloud_revision: 2,
+      status: 'deleted',
+    });
+  });
+
   it('rejects a category outside the shared enum at the SQLite boundary', async () => {
     await expect(
       repository.applyCloudSchedule(

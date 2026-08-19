@@ -180,7 +180,7 @@ export class ScheduleLocalRepository {
     const result = await this.database.runAsync(
       `UPDATE local_schedules
        SET category = ?
-       WHERE account_id = ? AND id = ?`,
+       WHERE account_id = ? AND id = ? AND status = 'active'`,
       category,
       accountId,
       scheduleId,
