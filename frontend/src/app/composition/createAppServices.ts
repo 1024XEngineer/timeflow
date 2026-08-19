@@ -21,7 +21,7 @@ import {
   NativeAlarmScheduler,
   NativeDeviceCapability,
 } from '../../infrastructure/notifications';
-import { MockTimeListener } from '../../infrastructure/time';
+import { IntervalTimeListener } from '../../infrastructure/time';
 import { MockReminderPresenter } from '../../features/reminder/presentation';
 import { ScheduleViewStore } from '../../features/schedule/presentation';
 
@@ -44,7 +44,7 @@ export function createAppServices(options: CreateAppServicesOptions = {}): AppSe
   const auth = createAuthRuntime(options.auth);
   const reminderPorts: ReminderApplicationDependencies = {
     schedules: new MockLocalScheduleReader(),
-    time: new MockTimeListener(),
+    time: new IntervalTimeListener(),
     location: new MockLocationMonitor(),
     alarms: new NativeAlarmScheduler(),
     delivery: new MockReminderDelivery(),
