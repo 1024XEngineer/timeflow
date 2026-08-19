@@ -36,12 +36,16 @@ describe('ScheduleOccurrenceRow', () => {
     expect(screen.getByText('15:00')).toBeTruthy();
     expect(screen.queryByText(/至 /)).toBeNull();
     expect(screen.queryByText('重复')).toBeNull();
-    expect(StyleSheet.flatten(screen.getByTestId('schedule-occurrence-indicator').props.style)).toMatchObject({
+    expect(
+      StyleSheet.flatten(screen.getByTestId('schedule-occurrence-indicator').props.style),
+    ).toMatchObject({
       backgroundColor: colors.focus,
       height: 10,
       width: 10,
     });
-    expect(StyleSheet.flatten(screen.getByTestId('schedule-occurrence-card').props.style)).toMatchObject({
+    expect(
+      StyleSheet.flatten(screen.getByTestId('schedule-occurrence-card').props.style),
+    ).toMatchObject({
       backgroundColor: colors.surface,
       minHeight: 72,
     });
@@ -49,19 +53,15 @@ describe('ScheduleOccurrenceRow', () => {
 
   it('keeps the same card height for different durations', () => {
     const short = render(
-      <ScheduleOccurrenceRow
-        item={occurrence({ occurrenceEnd: '2026-08-13T06:30:00.000Z' })}
-      />,
+      <ScheduleOccurrenceRow item={occurrence({ occurrenceEnd: '2026-08-13T06:30:00.000Z' })} />,
     );
     const long = render(
-      <ScheduleOccurrenceRow
-        item={occurrence({ occurrenceEnd: '2026-08-13T09:00:00.000Z' })}
-      />,
+      <ScheduleOccurrenceRow item={occurrence({ occurrenceEnd: '2026-08-13T09:00:00.000Z' })} />,
     );
 
-    expect(StyleSheet.flatten(short.getByTestId('schedule-occurrence-card').props.style).minHeight).toBe(
-      StyleSheet.flatten(long.getByTestId('schedule-occurrence-card').props.style).minHeight,
-    );
+    expect(
+      StyleSheet.flatten(short.getByTestId('schedule-occurrence-card').props.style).minHeight,
+    ).toBe(StyleSheet.flatten(long.getByTestId('schedule-occurrence-card').props.style).minHeight);
   });
 
   it('shows a recurrence badge for a recurring schedule', () => {
@@ -83,12 +83,16 @@ describe('ScheduleOccurrenceRow', () => {
     );
 
     expect(screen.getByText('全天')).toBeTruthy();
-    expect(StyleSheet.flatten(screen.getByTestId('schedule-occurrence-indicator').props.style)).toMatchObject({
+    expect(
+      StyleSheet.flatten(screen.getByTestId('schedule-occurrence-indicator').props.style),
+    ).toMatchObject({
       backgroundColor: colors.text,
       height: 10,
       width: 10,
     });
-    expect(StyleSheet.flatten(screen.getByTestId('schedule-occurrence-card').props.style)).toMatchObject({
+    expect(
+      StyleSheet.flatten(screen.getByTestId('schedule-occurrence-card').props.style),
+    ).toMatchObject({
       backgroundColor: colors.surface,
       minHeight: 72,
     });

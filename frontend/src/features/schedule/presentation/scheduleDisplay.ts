@@ -15,7 +15,10 @@ export function formatAgendaSectionTitle(selectedDate: Date, today: Date = new D
   return `${selectedDate.getMonth() + 1}月${selectedDate.getDate()}日的安排`;
 }
 
-export function emptyAgendaMessage(selectedDate: Date, today: Date = new Date()): {
+export function emptyAgendaMessage(
+  selectedDate: Date,
+  today: Date = new Date(),
+): {
   title: string;
   detail: string | null;
 } {

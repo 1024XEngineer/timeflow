@@ -32,11 +32,7 @@ export function LocationScheduleDetailSheet({
   );
 
   return (
-    <ScheduleDetailSheet
-      onClose={onClose}
-      title={detailSchedule.title}
-      visible={schedule !== null}
-    >
+    <ScheduleDetailSheet onClose={onClose} title={detailSchedule.title} visible={schedule !== null}>
       {location ? <DetailSection icon="📍" label="地点" primary={location} /> : null}
       {reminder ? (
         <DetailSection

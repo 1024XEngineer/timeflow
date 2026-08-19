@@ -1,6 +1,9 @@
 import { describe, expect, it } from '@jest/globals';
 
-import { emptyAgendaMessage, formatAgendaSectionTitle } from '../../../../../src/features/schedule/presentation/scheduleDisplay';
+import {
+  emptyAgendaMessage,
+  formatAgendaSectionTitle,
+} from '../../../../../src/features/schedule/presentation/scheduleDisplay';
 
 describe('formatAgendaSectionTitle', () => {
   const today = new Date(2026, 7, 19);
