@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import { describe, expect, it, jest } from '@jest/globals';
-import { Modal, ScrollView, StyleSheet } from 'react-native';
+import { Modal, StyleSheet } from 'react-native';
 
 import type {
   LocationScheduleView,

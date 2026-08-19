@@ -84,7 +84,9 @@ describe('ScheduleCalendarScreen location schedules', () => {
 
     await waitFor(() => expect(service.getLocationSchedules).toHaveBeenCalled());
     expect(
-      StyleSheet.flatten(screen.getByTestId('schedule-calendar-scroll').props.contentContainerStyle),
+      StyleSheet.flatten(
+        screen.getByTestId('schedule-calendar-scroll').props.contentContainerStyle,
+      ),
     ).toMatchObject({ paddingBottom: 118, paddingTop: 0 });
   });
 
