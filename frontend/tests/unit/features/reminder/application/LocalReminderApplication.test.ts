@@ -562,4 +562,86 @@ describe('LocalReminderApplication', () => {
       });
     });
   });
+
+  describe('location triggering', () => {
+    function fixtureLocationSchedule(
+      overrides: Partial<LocalReminderSchedule> = {},
+    ): LocalReminderSchedule {
+      return fixtureSchedule({
+        schedule_type: 'location',
+        latitude: 31.2304,
+        longitude: 121.4737,
+        geofence_radius_meters: 100,
+        reminder: {
+          reminder_type: 'arrive_location',
+          reminder_trigger_at: null,
+          reminder_offset_minutes: null,
+          reminder_strength: 'medium',
+        },
+        ...overrides,
+      });
+    }
+
+    it('arms the geofence once the sample leaves the zone, without delivering', async () => {
+      const schedule = fixtureLocationSchedule({ id: 's1' });
+      const deps = createDeps({ schedules: new FakeScheduleReader([schedule]) });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      await app.register(schedule);
+
+      await app.handleLocation({
+        latitude: 40,
+        longitude: 121.4737,
+        accuracy_meters: 10,
+        observed_at: '2026-08-18T10:00:00.000Z',
+      });
+
+      await expect(deps.state.read('s1')).resolves.toMatchObject({ geofence_armed: true });
+      expect(deps.presenter.show).not.toHaveBeenCalled();
+    });
+
+    it('delivers once an armed geofence is re-entered, then disarms it', async () => {
+      const schedule = fixtureLocationSchedule({
+        id: 's1',
+        runtime: { ...emptyRuntime(), geofence_armed: true },
+      });
+      const deps = createDeps({ schedules: new FakeScheduleReader([schedule]) });
+      await deps.state.write('s1', schedule.runtime);
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      await app.register(schedule);
+
+      await app.handleLocation({
+        latitude: 31.2304,
+        longitude: 121.4737,
+        accuracy_meters: 10,
+        observed_at: '2026-08-18T10:00:00.000Z',
+      });
+
+      expect(deps.presenter.show).toHaveBeenCalledTimes(1);
+      await expect(deps.state.read('s1')).resolves.toMatchObject({
+        geofence_armed: false,
+        reminder_disposition_state: 'pending',
+      });
+    });
+
+    it('does not re-deliver a still-armed geofence while the sample stays outside it', async () => {
+      const schedule = fixtureLocationSchedule({ id: 's1' });
+      const deps = createDeps({ schedules: new FakeScheduleReader([schedule]) });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      await app.register(schedule);
+
+      const farSample = {
+        latitude: 40,
+        longitude: 121.4737,
+        accuracy_meters: 10,
+        observed_at: '2026-08-18T10:00:00.000Z',
+      };
+      await app.handleLocation(farSample);
+      await app.handleLocation(farSample);
+
+      expect(deps.presenter.show).not.toHaveBeenCalled();
+    });
+  });
 });
