@@ -19,8 +19,12 @@ from sqlalchemy import create_engine, event
 from timeflow.business.auth import AuthAccessResult
 from timeflow.business.calendar import (
     AccountScheduleSnapshot,
+    CreateScheduleCommand,
     ReminderDispositionResult,
     ReminderDispositionState,
+    ScheduleApplicationService,
+    ScheduleKind,
+    ScheduleType,
 )
 from timeflow.gateway.websocket.ports import StreamContext
 from timeflow.infrastructure.settings import get_settings
@@ -364,6 +368,76 @@ def test_missing_category_llm_configuration_logs_fallback_without_blocking_start
         "schedule category classification is not configured; leaving category null" in caplog.text
     )
     assert "key-for-test" not in caplog.text
+
+
+def test_missing_category_llm_configuration_skips_background_task_submission() -> None:
+    captured: dict[str, Any] = {}
+
+    class _Repository:
+        def __init__(self) -> None:
+            self.snapshot = None
+
+        def add_schedule(self, snapshot: Any) -> Any:
+            self.snapshot = snapshot
+            return snapshot
+
+    class _UnitOfWork:
+        def __init__(self, repository: _Repository) -> None:
+            self.schedules = repository
+
+        def __enter__(self) -> "_UnitOfWork":
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def commit(self) -> None:
+            return None
+
+    repository = _Repository()
+
+    def capture_service(*args: Any, **kwargs: Any) -> ScheduleApplicationService:
+        from timeflow.business.calendar.service import ScheduleApplicationService as RealService
+
+        service = RealService(*args, **kwargs)
+        captured["service"] = service
+        return service
+
+    with (
+        mock.patch("timeflow.main.ScheduleApplicationService", side_effect=capture_service),
+        mock.patch.dict(
+            os.environ,
+            {
+                "TIMEFLOW_OPENAI_BASE_URL": "",
+                "TIMEFLOW_OPENAI_API_KEY": "",
+                "TIMEFLOW_OPENAI_MODEL": "",
+            },
+            clear=False,
+        ),
+    ):
+        _build_with_environment("production", audio_configured=True)
+
+    service = captured["service"]
+    assert service._category_classifier is None
+    service._unit_of_work_factory = lambda: _UnitOfWork(repository)
+    service._category_task_submitter = lambda _task: pytest.fail(
+        "category task must not be submitted without OpenAI configuration"
+    )
+
+    created = service.create_schedule(
+        account_id="account-a",
+        command=CreateScheduleCommand(
+            schedule_type=ScheduleType.TIME,
+            schedule_kind=ScheduleKind.ONCE,
+            title="未配置分类能力",
+            timezone="Asia/Shanghai",
+            start_time=datetime(2026, 8, 19, 7, tzinfo=UTC),
+        ),
+    ).schedules[0]
+
+    assert created.category is None
+    assert repository.snapshot is not None
+    assert repository.snapshot.category is None
 
 
 def test_voice_agent_mode_two_fails_closed_until_conversation_agent_is_wired() -> None:

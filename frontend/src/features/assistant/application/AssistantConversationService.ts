@@ -44,6 +44,9 @@ export class AssistantConversationService implements AssistantApplicationPort {
   // streamId/conversationId 还没就绪时执行。endTurn() 等这个 promise，把两者
   // 重新串成先后顺序，而不是让 endTurn() 在它们仍是 null 时静默不做事。
   private pendingStartTurn: Promise<void> | null = null;
+  /** Category events can arrive before the command result creates their local row. */
+  private readonly pendingCategoryUpdates = new Map<string, ScheduleCategory>();
+  private disposed = false;
 
   constructor(
     private readonly options: AssistantApplicationOptions,
@@ -168,6 +171,8 @@ export class AssistantConversationService implements AssistantApplicationPort {
   }
 
   dispose(): void {
+    this.disposed = true;
+    this.pendingCategoryUpdates.clear();
     this.listeners.clear();
     this.unsubscribeConnection?.();
     this.unsubscribeConnection = null;
@@ -271,6 +276,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
     command: AppliedCommand,
     messageId: string,
   ): Promise<void> {
+    if (this.disposed) return;
     try {
       await this.deps.localScheduleWriter.applyCommandResult(this.options.accountId, command);
     } catch {
@@ -280,18 +286,52 @@ export class AssistantConversationService implements AssistantApplicationPort {
     this.lastAppliedCommand = command;
     this.notifyListeners();
     this.connection?.send({ message_id: messageId, status: 'applied', type: 'message.ack' });
+    const schedules = command.schedules ?? (command.schedule ? [command.schedule] : []);
+    await this.applyPendingCategoryUpdates(
+      schedules.flatMap((schedule) => (typeof schedule.id === 'string' ? [schedule.id] : [])),
+    );
   }
 
   private async applyCategoryUpdate(scheduleId: string, category: ScheduleCategory): Promise<void> {
+    if (this.disposed) return;
+    const key = this.categoryKey(scheduleId);
+    this.pendingCategoryUpdates.set(key, category);
     try {
-      await this.deps.localScheduleWriter.applyCategoryUpdate?.(
+      const applied = await this.deps.localScheduleWriter.applyCategoryUpdate?.(
         this.options.accountId,
         scheduleId,
         category,
       );
+      if (this.disposed) return;
+      if (applied === true && this.pendingCategoryUpdates.get(key) === category) {
+        this.pendingCategoryUpdates.delete(key);
+      }
     } catch {
-      // A category push is an enhancement; a missing/deleted local row is safe to ignore.
+      if (!this.disposed) this.pendingCategoryUpdates.set(key, category);
     }
+  }
+
+  private async applyPendingCategoryUpdates(scheduleIds: readonly string[]): Promise<void> {
+    for (const scheduleId of scheduleIds) {
+      const key = this.categoryKey(scheduleId);
+      const category = this.pendingCategoryUpdates.get(key);
+      if (category === undefined || this.disposed) continue;
+      try {
+        const applied = await this.deps.localScheduleWriter.applyCategoryUpdate?.(
+          this.options.accountId,
+          scheduleId,
+          category,
+        );
+        if (this.disposed) return;
+        if (applied === true) this.pendingCategoryUpdates.delete(key);
+      } catch {
+        // Keep the latest pending value for a later authoritative local write.
+      }
+    }
+  }
+
+  private categoryKey(scheduleId: string): string {
+    return `${this.options.accountId}\u0000${scheduleId}`;
   }
 
   private handleAudioFrame(chunk: ArrayBuffer): void {
