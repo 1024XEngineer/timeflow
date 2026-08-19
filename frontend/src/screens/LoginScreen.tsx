@@ -95,6 +95,7 @@ export function LoginScreen() {
                     onSubmitEditing={submit}
                     placeholder="输入密码"
                     placeholderTextColor={colors.mutedText}
+                    secureTextEntry
                     selectionColor={colors.focus}
                     style={[
                       styles.input,
