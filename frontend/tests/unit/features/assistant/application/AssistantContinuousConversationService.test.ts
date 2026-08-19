@@ -224,7 +224,7 @@ describe('AssistantContinuousConversationService', () => {
   it('accumulates transcript/reply pairs into turn history instead of overwriting', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
-    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    const service = createService(deps);
 
     await startListening(fake, service);
     fake.emitMessage({
@@ -252,10 +252,47 @@ describe('AssistantContinuousConversationService', () => {
     ]);
   });
 
+  it.each([
+    ['missing_field', '你是想订哪一天的会议室？'],
+    ['ambiguous_target', '你是指三楼小会议室还是五楼大会议室？'],
+    ['confirmation', '确认要把这条日程删除吗？'],
+  ])(
+    'records a clarifying voice.dialogue.question (%s) as the reply for the current turn',
+    async (questionKind, speechText) => {
+      const fake = createFakeConnection();
+      const deps = createDeps({ connection: fake.connection });
+      const service = createService(deps);
+
+      await startListening(fake, service);
+      fake.emitMessage({
+        conversation_id: 'conv_001',
+        request_id: 'req_1',
+        payload: { duration_ms: 800, language: 'zh', transcript: '帮我订会议室' },
+        type: 'voice.asr.completed',
+      } as AssistantServerMessage);
+      fake.emitMessage({
+        conversation_id: 'conv_001',
+        payload: {
+          candidates: [],
+          question_id: 'q_1',
+          question_kind: questionKind,
+          speech_text: speechText,
+        },
+        type: 'voice.dialogue.question',
+      } as AssistantServerMessage);
+      await flushAsync();
+
+      expect(service.getTurns()).toEqual([
+        { id: 'req_1', replyText: speechText, transcript: '帮我订会议室' },
+      ]);
+      expect(service.getState()).toMatchObject({ phase: 'asking' });
+    },
+  );
+
   it('does not create a history turn when a reply arrives before any transcript', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
-    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    const service = createService(deps);
 
     await startListening(fake, service);
     fake.emitMessage({
@@ -272,7 +309,7 @@ describe('AssistantContinuousConversationService', () => {
   it('clears turn history when a new call starts', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
-    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    const service = createService(deps);
 
     await startListening(fake, service);
     fake.emitMessage({

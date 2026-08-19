@@ -373,6 +373,9 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         return;
       }
       case 'voice.dialogue.question':
+        // 缺字段/地点歧义之类的追问，对当前这轮来说就是系统的回复——记进历史，
+        // 不然标题过了这一阵子就变回通用文案，这句追问在记录里再也找不到。
+        this.updateLastTurnReply(message.payload.speech_text);
         this.setState({
           conversationId: message.conversation_id,
           phase: 'asking',
