@@ -1,4 +1,8 @@
-import type { AppliedCommand, ConversationTurnState } from '../../domain/ConversationTurn';
+import type {
+  AppliedCommand,
+  ConversationTurnRecord,
+  ConversationTurnState,
+} from '../../domain/ConversationTurn';
 
 export type AssistantApplicationDependencies = {
   transport: import('./VoiceTransportPort').VoiceTransportPort;
@@ -29,6 +33,9 @@ export interface AssistantApplicationPort {
   getReplyText(): string | null;
   /** 当前这一帧麦克风音量（dBFS），给录音中的波形展示；不在录音时是 null。 */
   getSoundLevel(): number | null;
+  /** 连续模式独有：本次开麦以来的完整问答历史，新一轮追加、断开重开时清空。
+   * 按住说话不实现这个方法（本来就是单轮）。 */
+  getTurns?(): readonly ConversationTurnRecord[];
   startTurn(): Promise<void>;
   endTurn(): Promise<void>;
   /** 用户主动关掉回复气泡：清空气泡内容并打断正在播放的 TTS。 */

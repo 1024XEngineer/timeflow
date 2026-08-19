@@ -221,6 +221,112 @@ describe('AssistantContinuousConversationService', () => {
     expect(service.getState()).toMatchObject({ phase: 'listening' });
   });
 
+  it('accumulates transcript/reply pairs into turn history instead of overwriting', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_1',
+      payload: { duration_ms: 800, language: 'zh', transcript: '明天几点开会' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '明天下午三点' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_2',
+      payload: { duration_ms: 500, language: 'zh', transcript: '谁参加' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getTurns()).toEqual([
+      { id: 'req_1', replyText: '明天下午三点', transcript: '明天几点开会' },
+      { id: 'req_2', replyText: null, transcript: '谁参加' },
+    ]);
+  });
+
+  it.each([
+    ['missing_field', '你是想订哪一天的会议室？'],
+    ['ambiguous_target', '你是指三楼小会议室还是五楼大会议室？'],
+    ['confirmation', '确认要把这条日程删除吗？'],
+  ])(
+    'records a clarifying voice.dialogue.question (%s) as the reply for the current turn',
+    async (questionKind, speechText) => {
+      const fake = createFakeConnection();
+      const deps = createDeps({ connection: fake.connection });
+      const service = createService(deps);
+
+      await startListening(fake, service);
+      fake.emitMessage({
+        conversation_id: 'conv_001',
+        request_id: 'req_1',
+        payload: { duration_ms: 800, language: 'zh', transcript: '帮我订会议室' },
+        type: 'voice.asr.completed',
+      } as AssistantServerMessage);
+      fake.emitMessage({
+        conversation_id: 'conv_001',
+        payload: {
+          candidates: [],
+          question_id: 'q_1',
+          question_kind: questionKind,
+          speech_text: speechText,
+        },
+        type: 'voice.dialogue.question',
+      } as AssistantServerMessage);
+      await flushAsync();
+
+      expect(service.getTurns()).toEqual([
+        { id: 'req_1', replyText: speechText, transcript: '帮我订会议室' },
+      ]);
+      expect(service.getState()).toMatchObject({ phase: 'asking' });
+    },
+  );
+
+  it('does not create a history turn when a reply arrives before any transcript', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '好的' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getReplyText()).toBe('好的');
+    expect(service.getTurns()).toEqual([]);
+  });
+
+  it('clears turn history when a new call starts', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_1',
+      payload: { duration_ms: 800, language: 'zh', transcript: '明天几点开会' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getTurns()).toHaveLength(1);
+
+    await service.endTurn();
+    await startListening(fake, service);
+
+    expect(service.getTurns()).toHaveLength(0);
+  });
+
   it('resets the idle timer after a reply finishes playing', async () => {
     jest.useFakeTimers();
     const fake = createFakeConnection();

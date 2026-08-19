@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { fireEvent, render, screen } from '@testing-library/react-native';
+import { ScrollView } from 'react-native';
 
 import { VoiceCallScreen } from '../../../../../src/features/assistant/presentation/VoiceCallScreen';
 
@@ -51,5 +52,31 @@ describe('VoiceCallScreen', () => {
     renderScreen({ status: 'paused' });
     expect(screen.getByLabelText('继续')).toBeTruthy();
     expect(screen.queryByLabelText('暂停')).toBeNull();
+  });
+
+  it('renders every past turn, not just the latest', () => {
+    renderScreen({
+      turns: [
+        { id: 't1', replyText: '明天下午三点', transcript: '明天几点开会' },
+        { id: 't2', replyText: null, transcript: '谁参加' },
+      ],
+    });
+    expect(screen.getByText('明天几点开会')).toBeTruthy();
+    expect(screen.getByText('明天下午三点')).toBeTruthy();
+    expect(screen.getByText('谁参加')).toBeTruthy();
+  });
+
+  it('shows a placeholder in the history area when the call has no turns yet', () => {
+    renderScreen({ turns: [] });
+    expect(screen.queryByText('明天几点开会')).toBeNull();
+    expect(screen.getByText('对话开始后，这里会显示完整记录')).toBeTruthy();
+  });
+
+  it('scrolls the history area when its content grows', () => {
+    renderScreen({ turns: [{ id: 't1', replyText: null, transcript: '明天几点开会' }] });
+    const history = screen.UNSAFE_getByType(ScrollView);
+
+    expect(history.props.onContentSizeChange).toEqual(expect.any(Function));
+    history.props.onContentSizeChange();
   });
 });
