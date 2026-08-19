@@ -4,9 +4,9 @@ import type {
   ReminderApplicationDependencies,
   ReminderApplicationPort,
 } from '../../features/reminder/application/interfaces';
+import { LocalReminderApplication } from '../../features/reminder/application';
 import {
   MockLocalScheduleReader,
-  MockReminderApplication,
   MockReminderDispositionSync,
   MockReminderStateStore,
 } from '../../features/reminder/data/local';
@@ -58,7 +58,7 @@ export function createAppServices(options: CreateAppServicesOptions = {}): AppSe
     state: new MockReminderStateStore(),
     dispositionSync: new MockReminderDispositionSync(),
   };
-  const reminder = new MockReminderApplication(reminderPorts);
+  const reminder = new LocalReminderApplication(reminderPorts);
   const scheduleView = new ScheduleViewStore();
   const runtime = new AppRuntime([
     {
