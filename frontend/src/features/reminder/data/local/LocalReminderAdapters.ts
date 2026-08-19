@@ -40,7 +40,6 @@ export class NoopPopup implements PopupPort {
   }
 }
 
-
 /** 重启恢复占位：后续可接开机广播 / 精确闹钟重挂。 */
 export class LocalReminderRecovery implements ReminderRecoveryPort {
   async registerForRestart(): Promise<ReminderRecoveryReceipt> {
