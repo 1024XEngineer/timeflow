@@ -10,7 +10,6 @@ interface VoiceCallScreenProps {
   status: CallStatus;
   title: string;
   onCollapse: () => void;
-  onInterrupt: () => void;
   onEnd: () => void;
   onTogglePause: () => void;
 }
@@ -19,17 +18,14 @@ const BREATH_SCALE = { duration: 1600, from: 1, to: 1.06 };
 const TALK_SCALE = { duration: 650, from: 1, to: 1.14 };
 
 /**
- * 免提通话的沉浸式全屏层，仿豆包语音模式：上方状态文字、居中一个跟着状态
- * 呼吸/跳动的圆圈、下方"打断当前对话"（只停当前这句 TTS，不挂断）和
- * "结束对话"（真正挂断）两个按钮。左上角收起不挂断，回到底部长条状入口，
- * 连接和麦克风都还开着。圆圈本身可点：点一下暂停/恢复麦克风推流，是"用户
- * 点击暂停"的唯一入口，不额外加第三个按钮。
+ * 免提通话的沉浸式全屏层：上方状态文字、居中一个跟着状态呼吸/跳动的圆圈、
+ * 下方"结束对话"（真正挂断）。左上角收起不挂断，回到底部长条状入口，连接
+ * 和麦克风都还开着。圆圈本身可点：点一下暂停/恢复麦克风推流。
  */
 export function VoiceCallScreen({
   status,
   title,
   onCollapse,
-  onInterrupt,
   onEnd,
   onTogglePause,
 }: VoiceCallScreenProps) {
@@ -93,14 +89,6 @@ export function VoiceCallScreen({
       </View>
 
       <View style={styles.actions}>
-        <Pressable
-          accessibilityLabel="打断当前对话"
-          accessibilityRole="button"
-          onPress={onInterrupt}
-          style={({ pressed }) => [styles.actionButton, pressed && styles.buttonPressed]}
-        >
-          <Text style={styles.actionText}>打断当前对话</Text>
-        </Pressable>
         <Pressable
           accessibilityLabel="结束对话"
           accessibilityRole="button"

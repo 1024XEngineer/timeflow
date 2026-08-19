@@ -7,7 +7,6 @@ function renderScreen(overrides: Partial<Parameters<typeof VoiceCallScreen>[0]> 
   const props = {
     onCollapse: jest.fn(),
     onEnd: jest.fn(),
-    onInterrupt: jest.fn(),
     onTogglePause: jest.fn(),
     status: 'listening' as const,
     title: '正在听',
@@ -34,15 +33,9 @@ describe('VoiceCallScreen', () => {
     expect(props.onEnd).not.toHaveBeenCalled();
   });
 
-  it('interrupts only the current reply, not the whole call', () => {
+  it('ends the call without an interrupt control', () => {
     const props = renderScreen();
-    fireEvent.press(screen.getByLabelText('打断当前对话'));
-    expect(props.onInterrupt).toHaveBeenCalledTimes(1);
-    expect(props.onEnd).not.toHaveBeenCalled();
-  });
-
-  it('ends the call', () => {
-    const props = renderScreen();
+    expect(screen.queryByLabelText('打断当前对话')).toBeNull();
     fireEvent.press(screen.getByLabelText('结束对话'));
     expect(props.onEnd).toHaveBeenCalledTimes(1);
   });
