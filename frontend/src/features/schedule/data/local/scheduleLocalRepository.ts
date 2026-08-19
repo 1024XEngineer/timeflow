@@ -179,6 +179,23 @@ export class ScheduleLocalRepository {
     return result.changes === 1;
   }
 
+  /** Patch only the asynchronously classified category; cloud revision is untouched. */
+  public async patchScheduleCategory(
+    accountId: string,
+    scheduleId: string,
+    category: ScheduleCategory,
+  ): Promise<boolean> {
+    const result = await this.database.runAsync(
+      `UPDATE local_schedules
+       SET category = ?
+       WHERE account_id = ? AND id = ? AND status = 'active'`,
+      category,
+      accountId,
+      scheduleId,
+    );
+    return result.changes === 1;
+  }
+
   /** Update only reminder state owned by the current device. */
   public async updateReminderRuntime(
     accountId: string,

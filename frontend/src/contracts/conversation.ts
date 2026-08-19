@@ -12,6 +12,7 @@
  */
 
 import type { OutgoingEnvelope, TransportErrorEnvelope } from './transport';
+import type { ScheduleCategory } from './schedule';
 
 /* ---------- 客户端 → 服务端 ---------- */
 
@@ -142,6 +143,11 @@ export interface VoiceSessionEndMessage {
   conversation_id: string;
 }
 
+export interface ScheduleCategoryUpdatedMessage {
+  type: 'schedule.category.updated';
+  payload: { schedule_id: string; category: ScheduleCategory };
+}
+
 export type AssistantServerMessage =
   | VoiceStreamStartedMessage
   | VoiceAsrCompletedMessage
@@ -152,6 +158,7 @@ export type AssistantServerMessage =
   | VoiceTtsEndMessage
   | VoiceTtsCanceledMessage
   | VoiceSessionEndMessage
+  | ScheduleCategoryUpdatedMessage
   | TransportErrorEnvelope;
 
 /** 窄化辅助：失败信封没有稳定的 `ok:false` 之外的判据，靠 `error` 字段是否存在区分。 */

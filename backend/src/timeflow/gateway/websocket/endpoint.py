@@ -87,7 +87,7 @@ async def run_websocket_session(
     finally:
         limiter.release()
 
-    connections.register(session.session_id, websocket)
+    connections.register(session.session_id, websocket, session.account_id)
     try:
         await _serve_frames(websocket, session, router, connections, binary_handler)
     except WebSocketDisconnect:

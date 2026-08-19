@@ -1,4 +1,5 @@
 import { isTransportError, type AssistantServerMessage } from '../../../contracts/conversation';
+import type { ScheduleCategory } from '../../../contracts/schedule';
 import type { AppLifecycleStatus } from '../../../infrastructure/appState/AppStateProvider';
 import type {
   AppliedCommand,
@@ -88,6 +89,9 @@ export class AssistantContinuousConversationService implements AssistantApplicat
    * startStream() 内部有一个没人等的 await（配置原生播放器），如果紧跟着的
    * 第一块音频不排在它后面，可能在原生侧还没配置完时就到达。 */
   private playbackChain: Promise<void> = Promise.resolve();
+  /** Category events can arrive before the command result creates their local row. */
+  private readonly pendingCategoryUpdates = new Map<string, ScheduleCategory>();
+  private disposed = false;
   private readonly unsubscribeAppState: () => void;
 
   constructor(
@@ -281,6 +285,8 @@ export class AssistantContinuousConversationService implements AssistantApplicat
   }
 
   dispose(): void {
+    this.disposed = true;
+    this.pendingCategoryUpdates.clear();
     this.clearIdleTimer();
     this.unsubscribeAppState();
     this.listeners.clear();
@@ -372,6 +378,9 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         this.setState({ conversationId: message.conversation_id, phase: 'listening' });
         return;
       }
+      case 'schedule.category.updated':
+        void this.applyCategoryUpdate(message.payload.schedule_id, message.payload.category);
+        return;
       case 'voice.dialogue.question':
         // 缺字段/地点歧义之类的追问，对当前这轮来说就是系统的回复——记进历史，
         // 不然标题过了这一阵子就变回通用文案，这句追问在记录里再也找不到。
@@ -426,6 +435,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     command: AppliedCommand,
     messageId: string,
   ): Promise<void> {
+    if (this.disposed) return;
     try {
       await this.deps.localScheduleWriter.applyCommandResult(this.options.accountId, command);
     } catch {
@@ -435,6 +445,52 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     this.lastAppliedCommand = command;
     this.notifyListeners();
     this.connection?.send({ message_id: messageId, status: 'applied', type: 'message.ack' });
+    const schedules = command.schedules ?? (command.schedule ? [command.schedule] : []);
+    await this.applyPendingCategoryUpdates(
+      schedules.flatMap((schedule) => (typeof schedule.id === 'string' ? [schedule.id] : [])),
+    );
+  }
+
+  private async applyCategoryUpdate(scheduleId: string, category: ScheduleCategory): Promise<void> {
+    if (this.disposed) return;
+    const key = this.categoryKey(scheduleId);
+    this.pendingCategoryUpdates.set(key, category);
+    try {
+      const applied = await this.deps.localScheduleWriter.applyCategoryUpdate?.(
+        this.options.accountId,
+        scheduleId,
+        category,
+      );
+      if (this.disposed) return;
+      if (applied === true && this.pendingCategoryUpdates.get(key) === category) {
+        this.pendingCategoryUpdates.delete(key);
+      }
+    } catch {
+      if (!this.disposed) this.pendingCategoryUpdates.set(key, category);
+    }
+  }
+
+  private async applyPendingCategoryUpdates(scheduleIds: readonly string[]): Promise<void> {
+    for (const scheduleId of scheduleIds) {
+      const key = this.categoryKey(scheduleId);
+      const category = this.pendingCategoryUpdates.get(key);
+      if (category === undefined || this.disposed) continue;
+      try {
+        const applied = await this.deps.localScheduleWriter.applyCategoryUpdate?.(
+          this.options.accountId,
+          scheduleId,
+          category,
+        );
+        if (this.disposed) return;
+        if (applied === true) this.pendingCategoryUpdates.delete(key);
+      } catch {
+        // Keep the latest pending value for a later authoritative local write.
+      }
+    }
+  }
+
+  private categoryKey(scheduleId: string): string {
+    return `${this.options.accountId}\u0000${scheduleId}`;
   }
 
   private handleAudioFrame(chunk: ArrayBuffer): void {

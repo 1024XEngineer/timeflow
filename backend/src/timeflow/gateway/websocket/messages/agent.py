@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from timeflow.business.calendar.contracts import ScheduleCategory
+
 
 class VoiceAsrCompletedPayload(BaseModel):
     """What the user was heard to say."""
@@ -48,3 +50,17 @@ class MessageAck(BaseModel):
     type: Literal["message.ack"]
     message_id: str
     status: str
+
+
+class ScheduleCategoryUpdatedPayload(BaseModel):
+    """The category-only update sent after background classification commits."""
+
+    schedule_id: str
+    category: ScheduleCategory
+
+
+class ScheduleCategoryUpdated(BaseModel):
+    """A category update that deliberately does not carry or change revision."""
+
+    type: Literal["schedule.category.updated"] = "schedule.category.updated"
+    payload: ScheduleCategoryUpdatedPayload

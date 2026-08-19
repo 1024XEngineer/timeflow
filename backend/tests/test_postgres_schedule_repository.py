@@ -26,6 +26,7 @@ from timeflow.business.calendar import (
     ReminderType,
     ScheduleApplicationService,
     ScheduleBusinessError,
+    ScheduleCategory,
     ScheduleErrorCode,
     ScheduleKind,
     ScheduleOccurrenceOverrideSnapshot,
@@ -108,6 +109,25 @@ def test_postgres_repository_insert_and_update_return_final_revision(
     assert updated.title == "Updated"
     assert updated.revision == 6
     assert updated.created_at == inserted.created_at
+
+
+def test_postgres_background_category_write_preserves_business_revision(
+    postgres_session: Session,
+) -> None:
+    _seed_account(postgres_session, "account-a")
+    repository = ScheduleRepository(postgres_session)
+    inserted = repository.add_schedule(_schedule("schedule-a", "account-a", revision=5))
+
+    classified = repository.set_schedule_category_if_unclassified(
+        account_id="account-a",
+        schedule_id=inserted.id,
+        category=ScheduleCategory.WORK,
+        updated_at=datetime.now(UTC),
+    )
+
+    assert classified is not None
+    assert classified.category is ScheduleCategory.WORK
+    assert classified.revision == 5
 
 
 def test_postgres_repository_reports_conflict_and_preserves_account_isolation(

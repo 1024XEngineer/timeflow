@@ -24,6 +24,7 @@ from timeflow.business.calendar.contracts import (
     ScheduleUpdatePatch,
     UpdateScheduleCommand,
 )
+from timeflow.business.calendar.ports import ScheduleCategoryClassifier
 from timeflow.business.calendar.reminder_disposition import (
     ReminderDispositionConfirmer,
     ReminderDispositionService,
@@ -57,6 +58,7 @@ __all__ = [
     "ScheduleApplicationService",
     "ScheduleBusinessError",
     "ScheduleCategory",
+    "ScheduleCategoryClassifier",
     "ScheduleErrorCode",
     "ScheduleKind",
     "ScheduleMutationResult",

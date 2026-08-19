@@ -22,6 +22,7 @@ LLM_ENVIRONMENT_VARIABLES = (
     "TIMEFLOW_OPENAI_API_KEY",
     "TIMEFLOW_OPENAI_MODEL",
     "TIMEFLOW_OPENAI_TIMEOUT_SECONDS",
+    "TIMEFLOW_SCHEDULE_CATEGORY_TIMEOUT_SECONDS",
     "TIMEFLOW_AGENT_MAX_TOOL_ROUNDS",
     "TIMEFLOW_VOICE_AGENT_MODE",
 )
@@ -163,6 +164,8 @@ def test_settings_use_qwen_llm_defaults(
     assert settings.openai_api_key == ""
     assert settings.openai_model == "qwen-flash"
     assert settings.openai_timeout_seconds == 30.0
+    assert settings.schedule_category_timeout_seconds == 5.0
+    assert settings.openai_is_configured() is False
     assert settings.agent_max_tool_rounds == 4
     assert settings.voice_agent_mode == "1"
 
@@ -293,6 +296,7 @@ def test_settings_convert_llm_environment_values(monkeypatch: MonkeyPatch) -> No
     monkeypatch.setenv("TIMEFLOW_OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("TIMEFLOW_OPENAI_MODEL", "custom-model")
     monkeypatch.setenv("TIMEFLOW_OPENAI_TIMEOUT_SECONDS", "12.5")
+    monkeypatch.setenv("TIMEFLOW_SCHEDULE_CATEGORY_TIMEOUT_SECONDS", "4.5")
     monkeypatch.setenv("TIMEFLOW_AGENT_MAX_TOOL_ROUNDS", "6")
     monkeypatch.setenv("TIMEFLOW_VOICE_AGENT_MODE", "2")
 
@@ -302,6 +306,8 @@ def test_settings_convert_llm_environment_values(monkeypatch: MonkeyPatch) -> No
     assert settings.openai_api_key == "test-key"
     assert settings.openai_model == "custom-model"
     assert settings.openai_timeout_seconds == 12.5
+    assert settings.schedule_category_timeout_seconds == 4.5
+    assert settings.openai_is_configured() is True
     assert settings.agent_max_tool_rounds == 6
     assert settings.voice_agent_mode == "2"
 
@@ -412,6 +418,16 @@ def test_settings_reject_invalid_tencent_map_timeout(monkeypatch: MonkeyPatch, v
             "TIMEFLOW_OPENAI_TIMEOUT_SECONDS",
             "-1",
             "TIMEFLOW_OPENAI_TIMEOUT_SECONDS must be greater than zero",
+        ),
+        (
+            "TIMEFLOW_SCHEDULE_CATEGORY_TIMEOUT_SECONDS",
+            "0",
+            "TIMEFLOW_SCHEDULE_CATEGORY_TIMEOUT_SECONDS must be greater than zero",
+        ),
+        (
+            "TIMEFLOW_SCHEDULE_CATEGORY_TIMEOUT_SECONDS",
+            "nan",
+            "TIMEFLOW_SCHEDULE_CATEGORY_TIMEOUT_SECONDS must be greater than zero",
         ),
         (
             "TIMEFLOW_AGENT_MAX_TOOL_ROUNDS",

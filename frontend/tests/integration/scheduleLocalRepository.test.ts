@@ -173,6 +173,48 @@ describe('ScheduleLocalRepository SQLite behavior', () => {
     });
   });
 
+  it('patches only category without changing the cloud revision', async () => {
+    await repository.applyCloudSchedule(cloudSchedule({ category: null, cloud_revision: 3 }));
+
+    await expect(
+      repository.patchScheduleCategory('account-a', 'schedule-a', 'study'),
+    ).resolves.toBe(true);
+
+    await expect(repository.getSchedule('account-a', 'schedule-a')).resolves.toMatchObject({
+      category: 'study',
+      cloud_revision: 3,
+    });
+  });
+
+  it('ignores a category patch for a missing or different-account schedule', async () => {
+    await expect(repository.patchScheduleCategory('account-a', 'missing', 'study')).resolves.toBe(
+      false,
+    );
+    await repository.applyCloudSchedule(cloudSchedule({ category: null }));
+    await expect(
+      repository.patchScheduleCategory('account-b', 'schedule-a', 'study'),
+    ).resolves.toBe(false);
+    await expect(repository.getSchedule('account-a', 'schedule-a')).resolves.toMatchObject({
+      category: null,
+    });
+  });
+
+  it('ignores a delayed category patch for a deleted schedule', async () => {
+    await repository.applyCloudSchedule(cloudSchedule({ category: null }));
+    await repository.applyCloudSchedule(
+      cloudSchedule({ category: null, status: 'deleted', cloud_revision: 2 }),
+    );
+
+    await expect(
+      repository.patchScheduleCategory('account-a', 'schedule-a', 'study'),
+    ).resolves.toBe(false);
+    await expect(repository.getSchedule('account-a', 'schedule-a')).resolves.toMatchObject({
+      category: null,
+      cloud_revision: 2,
+      status: 'deleted',
+    });
+  });
+
   it('rejects a category outside the shared enum at the SQLite boundary', async () => {
     await expect(
       repository.applyCloudSchedule(

@@ -106,6 +106,45 @@ def test_unclassified_schedule_category_round_trips_as_null(session: Session) ->
     assert loaded.category is None
 
 
+def test_background_category_write_does_not_increment_revision(session: Session) -> None:
+    repository = ScheduleRepository(session)
+    created = repository.add_schedule(_schedule("schedule-a", "account-a"))
+    classified_at = datetime.now(UTC)
+
+    classified = repository.set_schedule_category_if_unclassified(
+        account_id="account-a",
+        schedule_id=created.id,
+        category=ScheduleCategory.WORK,
+        updated_at=classified_at,
+    )
+
+    assert classified is not None
+    assert classified.category is ScheduleCategory.WORK
+    assert classified.revision == created.revision
+    assert classified.updated_at.replace(tzinfo=UTC) == classified_at
+
+
+def test_background_category_write_never_overwrites_an_existing_category(
+    session: Session,
+) -> None:
+    repository = ScheduleRepository(session)
+    created = repository.add_schedule(
+        replace(_schedule("schedule-a", "account-a"), category=ScheduleCategory.STUDY)
+    )
+
+    classified = repository.set_schedule_category_if_unclassified(
+        account_id="account-a",
+        schedule_id=created.id,
+        category=ScheduleCategory.WORK,
+        updated_at=datetime.now(UTC),
+    )
+
+    assert classified is None
+    loaded = repository.get_schedule(account_id="account-a", schedule_id=created.id)
+    assert loaded is not None
+    assert loaded.category is ScheduleCategory.STUDY
+
+
 def test_schedule_table_rejects_an_unknown_category(session: Session) -> None:
     now = datetime.now(UTC)
     session.add(
