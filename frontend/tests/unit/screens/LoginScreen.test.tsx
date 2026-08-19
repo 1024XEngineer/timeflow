@@ -27,6 +27,16 @@ function fillValidForm() {
 }
 
 describe('LoginScreen', () => {
+  it('keeps the login sheet unshifted until the IME covers the window', () => {
+    renderLogin(async () => ({
+      access_token: 'opaque-token',
+      account_id: 'acc_001',
+      expires_in: 3600,
+    }));
+
+    expect(screen.getByTestId('login-ime-lift')).toHaveStyle({ transform: [{ translateY: 0 }] });
+  });
+
   it('validates empty fields without authenticating', async () => {
     const controller = renderLogin(async () => ({
       access_token: 'opaque-token',
