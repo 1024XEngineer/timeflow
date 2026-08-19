@@ -91,8 +91,8 @@ export class ExpoAudioPlayback implements AudioPlaybackPort {
   private async playBytes(scheduleId: string, data: Uint8Array, format: string): Promise<boolean> {
     const expoAudio = await this.loadExpoAudioModule();
     if (expoAudio == null) return false;
+    if (!(await this.ensureAudioMode(expoAudio))) return false;
 
-    await this.ensureAudioMode(expoAudio);
     const player = this.ensurePlayer(expoAudio);
     player.pause();
     player.replace(buildAudioDataUri(data, format));
@@ -106,8 +106,8 @@ export class ExpoAudioPlayback implements AudioPlaybackPort {
   private async playBundledAlarm(scheduleId: string): Promise<boolean> {
     const expoAudio = await this.loadExpoAudioModule();
     if (expoAudio == null) return false;
+    if (!(await this.ensureAudioMode(expoAudio))) return false;
 
-    await this.ensureAudioMode(expoAudio);
     const player = this.ensurePlayer(expoAudio);
     player.pause();
     player.replace(LOCAL_ALARM_SOUND);
@@ -125,23 +125,28 @@ export class ExpoAudioPlayback implements AudioPlaybackPort {
     return this.player;
   }
 
-  private async ensureAudioMode(expoAudio: ExpoAudioModule): Promise<void> {
+  /**
+   * 返回 false 时调用方必须放弃这次播放，不能假装播放成功——静音模式/后台播放
+   * 没配置成功，即使真的调用 play() 用户也大概率听不到。不永久缓存失败：清掉
+   * modeReady 让下一次响铃重新尝试，而不是这次失败后整个 App 生命周期都跳过。
+   */
+  private async ensureAudioMode(expoAudio: ExpoAudioModule): Promise<boolean> {
     if (this.modeReady == null) {
-      this.modeReady = expoAudio
-        .setAudioModeAsync({
-          allowsRecording: false,
-          interruptionMode: 'doNotMix',
-          playsInSilentMode: true,
-          shouldPlayInBackground: true,
-          shouldRouteThroughEarpiece: false,
-        })
-        // 失败别永久缓存住：清掉 modeReady，让下一次响铃重试，而不是这次失败
-        // 之后整个 App 生命周期都跳过静音模式/后台播放配置。
-        .catch(() => {
-          this.modeReady = null;
-        });
+      this.modeReady = expoAudio.setAudioModeAsync({
+        allowsRecording: false,
+        interruptionMode: 'doNotMix',
+        playsInSilentMode: true,
+        shouldPlayInBackground: true,
+        shouldRouteThroughEarpiece: false,
+      });
     }
-    await this.modeReady;
+    try {
+      await this.modeReady;
+      return true;
+    } catch {
+      this.modeReady = null;
+      return false;
+    }
   }
 }
 

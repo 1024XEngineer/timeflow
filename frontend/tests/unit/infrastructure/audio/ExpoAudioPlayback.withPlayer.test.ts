@@ -87,6 +87,23 @@ describe('ExpoAudioPlayback (fake native audio module injected)', () => {
     expect(player.loop).toBe(false);
   });
 
+  it('reports played: false and never calls play() when audio mode setup fails', async () => {
+    setAudioModeAsync.mockRejectedValueOnce(new Error('mode setup failed'));
+    const audio = new ExpoAudioPlayback(loadExpoAudioModule);
+
+    const receipt = await audio.playTts({
+      schedule_id: 'sch-1',
+      data: new Uint8Array([1]),
+      format: 'wav',
+    });
+    expect(receipt).toEqual({
+      playback_id: 'tts-sch-1',
+      played: false,
+      used_local_fallback: false,
+    });
+    expect(player.play).not.toHaveBeenCalled();
+  });
+
   it('retries setAudioModeAsync on the next play after a failed attempt instead of caching the failure', async () => {
     setAudioModeAsync.mockRejectedValueOnce(new Error('mode setup failed'));
     const audio = new ExpoAudioPlayback(loadExpoAudioModule);
@@ -96,10 +113,29 @@ describe('ExpoAudioPlayback (fake native audio module injected)', () => {
       data: new Uint8Array([1]),
       format: 'wav',
     });
-    expect(first.played).toBe(true); // ensureAudioMode awaits but doesn't propagate the rejection
+    expect(first.played).toBe(false);
 
-    await audio.playTts({ schedule_id: 'sch-2', data: new Uint8Array([2]), format: 'wav' });
+    const second = await audio.playTts({
+      schedule_id: 'sch-2',
+      data: new Uint8Array([2]),
+      format: 'wav',
+    });
+    expect(second.played).toBe(true);
     expect(setAudioModeAsync).toHaveBeenCalledTimes(2);
+    expect(player.play).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the bundled alarm sound reporting played: false when mode setup fails', async () => {
+    setAudioModeAsync.mockRejectedValueOnce(new Error('mode setup failed'));
+    const audio = new ExpoAudioPlayback(loadExpoAudioModule);
+
+    const receipt = await audio.playLocalFallback({ schedule_id: 'sch-1' });
+    expect(receipt).toEqual({
+      playback_id: 'local-bundled-sch-1',
+      played: false,
+      used_local_fallback: true,
+    });
+    expect(player.play).not.toHaveBeenCalled();
   });
 
   it('treats a module without createAudioPlayer as unavailable', async () => {
