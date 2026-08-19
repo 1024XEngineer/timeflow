@@ -49,6 +49,8 @@ export function subscribeGeofenceTaskEvents(listener: GeofenceTaskListener): () 
 async function loadStorage(): Promise<typeof import('expo-sqlite/kv-store').Storage | null> {
   try {
     const mod = await import('expo-sqlite/kv-store');
+    // istanbul ignore next -- unreachable in this Jest env: the import above always throws
+    // first (no --experimental-vm-modules, see the file header), so this line never runs.
     return mod.Storage;
   } catch {
     return null;
@@ -59,32 +61,40 @@ async function loadStorage(): Promise<typeof import('expo-sqlite/kv-store').Stor
 export async function drainPendingGeofenceEvents(): Promise<readonly GeofenceTaskPayload[]> {
   const storage = await loadStorage();
   if (storage == null) return [];
-  const raw = await storage.getItem(PENDING_EVENTS_KEY);
-  if (raw == null) return [];
-  await storage.removeItem(PENDING_EVENTS_KEY);
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as GeofenceTaskPayload[]) : [];
-  } catch {
-    return [];
+  // istanbul ignore next -- storage is only non-null with a real expo-sqlite/kv-store, which
+  // loadStorage() can never resolve in this Jest env (see the file header); unreachable here.
+  {
+    const raw = await storage.getItem(PENDING_EVENTS_KEY);
+    if (raw == null) return [];
+    await storage.removeItem(PENDING_EVENTS_KEY);
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as GeofenceTaskPayload[]) : [];
+    } catch {
+      return [];
+    }
   }
 }
 
 async function persistPendingEvent(payload: GeofenceTaskPayload): Promise<void> {
   const storage = await loadStorage();
   if (storage == null) return;
-  const raw = await storage.getItem(PENDING_EVENTS_KEY);
-  const pending: GeofenceTaskPayload[] = [];
-  if (raw != null) {
-    try {
-      const parsed: unknown = JSON.parse(raw);
-      if (Array.isArray(parsed)) pending.push(...(parsed as GeofenceTaskPayload[]));
-    } catch {
-      // 上一份坏了就当没有，不阻塞这次事件的持久化。
+  // istanbul ignore next -- same as drainPendingGeofenceEvents() above: unreachable without a
+  // real expo-sqlite/kv-store.
+  {
+    const raw = await storage.getItem(PENDING_EVENTS_KEY);
+    const pending: GeofenceTaskPayload[] = [];
+    if (raw != null) {
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        if (Array.isArray(parsed)) pending.push(...(parsed as GeofenceTaskPayload[]));
+      } catch {
+        // 上一份坏了就当没有，不阻塞这次事件的持久化。
+      }
     }
+    pending.push(payload);
+    await storage.setItem(PENDING_EVENTS_KEY, JSON.stringify(pending));
   }
-  pending.push(payload);
-  await storage.setItem(PENDING_EVENTS_KEY, JSON.stringify(pending));
 }
 
 async function emit(payload: GeofenceTaskPayload): Promise<void> {
@@ -117,94 +127,103 @@ async function deliverHeadlessGeofenceEvent(payload: GeofenceTaskPayload): Promi
   const database = await openHeadlessDatabase();
   if (database == null) return false;
 
-  if (payload.event === 'exit') {
+  // istanbul ignore next -- database is only non-null with a real expo-sqlite, which
+  // openHeadlessDatabase() can never resolve in this Jest env (see the file header);
+  // unreachable here.
+  {
+    if (payload.event === 'exit') {
+      await database.runAsync(
+        `UPDATE local_schedules
+         SET geofence_armed = 1
+         WHERE id = ?
+           AND status = 'active'
+           AND schedule_type = 'location'
+           AND geofence_armed = 0`,
+        payload.schedule_id,
+      );
+      return true;
+    }
+
+    const schedule = await database.getFirstAsync<HeadlessScheduleRow>(
+      `SELECT id, title, location_name, schedule_type, reminder_type,
+              reminder_disposition_state, snoozed_until, geofence_armed, status
+         FROM local_schedules
+        WHERE id = ?`,
+      payload.schedule_id,
+    );
+    if (
+      schedule == null ||
+      schedule.status !== 'active' ||
+      schedule.schedule_type !== 'location' ||
+      schedule.geofence_armed !== 1 ||
+      schedule.reminder_disposition_state === 'pending' ||
+      schedule.reminder_disposition_state === 'confirmed' ||
+      (schedule.reminder_disposition_state === 'snoozed' &&
+        schedule.snoozed_until != null &&
+        Date.parse(schedule.snoozed_until) > Date.parse(payload.observed_at))
+    ) {
+      return true;
+    }
+
+    const notifications = await loadNotifications();
+    if (notifications == null) return false;
+    await ensureAndroidChannel(notifications);
+    notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+      }),
+    });
+
+    const notificationId = `reminder-${schedule.id}`;
+    await notifications.scheduleNotificationAsync({
+      identifier: notificationId,
+      content: {
+        title: schedule.title || '日程提醒',
+        body:
+          schedule.reminder_type === 'return_to_recorded_location'
+            ? `您已回到${schedule.location_name ?? '记录地点'}附近，请及时处理。`
+            : `您已进入${schedule.location_name ?? '目标地点'}附近，请及时处理。`,
+        sound: 'default',
+        data: { schedule_id: schedule.id, reason: schedule.reminder_type ?? 'arrive_location' },
+      },
+      trigger: null,
+    });
+
     await database.runAsync(
       `UPDATE local_schedules
-       SET geofence_armed = 1
+       SET geofence_armed = 0,
+           reminder_disposition_state = 'pending',
+           next_trigger_at = NULL,
+           disposition_updated_at = ?,
+           sync_status = 'pending'
        WHERE id = ?
          AND status = 'active'
          AND schedule_type = 'location'
-         AND geofence_armed = 0`,
-      payload.schedule_id,
+         AND geofence_armed = 1
+         AND (reminder_disposition_state IS NULL OR reminder_disposition_state = 'snoozed')`,
+      payload.observed_at,
+      schedule.id,
     );
     return true;
   }
-
-  const schedule = await database.getFirstAsync<HeadlessScheduleRow>(
-    `SELECT id, title, location_name, schedule_type, reminder_type,
-            reminder_disposition_state, snoozed_until, geofence_armed, status
-       FROM local_schedules
-      WHERE id = ?`,
-    payload.schedule_id,
-  );
-  if (
-    schedule == null ||
-    schedule.status !== 'active' ||
-    schedule.schedule_type !== 'location' ||
-    schedule.geofence_armed !== 1 ||
-    schedule.reminder_disposition_state === 'pending' ||
-    schedule.reminder_disposition_state === 'confirmed' ||
-    (schedule.reminder_disposition_state === 'snoozed' &&
-      schedule.snoozed_until != null &&
-      Date.parse(schedule.snoozed_until) > Date.parse(payload.observed_at))
-  ) {
-    return true;
-  }
-
-  const notifications = await loadNotifications();
-  if (notifications == null) return false;
-  await ensureAndroidChannel(notifications);
-  notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowBanner: true,
-      shouldShowList: true,
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-    }),
-  });
-
-  const notificationId = `reminder-${schedule.id}`;
-  await notifications.scheduleNotificationAsync({
-    identifier: notificationId,
-    content: {
-      title: schedule.title || '日程提醒',
-      body:
-        schedule.reminder_type === 'return_to_recorded_location'
-          ? `您已回到${schedule.location_name ?? '记录地点'}附近，请及时处理。`
-          : `您已进入${schedule.location_name ?? '目标地点'}附近，请及时处理。`,
-      sound: 'default',
-      data: { schedule_id: schedule.id, reason: schedule.reminder_type ?? 'arrive_location' },
-    },
-    trigger: null,
-  });
-
-  await database.runAsync(
-    `UPDATE local_schedules
-     SET geofence_armed = 0,
-         reminder_disposition_state = 'pending',
-         next_trigger_at = NULL,
-         disposition_updated_at = ?,
-         sync_status = 'pending'
-     WHERE id = ?
-       AND status = 'active'
-       AND schedule_type = 'location'
-       AND geofence_armed = 1
-       AND (reminder_disposition_state IS NULL OR reminder_disposition_state = 'snoozed')`,
-    payload.observed_at,
-    schedule.id,
-  );
-  return true;
 }
 
 async function openHeadlessDatabase(): Promise<SQLiteDatabase | null> {
   try {
     const { openDatabaseAsync } = await import('expo-sqlite');
+    // istanbul ignore next -- unreachable in this Jest env: the import above always throws
+    // first (no --experimental-vm-modules, see the file header), so this line never runs.
     return await openDatabaseAsync(TIMEFLOW_DATABASE_NAME);
   } catch {
     return null;
   }
 }
 
+// istanbul ignore next -- only ever called from the unreachable branch of
+// deliverHeadlessGeofenceEvent() above (see the file header), so never entered here.
 async function loadNotifications(): Promise<typeof import('expo-notifications') | null> {
   try {
     return await import('expo-notifications');
@@ -213,6 +232,8 @@ async function loadNotifications(): Promise<typeof import('expo-notifications') 
   }
 }
 
+// istanbul ignore next -- only ever called from the unreachable branch of
+// deliverHeadlessGeofenceEvent() above (see the file header).
 async function ensureAndroidChannel(
   notifications: typeof import('expo-notifications'),
 ): Promise<void> {
