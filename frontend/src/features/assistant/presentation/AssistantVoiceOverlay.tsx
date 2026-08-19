@@ -111,7 +111,6 @@ export function AssistantVoiceOverlay({
       <VoiceCallScreen
         onCollapse={() => setExpanded(false)}
         onEnd={() => void call.endTurn()}
-        onInterrupt={() => void call.dismissReply()}
         onTogglePause={() => call.togglePause()}
         status={callStatusFor(call.state.phase)}
         title={titleFor(call.state, call.replyText)}

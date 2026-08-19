@@ -7,6 +7,7 @@ from timeflow.business.calendar.contracts import (
     FindSchedulesQuery,
     OccurrenceOverrideAction,
     RecurringDeleteScope,
+    ReminderDispositionResult,
     ReminderDispositionState,
     ReminderStrength,
     ReminderType,
@@ -24,15 +25,32 @@ from timeflow.business.calendar.contracts import (
     UpdateScheduleCommand,
 )
 from timeflow.business.calendar.ports import ScheduleCategoryClassifier
-from timeflow.business.calendar.service import ScheduleAgentService, ScheduleApplicationService
+from timeflow.business.calendar.reminder_disposition import (
+    ReminderDispositionConfirmer,
+    ReminderDispositionService,
+)
+from timeflow.business.calendar.service import (
+    ScheduleAgentService,
+    ScheduleApplicationService,
+    validate_schedule_snapshot,
+)
+from timeflow.business.calendar.snapshot import (
+    AccountScheduleSnapshot,
+    ScheduleSnapshotQueryService,
+    ScheduleSnapshotReader,
+)
 
 __all__ = [
+    "AccountScheduleSnapshot",
     "CreateScheduleCommand",
     "DeleteOnceScheduleCommand",
     "DeleteRecurringScheduleCommand",
     "FindSchedulesQuery",
     "OccurrenceOverrideAction",
     "RecurringDeleteScope",
+    "ReminderDispositionConfirmer",
+    "ReminderDispositionResult",
+    "ReminderDispositionService",
     "ReminderDispositionState",
     "ReminderStrength",
     "ReminderType",
@@ -47,8 +65,11 @@ __all__ = [
     "ScheduleOccurrenceOverrideSnapshot",
     "ScheduleSearchResult",
     "ScheduleSnapshot",
+    "ScheduleSnapshotQueryService",
+    "ScheduleSnapshotReader",
     "ScheduleStatus",
     "ScheduleType",
     "ScheduleUpdatePatch",
     "UpdateScheduleCommand",
+    "validate_schedule_snapshot",
 ]

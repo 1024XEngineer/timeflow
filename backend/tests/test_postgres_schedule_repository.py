@@ -1,8 +1,11 @@
 """PostgreSQL integration tests for the schedule persistence adapter."""
 
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
+from threading import Barrier, Lock
+from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
@@ -17,6 +20,10 @@ from timeflow.business.calendar import (
     FindSchedulesQuery,
     OccurrenceOverrideAction,
     RecurringDeleteScope,
+    ReminderDispositionService,
+    ReminderDispositionState,
+    ReminderStrength,
+    ReminderType,
     ScheduleApplicationService,
     ScheduleBusinessError,
     ScheduleErrorCode,
@@ -27,7 +34,7 @@ from timeflow.business.calendar import (
     ScheduleType,
     UpdateScheduleCommand,
 )
-from timeflow.data.models import Account, ScheduleOccurrenceOverride
+from timeflow.data.models import Account, Schedule, ScheduleOccurrenceOverride
 from timeflow.data.repositories import ScheduleRepository, ScheduleRevisionConflictError
 from timeflow.data.schedule_unit_of_work import SqlAlchemyScheduleUnitOfWork
 
@@ -262,6 +269,144 @@ def test_postgres_repository_respects_caller_transaction_rollback(
     with Session(postgres_engine) as verification_session:
         repository = ScheduleRepository(verification_session)
         assert repository.get_schedule(account_id=account_id, schedule_id=schedule_id) is None
+
+
+def test_postgres_concurrent_reminder_confirmations_advance_revision_once(
+    postgres_engine: Engine,
+) -> None:
+    """Two racing use cases both succeed while only one transition is persisted."""
+    suffix = uuid4().hex[:12]
+    account_id = f"account-reminder-{suffix}"
+    schedule_id = f"schedule-reminder-{suffix}"
+    confirmation_times = [
+        datetime(2026, 8, 17, 4, tzinfo=UTC),
+        datetime(2026, 8, 17, 4, 1, tzinfo=UTC),
+    ]
+    factory = sessionmaker(postgres_engine, expire_on_commit=False)
+    barrier = Barrier(2)
+    clock_lock = Lock()
+
+    with factory() as session:
+        _seed_account(session, account_id)
+        ScheduleRepository(session).add_schedule(
+            replace(
+                _schedule(schedule_id, account_id),
+                reminder_type=ReminderType.BEFORE_START,
+                reminder_offset_minutes=10,
+                reminder_strength=ReminderStrength.MEDIUM,
+            )
+        )
+        session.commit()
+
+    def synchronized_clock() -> datetime:
+        barrier.wait(timeout=10)
+        with clock_lock:
+            return confirmation_times.pop(0)
+
+    service = ReminderDispositionService(
+        lambda: SqlAlchemyScheduleUnitOfWork(factory),
+        clock=synchronized_clock,
+    )
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = tuple(
+                executor.map(
+                    lambda _index: service.confirm(
+                        account_id=account_id,
+                        schedule_id=schedule_id,
+                    ),
+                    range(2),
+                )
+            )
+
+        with factory() as session:
+            persisted = ScheduleRepository(session).get_schedule(
+                account_id=account_id,
+                schedule_id=schedule_id,
+            )
+
+        assert persisted is not None
+        assert persisted.reminder_disposition_state is ReminderDispositionState.CONFIRMED
+        assert persisted.updated_at in (
+            datetime(2026, 8, 17, 4, tzinfo=UTC),
+            datetime(2026, 8, 17, 4, 1, tzinfo=UTC),
+        )
+        assert persisted.revision == 2
+        assert all(
+            result.disposition_state is ReminderDispositionState.CONFIRMED for result in results
+        )
+        assert all(result.updated_at == persisted.updated_at for result in results)
+    finally:
+        with factory() as session:
+            session.execute(sa.delete(Schedule).where(Schedule.id == schedule_id))
+            session.execute(sa.delete(Account).where(Account.id == account_id))
+            session.commit()
+
+
+def test_postgres_losing_reminder_confirmation_rereads_persisted_winner(
+    postgres_engine: Engine,
+) -> None:
+    """A stale Session cannot return its uncommitted loser timestamp after a missed update."""
+    suffix = uuid4().hex[:12]
+    account_id = f"account-stale-reminder-{suffix}"
+    schedule_id = f"schedule-stale-reminder-{suffix}"
+    winner_time = datetime(2026, 8, 17, 4, tzinfo=UTC)
+    loser_time = datetime(2026, 8, 17, 4, 1, tzinfo=UTC)
+    factory = sessionmaker(postgres_engine, expire_on_commit=False)
+
+    try:
+        with factory() as seed_session:
+            _seed_account(seed_session, account_id)
+            ScheduleRepository(seed_session).add_schedule(
+                replace(
+                    _schedule(schedule_id, account_id),
+                    reminder_type=ReminderType.BEFORE_START,
+                    reminder_offset_minutes=10,
+                    reminder_strength=ReminderStrength.MEDIUM,
+                )
+            )
+            seed_session.commit()
+
+        with factory() as loser_session:
+            loser_repository = ScheduleRepository(loser_session)
+            assert (
+                loser_repository.get_schedule(
+                    account_id=account_id,
+                    schedule_id=schedule_id,
+                )
+                is not None
+            )
+
+            with factory() as winner_session:
+                winner = ScheduleRepository(winner_session).confirm_reminder_disposition(
+                    account_id=account_id,
+                    schedule_id=schedule_id,
+                    confirmed_at=winner_time,
+                )
+                assert winner is not None
+                winner_session.commit()
+
+            missed = loser_repository.confirm_reminder_disposition(
+                account_id=account_id,
+                schedule_id=schedule_id,
+                confirmed_at=loser_time,
+            )
+            reread = loser_repository.get_schedule(
+                account_id=account_id,
+                schedule_id=schedule_id,
+            )
+
+        assert missed is None
+        assert reread is not None
+        assert reread.updated_at == winner_time
+        assert reread.updated_at != loser_time
+        assert reread.revision == 2
+    finally:
+        with factory() as session:
+            session.execute(sa.delete(Schedule).where(Schedule.id == schedule_id))
+            session.execute(sa.delete(Account).where(Account.id == account_id))
+            session.commit()
 
 
 def _application_service(

@@ -224,6 +224,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
           operation: message.payload.operation,
           schedule: message.payload.schedule,
           schedules: message.payload.schedules,
+          occurrence_overrides: message.payload.occurrence_overrides,
           status: message.payload.status,
         };
         // 状态立刻回到 idle，不等写库；message.ack 必须等写库成功才发（AGENTS.md §6）。

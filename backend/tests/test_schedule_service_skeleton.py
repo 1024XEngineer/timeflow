@@ -186,6 +186,7 @@ def test_business_error_codes_are_stable() -> None:
 
     assert {code.value for code in ScheduleErrorCode} == {
         "schedule_not_found",
+        "reminder_not_configured",
         "revision_conflict",
         "occurrence_not_found",
         "invalid_timezone",

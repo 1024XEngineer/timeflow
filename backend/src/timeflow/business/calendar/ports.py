@@ -6,6 +6,7 @@ from types import TracebackType
 from typing import Protocol, Self
 
 from timeflow.business.calendar.contracts import (
+    AccountScheduleSnapshot,
     CreateScheduleCommand,
     ScheduleCategory,
     ScheduleOccurrenceOverrideSnapshot,
@@ -14,7 +15,7 @@ from timeflow.business.calendar.contracts import (
 
 
 class ScheduleCategoryClassifier(Protocol):
-    """Classify one already-structured create command by its schedule semantics."""
+    """Classify one already-structured create command by schedule semantics."""
 
     def classify(self, command: CreateScheduleCommand) -> ScheduleCategory | None: ...
 
@@ -45,6 +46,8 @@ class ScheduleRepositoryPort(Protocol):
 
     def add_schedule(self, snapshot: ScheduleSnapshot) -> ScheduleSnapshot: ...
 
+    def get_account_snapshot(self, *, account_id: str) -> AccountScheduleSnapshot: ...
+
     def get_schedule(
         self,
         *,
@@ -74,6 +77,14 @@ class ScheduleRepositoryPort(Protocol):
         *,
         snapshot: ScheduleSnapshot,
         expected_revision: int,
+    ) -> ScheduleSnapshot | None: ...
+
+    def confirm_reminder_disposition(
+        self,
+        *,
+        account_id: str,
+        schedule_id: str,
+        confirmed_at: datetime,
     ) -> ScheduleSnapshot | None: ...
 
     def add_occurrence_override(

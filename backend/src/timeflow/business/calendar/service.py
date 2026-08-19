@@ -177,8 +177,9 @@ class ScheduleApplicationService(ScheduleAgentService):
             reminder_offset_minutes=command.reminder_offset_minutes,
             reminder_strength=command.reminder_strength,
         )
-        _validate_snapshot(snapshot)
+        validate_schedule_snapshot(snapshot)
         snapshot = replace(snapshot, category=self._classify_category(command))
+        validate_schedule_snapshot(snapshot)
 
         with self._unit_of_work_factory() as unit_of_work:
             persisted = unit_of_work.schedules.add_schedule(snapshot)
@@ -287,12 +288,14 @@ class ScheduleApplicationService(ScheduleAgentService):
                 schedule_id=command.schedule_id,
             )
             candidate = replace(current, **command.changes, updated_at=now)
+            if "reminder_type" in command.changes and command.changes["reminder_type"] is None:
+                candidate = replace(candidate, reminder_disposition_state=None)
             if "recurrence_rule" in command.changes:
                 candidate = replace(
                     candidate,
                     recurrence_rule=_normalize_optional_recurrence_rule(candidate.recurrence_rule),
                 )
-            _validate_snapshot(candidate)
+            validate_schedule_snapshot(candidate)
             persisted = _persist_update(
                 unit_of_work.schedules,
                 candidate,
@@ -477,7 +480,7 @@ class ScheduleApplicationService(ScheduleAgentService):
             )
         else:
             candidate = replace(current, recurrence_rule=truncated_rule, updated_at=now)
-            _validate_snapshot(candidate)
+            validate_schedule_snapshot(candidate)
             persisted = _persist_update(
                 repository,
                 candidate,
@@ -698,7 +701,16 @@ def _validate_update_patch(command: UpdateScheduleCommand) -> None:
         )
 
 
-def _validate_snapshot(snapshot: ScheduleSnapshot) -> None:
+def validate_schedule_snapshot(snapshot: ScheduleSnapshot) -> None:
+    """Validate every semantic invariant shared by schedule adapters."""
+    timezone = _validate_snapshot_basic_fields(snapshot)
+    _validate_schedule_shape(snapshot, timezone)
+    _validate_recurrence(snapshot, timezone)
+    _validate_reminder(snapshot)
+    _validate_lifecycle(snapshot)
+
+
+def _validate_snapshot_basic_fields(snapshot: ScheduleSnapshot) -> ZoneInfo:
     if snapshot.category is not None and not isinstance(snapshot.category, ScheduleCategory):
         _validation_error("category has an unsupported value", field="category")
     if not snapshot.title.strip() or len(snapshot.title) > 255:
@@ -727,13 +739,18 @@ def _validate_snapshot(snapshot: ScheduleSnapshot) -> None:
         _validation_error("latitude must be between -90 and 90", field="latitude")
     if snapshot.longitude is not None and not -180 <= snapshot.longitude <= 180:
         _validation_error("longitude must be between -180 and 180", field="longitude")
+    return timezone
 
+
+def _validate_schedule_shape(snapshot: ScheduleSnapshot, timezone: ZoneInfo) -> None:
     if snapshot.schedule_type is ScheduleType.TIME:
         if snapshot.start_time is None:
             _validation_error("time schedules require start_time", field="start_time")
     elif snapshot.schedule_type is ScheduleType.LOCATION:
         if snapshot.is_all_day:
             _validation_error("location schedules cannot be all-day", field="is_all_day")
+        if snapshot.start_time is not None:
+            _validation_error("location schedules cannot have start_time", field="start_time")
         if snapshot.latitude is None:
             _validation_error("location schedules require coordinates", field="latitude")
 
@@ -741,33 +758,39 @@ def _validate_snapshot(snapshot: ScheduleSnapshot) -> None:
         if snapshot.start_time is None or snapshot.end_time <= snapshot.start_time:
             _validation_error("end_time must be later than start_time", field="end_time")
     if snapshot.is_all_day:
-        if (
-            snapshot.schedule_type is not ScheduleType.TIME
-            or snapshot.start_time is None
-            or snapshot.end_time is None
-        ):
-            _validation_error(
-                "all-day schedules require time-schedule date boundaries",
-                field="end_time",
-            )
-        local_start = snapshot.start_time.astimezone(timezone)
-        local_end = snapshot.end_time.astimezone(timezone)
-        if not _is_local_midnight(local_start):
-            _validation_error(
-                "all-day start_time must be local midnight",
-                field="start_time",
-            )
-        if not _is_local_midnight(local_end):
-            _validation_error(
-                "all-day end_time must be local midnight",
-                field="end_time",
-            )
-        if local_end.date() <= local_start.date():
-            _validation_error(
-                "all-day end date must be later than its start date",
-                field="end_time",
-            )
+        _validate_all_day_boundaries(snapshot, timezone)
 
+
+def _validate_all_day_boundaries(snapshot: ScheduleSnapshot, timezone: ZoneInfo) -> None:
+    if (
+        snapshot.schedule_type is not ScheduleType.TIME
+        or snapshot.start_time is None
+        or snapshot.end_time is None
+    ):
+        _validation_error(
+            "all-day schedules require time-schedule date boundaries",
+            field="end_time",
+        )
+    local_start = snapshot.start_time.astimezone(timezone)
+    local_end = snapshot.end_time.astimezone(timezone)
+    if not _is_local_midnight(local_start):
+        _validation_error(
+            "all-day start_time must be local midnight",
+            field="start_time",
+        )
+    if not _is_local_midnight(local_end):
+        _validation_error(
+            "all-day end_time must be local midnight",
+            field="end_time",
+        )
+    if local_end.date() <= local_start.date():
+        _validation_error(
+            "all-day end date must be later than its start date",
+            field="end_time",
+        )
+
+
+def _validate_recurrence(snapshot: ScheduleSnapshot, timezone: ZoneInfo) -> None:
     if snapshot.schedule_kind is ScheduleKind.ONCE:
         if snapshot.recurrence_rule is not None:
             _validation_error(
@@ -795,7 +818,8 @@ def _validate_snapshot(snapshot: ScheduleSnapshot) -> None:
                 field="recurrence_rule",
             )
 
-    _validate_reminder(snapshot)
+
+def _validate_lifecycle(snapshot: ScheduleSnapshot) -> None:
     if snapshot.status is ScheduleStatus.ACTIVE and snapshot.deleted_at is not None:
         _validation_error("active schedules cannot have deleted_at", field="deleted_at")
     if snapshot.status is ScheduleStatus.DELETED and snapshot.deleted_at is None:
@@ -936,4 +960,8 @@ def _raise_business_error(
     )
 
 
-__all__ = ["ScheduleAgentService", "ScheduleApplicationService"]
+__all__ = [
+    "ScheduleAgentService",
+    "ScheduleApplicationService",
+    "validate_schedule_snapshot",
+]

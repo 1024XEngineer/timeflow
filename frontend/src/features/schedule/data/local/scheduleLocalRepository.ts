@@ -91,6 +91,20 @@ export class ScheduleLocalRepository {
     );
   }
 
+  /**
+   * 一批相关写入要么全部生效、要么全部不生效——调用方在 task 里用参数给的 repository
+   * （绑定在事务连接上）做写入，抛错会让整个事务回滚。
+   */
+  public async withTransaction<T>(
+    task: (repository: ScheduleLocalRepository) => Promise<T>,
+  ): Promise<T> {
+    let result!: T;
+    await this.database.withExclusiveTransactionAsync(async (transaction) => {
+      result = await task(new ScheduleLocalRepository(transaction));
+    });
+    return result;
+  }
+
   /** Apply cloud-owned fields while preserving existing device runtime state. */
   public async applyCloudSchedule(row: CloudScheduleRow): Promise<boolean> {
     const result = await this.database.runAsync(

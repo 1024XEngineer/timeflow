@@ -1,5 +1,6 @@
 .DS_Store
 .idea/
+.cursor/
 .env
 .venv/
 node_modules/
@@ -11,5 +12,6 @@ __pycache__/
 .ruff_cache/
 .coverage
 coverage.xml
+coverage/
 dist/
 htmlcov/

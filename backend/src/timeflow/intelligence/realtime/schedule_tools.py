@@ -463,6 +463,8 @@ def _business_error(error: ScheduleBusinessError) -> ToolResult:
 def _mutation_result(result: ScheduleMutationResult, operation: str, tz: ZoneInfo) -> ToolResult:
     """Convert a mutation result into model output and client outcome."""
     snapshot = result.schedules[0] if result.schedules else None
+    schedules = [_snapshot_for_client(s) for s in result.schedules]
+    overrides = [_override_for_client(o) for o in result.occurrence_overrides]
     return ToolResult(
         output=json.dumps(
             {"status": "applied", "schedule": _for_model_dict(snapshot, tz)}, ensure_ascii=False
@@ -471,6 +473,8 @@ def _mutation_result(result: ScheduleMutationResult, operation: str, tz: ZoneInf
             "operation": operation,
             "status": "applied",
             "schedule": _snapshot_for_client(snapshot) if snapshot else None,
+            "schedules": schedules or None,
+            "occurrence_overrides": overrides or None,
         },
     )
 
@@ -499,6 +503,12 @@ def _snapshot_for_client(snapshot: Any) -> dict[str, Any]:
         for k, v in d.items()
         if k not in {"account_id", "created_at", "updated_at", "deleted_at"}
     }
+
+
+def _override_for_client(override: Any) -> dict[str, Any]:
+    """Convert ScheduleOccurrenceOverrideSnapshot to client dict, filtering out audit fields."""
+    d = asdict(override)
+    return {k: _json_value(v) for k, v in d.items() if k not in {"created_at", "updated_at"}}
 
 
 def _local_text(instant: datetime | None, tz: ZoneInfo) -> str:

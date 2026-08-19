@@ -5,12 +5,16 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import create_engine
+import sqlalchemy as sa
+from sqlalchemy import create_engine, event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from timeflow.business.calendar import (
     OccurrenceOverrideAction,
+    ReminderDispositionState,
+    ReminderStrength,
+    ReminderType,
     ScheduleCategory,
     ScheduleKind,
     ScheduleOccurrenceOverrideSnapshot,
@@ -124,6 +128,102 @@ def test_schedule_table_rejects_an_unknown_category(session: Session) -> None:
 
     with pytest.raises(IntegrityError):
         session.flush()
+
+
+def test_account_snapshot_reads_schedules_and_overrides_with_one_statement(
+    session: Session,
+) -> None:
+    """A full account snapshot is one point-in-time repository read."""
+    repository = ScheduleRepository(session)
+    parent = repository.add_schedule(
+        replace(
+            _schedule("series-a", "account-a"),
+            schedule_kind=ScheduleKind.RECURRING,
+            recurrence_rule="FREQ=DAILY",
+        )
+    )
+    replacement = repository.add_schedule(_schedule("replacement-a", "account-a"))
+    deleted_at = datetime.now(UTC)
+    repository.update_schedule(
+        snapshot=replace(
+            replacement,
+            status=ScheduleStatus.DELETED,
+            deleted_at=deleted_at,
+            updated_at=deleted_at,
+        ),
+        expected_revision=1,
+    )
+    repository.add_schedule(_schedule("other-account", "account-b"))
+    override = ScheduleOccurrenceOverrideSnapshot(
+        id="override-a",
+        schedule_id=parent.id,
+        occurrence_start=datetime.now(UTC),
+        action=OccurrenceOverrideAction.REPLACE,
+        replacement_schedule_id=replacement.id,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    assert (
+        repository.add_occurrence_override(
+            account_id="account-a",
+            snapshot=override,
+        )
+        is not None
+    )
+
+    statements: list[str] = []
+    assert session.bind is not None
+
+    def record_statement(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        statements.append(statement)
+
+    event.listen(session.bind, "before_cursor_execute", record_statement)
+    try:
+        snapshot = repository.get_account_snapshot(account_id="account-a")
+    finally:
+        event.remove(session.bind, "before_cursor_execute", record_statement)
+
+    assert [item.id for item in snapshot.schedules] == ["series-a", "replacement-a"]
+    assert [item.status for item in snapshot.schedules] == [
+        ScheduleStatus.ACTIVE,
+        ScheduleStatus.DELETED,
+    ]
+    assert [item.id for item in snapshot.occurrence_overrides] == ["override-a"]
+    assert len(statements) == 1
+
+
+def test_account_snapshot_places_location_schedules_after_timed_schedules(
+    session: Session,
+) -> None:
+    """Schedules without a start time are ordered after timed schedules."""
+    repository = ScheduleRepository(session)
+    repository.add_schedule(
+        replace(
+            _schedule("location-a", "account-a"),
+            schedule_type=ScheduleType.LOCATION,
+            start_time=None,
+            location_name="Office",
+            latitude=31.2304,
+            longitude=121.4737,
+        )
+    )
+    repository.add_schedule(
+        replace(
+            _schedule("timed-a", "account-a"),
+            start_time=datetime(2026, 8, 17, 2, tzinfo=UTC),
+        )
+    )
+
+    snapshot = repository.get_account_snapshot(account_id="account-a")
+
+    assert [item.id for item in snapshot.schedules] == ["timed-a", "location-a"]
 
 
 def test_schedule_candidates_coarsely_filter_once_rows_and_keep_recurring_series(
@@ -254,6 +354,144 @@ def test_schedule_update_preserves_immutable_creation_time(session: Session) -> 
     assert persisted is not None
     assert persisted.created_at == original.created_at.replace(tzinfo=None)
     assert persisted.created_at != caller_created_at.replace(tzinfo=None)
+
+
+def test_reminder_confirmation_atomically_sets_state_time_and_revision(session: Session) -> None:
+    """The first confirmation performs the complete aggregate transition."""
+    repository = ScheduleRepository(session)
+    original = repository.add_schedule(
+        replace(
+            _schedule("schedule-a", "account-a", revision=5),
+            reminder_type=ReminderType.BEFORE_START,
+            reminder_offset_minutes=10,
+            reminder_strength=ReminderStrength.MEDIUM,
+        )
+    )
+    confirmed_at = datetime(2026, 8, 17, 4, tzinfo=UTC)
+
+    persisted = repository.confirm_reminder_disposition(
+        account_id="account-a",
+        schedule_id=original.id,
+        confirmed_at=confirmed_at,
+    )
+
+    assert persisted is not None
+    assert persisted.reminder_disposition_state is ReminderDispositionState.CONFIRMED
+    assert persisted.updated_at == confirmed_at.replace(tzinfo=None)
+    assert persisted.revision == 6
+
+
+def test_duplicate_reminder_confirmation_is_a_no_op(session: Session) -> None:
+    """An already-confirmed row is not updated a second time."""
+    repository = ScheduleRepository(session)
+    original = repository.add_schedule(
+        replace(
+            _schedule("schedule-a", "account-a", revision=5),
+            reminder_type=ReminderType.BEFORE_START,
+            reminder_offset_minutes=10,
+            reminder_strength=ReminderStrength.MEDIUM,
+        )
+    )
+    first_time = datetime(2026, 8, 17, 4, tzinfo=UTC)
+    first = repository.confirm_reminder_disposition(
+        account_id="account-a",
+        schedule_id=original.id,
+        confirmed_at=first_time,
+    )
+    assert first is not None
+
+    duplicate = repository.confirm_reminder_disposition(
+        account_id="account-a",
+        schedule_id=original.id,
+        confirmed_at=datetime(2026, 8, 17, 5, tzinfo=UTC),
+    )
+    persisted = repository.get_schedule(account_id="account-a", schedule_id=original.id)
+
+    assert duplicate is None
+    assert persisted is not None
+    assert persisted.updated_at == first_time.replace(tzinfo=None)
+    assert persisted.revision == 6
+
+
+def test_losing_reminder_confirmation_expires_stale_identity_map(session: Session) -> None:
+    """A failed conditional update must not return Session-local loser values."""
+    repository = ScheduleRepository(session)
+    original = repository.add_schedule(
+        replace(
+            _schedule("schedule-a", "account-a", revision=5),
+            reminder_type=ReminderType.BEFORE_START,
+            reminder_offset_minutes=10,
+            reminder_strength=ReminderStrength.MEDIUM,
+        )
+    )
+    assert repository.get_schedule(account_id="account-a", schedule_id=original.id) is not None
+    winner_time = datetime(2026, 8, 17, 4, tzinfo=UTC)
+    loser_time = datetime(2026, 8, 17, 4, 1, tzinfo=UTC)
+    session.execute(
+        sa.update(Schedule)
+        .where(Schedule.id == original.id)
+        .values(
+            reminder_disposition_state=ReminderDispositionState.CONFIRMED.value,
+            updated_at=winner_time,
+            revision=Schedule.revision + 1,
+        )
+        .execution_options(synchronize_session=False)
+    )
+
+    missed = repository.confirm_reminder_disposition(
+        account_id="account-a",
+        schedule_id=original.id,
+        confirmed_at=loser_time,
+    )
+    reread = repository.get_schedule(account_id="account-a", schedule_id=original.id)
+
+    assert missed is None
+    assert reread is not None
+    assert reread.updated_at == winner_time.replace(tzinfo=None)
+    assert reread.updated_at != loser_time.replace(tzinfo=None)
+    assert reread.revision == 6
+
+
+@pytest.mark.parametrize("case", ["cross-account", "deleted", "no-reminder"])
+def test_reminder_confirmation_rejects_ineligible_rows(session: Session, case: str) -> None:
+    """Ownership, lifecycle, and reminder presence are enforced in the UPDATE."""
+    repository = ScheduleRepository(session)
+    original = replace(
+        _schedule("schedule-a", "account-a", revision=5),
+        reminder_type=ReminderType.BEFORE_START,
+        reminder_offset_minutes=10,
+        reminder_strength=ReminderStrength.MEDIUM,
+    )
+    if case == "deleted":
+        original = replace(
+            original,
+            status=ScheduleStatus.DELETED,
+            deleted_at=datetime(2026, 8, 17, 3, tzinfo=UTC),
+        )
+    if case == "no-reminder":
+        original = replace(
+            original,
+            reminder_type=None,
+            reminder_offset_minutes=None,
+            reminder_strength=None,
+        )
+    repository.add_schedule(original)
+
+    result = repository.confirm_reminder_disposition(
+        account_id="account-b" if case == "cross-account" else "account-a",
+        schedule_id=original.id,
+        confirmed_at=datetime(2026, 8, 17, 4, tzinfo=UTC),
+    )
+    persisted = repository.get_schedule(
+        account_id="account-a",
+        schedule_id=original.id,
+        include_deleted=True,
+    )
+
+    assert result is None
+    assert persisted is not None
+    assert persisted.reminder_disposition_state is None
+    assert persisted.revision == 5
 
 
 def test_deleted_schedules_are_hidden_by_default(session: Session) -> None:

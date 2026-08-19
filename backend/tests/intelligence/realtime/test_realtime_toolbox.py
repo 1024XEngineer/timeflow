@@ -11,11 +11,13 @@ from typing import Any
 import pytest
 
 from timeflow.business.calendar import (
+    OccurrenceOverrideAction,
     ScheduleAgentService,
     ScheduleBusinessError,
     ScheduleErrorCode,
     ScheduleKind,
     ScheduleMutationResult,
+    ScheduleOccurrenceOverrideSnapshot,
     ScheduleSearchResult,
     ScheduleSnapshot,
     ScheduleStatus,
@@ -333,6 +335,78 @@ def test_a_delete_reaches_the_call_that_matches_the_kind(
     assert service.calls == [expected]
 
 
+OVERRIDE = ScheduleOccurrenceOverrideSnapshot(
+    id="ovr_1",
+    schedule_id="sch_1",
+    occurrence_start=datetime(2026, 9, 8, 7, 0, tzinfo=UTC),
+    action=OccurrenceOverrideAction.CANCEL,
+    created_at=datetime(2026, 9, 7, 1, 0, tzinfo=UTC),
+    updated_at=datetime(2026, 9, 7, 1, 0, tzinfo=UTC),
+)
+
+
+class OverrideProducingService(RecordingService):
+    """A this_occurrence delete that cancels rather than replaces: no new schedule, one override."""
+
+    def delete_recurring_schedule(self, *, account_id: str, command: Any) -> ScheduleMutationResult:
+        self.calls.append("delete_recurring")
+        return ScheduleMutationResult(schedules=(), occurrence_overrides=(OVERRIDE,))
+
+
+def test_a_this_occurrence_delete_reports_the_override_it_produced() -> None:
+    result = run(
+        "schedule_delete",
+        {
+            "schedule_id": "sch_1",
+            "expected_revision": 1,
+            "schedule_kind": "recurring",
+            "scope": "this_occurrence",
+        },
+        ToolBox("acc_test", OverrideProducingService()),
+    )
+    assert result.outcome is not None
+    assert result.outcome["schedule"] is None
+    assert result.outcome["occurrence_overrides"] == [
+        {
+            "id": "ovr_1",
+            "schedule_id": "sch_1",
+            "occurrence_start": "2026-09-08T07:00:00+00:00",
+            "action": "cancel",
+            "replacement_schedule_id": None,
+        }
+    ]
+
+
+class MultiScheduleProducingService(RecordingService):
+    """A this_occurrence delete hitting an existing replace override: no new override,
+    but two schedules — the untouched parent and the soft-deleted replacement."""
+
+    def delete_recurring_schedule(self, *, account_id: str, command: Any) -> ScheduleMutationResult:
+        self.calls.append("delete_recurring")
+        replacement = replace(SNAPSHOT, id="sch_replacement", status=ScheduleStatus.DELETED)
+        return ScheduleMutationResult(schedules=(SNAPSHOT, replacement))
+
+
+def test_a_this_occurrence_delete_with_existing_replacement_reports_both_schedules() -> None:
+    result = run(
+        "schedule_delete",
+        {
+            "schedule_id": "sch_1",
+            "expected_revision": 1,
+            "schedule_kind": "recurring",
+            "scope": "this_occurrence",
+        },
+        ToolBox("acc_test", MultiScheduleProducingService()),
+    )
+    assert result.outcome is not None
+    # schedule（单数）保持只给第一条，向后兼容
+    assert result.outcome["schedule"]["id"] == "sch_1"
+    # schedules（复数）必须两条都在，这是这次要修的东西——之前只有 schedules[0] 会下发，
+    # 软删除的 replacement 永远到不了客户端
+    ids = [s["id"] for s in result.outcome["schedules"]]
+    assert ids == ["sch_1", "sch_replacement"]
+
+
 def test_a_delete_with_nothing_left_to_report_still_says_it_applied() -> None:
     result = run(
         "schedule_delete",
@@ -361,7 +435,7 @@ def test_a_committed_write_speaks_the_local_time_and_hides_the_audit_fields() ->
     assert "category" not in payload["schedule"]
     assert result.outcome is not None
     assert result.outcome["operation"] == "create_schedule"
-    assert result.outcome["schedule"]["category"] == "other"
+    assert result.outcome["schedule"]["category"] is None
     # The client is not told which account the row belongs to, nor when it was audited.
     assert "account_id" not in result.outcome["schedule"]
     assert "created_at" not in result.outcome["schedule"]

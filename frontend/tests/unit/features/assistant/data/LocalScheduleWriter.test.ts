@@ -3,10 +3,19 @@ import { describe, expect, it, jest } from '@jest/globals';
 import type { ScheduleLocalRepository } from '../../../../../src/features/schedule/data';
 import { LocalScheduleWriter } from '../../../../../src/features/assistant/data/local/LocalScheduleWriter';
 
+function createRepositoryMock() {
+  const applyCloudSchedule = jest.fn(async () => true);
+  let repository: ScheduleLocalRepository;
+  const withTransaction = jest.fn(
+    async (task: (repository: ScheduleLocalRepository) => Promise<unknown>) => task(repository),
+  );
+  repository = { applyCloudSchedule, withTransaction } as unknown as ScheduleLocalRepository;
+  return { applyCloudSchedule, repository };
+}
+
 describe('LocalScheduleWriter', () => {
   it('preserves category from a WebSocket command result', async () => {
-    const applyCloudSchedule = jest.fn(async () => true);
-    const repository = { applyCloudSchedule } as unknown as ScheduleLocalRepository;
+    const { applyCloudSchedule, repository } = createRepositoryMock();
     const writer = new LocalScheduleWriter(repository);
 
     await writer.applyCommandResult('account-a', {
@@ -33,8 +42,7 @@ describe('LocalScheduleWriter', () => {
   });
 
   it('preserves an unclassified legacy command result as null', async () => {
-    const applyCloudSchedule = jest.fn(async () => true);
-    const repository = { applyCloudSchedule } as unknown as ScheduleLocalRepository;
+    const { applyCloudSchedule, repository } = createRepositoryMock();
     const writer = new LocalScheduleWriter(repository);
 
     await writer.applyCommandResult('account-a', {
@@ -53,8 +61,7 @@ describe('LocalScheduleWriter', () => {
   });
 
   it('rejects an unsupported category before local persistence', async () => {
-    const applyCloudSchedule = jest.fn(async () => true);
-    const repository = { applyCloudSchedule } as unknown as ScheduleLocalRepository;
+    const { applyCloudSchedule, repository } = createRepositoryMock();
     const writer = new LocalScheduleWriter(repository);
 
     await expect(

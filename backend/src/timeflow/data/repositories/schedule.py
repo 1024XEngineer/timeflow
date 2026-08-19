@@ -7,6 +7,7 @@ from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session
 
 from timeflow.business.calendar.contracts import (
+    AccountScheduleSnapshot,
     OccurrenceOverrideAction,
     ReminderDispositionState,
     ReminderStrength,
@@ -56,6 +57,41 @@ class ScheduleRepository:
 
         model = self._session.scalar(statement)
         return None if model is None else _to_schedule_snapshot(model)
+
+    def get_account_snapshot(self, *, account_id: str) -> AccountScheduleSnapshot:
+        """Read all account schedules and occurrence overrides with one statement."""
+        statement = (
+            select(Schedule, ScheduleOccurrenceOverride)
+            .outerjoin(
+                ScheduleOccurrenceOverride,
+                ScheduleOccurrenceOverride.schedule_id == Schedule.id,
+            )
+            .where(Schedule.account_id == account_id)
+            .order_by(
+                Schedule.start_time.asc().nullslast(),
+                Schedule.created_at,
+                Schedule.id,
+            )
+        )
+
+        schedules_by_id: dict[str, ScheduleSnapshot] = {}
+        overrides_by_id: dict[str, ScheduleOccurrenceOverrideSnapshot] = {}
+        for schedule_model, override_model in self._session.execute(statement):
+            if schedule_model.id not in schedules_by_id:
+                schedules_by_id[schedule_model.id] = _to_schedule_snapshot(schedule_model)
+            if override_model is not None and override_model.id not in overrides_by_id:
+                overrides_by_id[override_model.id] = _to_override_snapshot(override_model)
+
+        occurrence_overrides = tuple(
+            sorted(
+                overrides_by_id.values(),
+                key=lambda item: (item.occurrence_start, item.id),
+            )
+        )
+        return AccountScheduleSnapshot(
+            schedules=tuple(schedules_by_id.values()),
+            occurrence_overrides=occurrence_overrides,
+        )
 
     def list_schedules(
         self,
@@ -145,6 +181,36 @@ class ScheduleRepository:
                 actual_revision=actual_revision,
             )
         return None
+
+    def confirm_reminder_disposition(
+        self,
+        *,
+        account_id: str,
+        schedule_id: str,
+        confirmed_at: datetime,
+    ) -> ScheduleSnapshot | None:
+        """Atomically confirm one active, account-owned configured reminder."""
+        statement = (
+            update(Schedule)
+            .where(
+                Schedule.id == schedule_id,
+                Schedule.account_id == account_id,
+                Schedule.status == ScheduleStatus.ACTIVE.value,
+                Schedule.reminder_type.is_not(None),
+                Schedule.reminder_disposition_state.is_(None),
+            )
+            .values(
+                reminder_disposition_state=ReminderDispositionState.CONFIRMED.value,
+                updated_at=confirmed_at,
+                revision=Schedule.revision + 1,
+            )
+            .returning(Schedule)
+            .execution_options(synchronize_session=False)
+        )
+        model = self._session.scalars(statement).one_or_none()
+        if model is None:
+            self._session.expire_all()
+        return None if model is None else _to_schedule_snapshot(model)
 
     def add_occurrence_override(
         self,
