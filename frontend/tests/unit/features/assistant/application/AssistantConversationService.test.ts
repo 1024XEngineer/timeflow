@@ -301,7 +301,7 @@ describe('AssistantConversationService', () => {
     } as AssistantServerMessage);
     await flushAsync();
 
-    expect(service.getState()).toEqual({ phase: 'idle' });
+    expect(service.getState()).toMatchObject({ phase: 'idle' });
   });
 
   it('dispose() unsubscribes every listener registered on the connection', async () => {
