@@ -88,6 +88,30 @@ describe('SqliteLocalScheduleReader', () => {
     expect(await reader.getReminderSchedule('missing')).toBeNull();
   });
 
+  it('maps a schedule without reminder configuration and preserves armed geofence state', async () => {
+    await repository.applyCloudSchedule(
+      cloudSchedule({
+        reminder_type: null,
+        reminder_offset_minutes: null,
+        reminder_strength: null,
+      }),
+    );
+    await repository.updateReminderRuntime('account-a', 'schedule-a', {
+      reminder_disposition_state: 'pending',
+      next_trigger_at: null,
+      snoozed_until: null,
+      geofence_armed: 1,
+      disposition_updated_at: '2026-08-12T07:00:00Z',
+      sync_status: 'pending',
+    });
+    reader.attach(repository, 'account-a');
+
+    expect(await reader.getReminderSchedule('schedule-a')).toMatchObject({
+      reminder: null,
+      runtime: { geofence_armed: true },
+    });
+  });
+
   it('scopes reads to the attached account', async () => {
     await repository.applyCloudSchedule(cloudSchedule());
     reader.attach(repository, 'account-b');

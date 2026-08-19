@@ -64,7 +64,6 @@ export type {
 } from './application';
 export { LocalReminderApplication } from './application';
 export {
-  InMemoryLocalScheduleReader,
   LocalReminderDelivery,
   LocalReminderDispositionSync,
   LocalReminderRecovery,

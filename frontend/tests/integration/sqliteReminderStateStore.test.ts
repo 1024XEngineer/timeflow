@@ -66,6 +66,39 @@ describe('SqliteReminderStateStore', () => {
     expect(await detached.read('schedule-a')).toBeNull();
   });
 
+  it('ignores reads and writes after detach()', async () => {
+    await repository.applyCloudSchedule(recurringSchedule());
+    store.detach();
+
+    expect(await store.read('schedule-a')).toBeNull();
+    await expect(
+      store.write('schedule-a', {
+        reminder_disposition_state: 'pending',
+        next_trigger_at: START_TIME,
+        snoozed_until: null,
+        geofence_armed: true,
+        disposition_updated_at: START_TIME,
+        sync_status: 'pending',
+        recorded_location: null,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      store.setDisposition('schedule-a', {
+        schedule_id: 'schedule-a',
+        state: 'confirmed',
+        updated_at: START_TIME,
+        snoozed_until: null,
+        sync_status: 'pending',
+      }),
+    ).resolves.toBeUndefined();
+
+    expect((await repository.getSchedule('account-a', 'schedule-a'))?.next_trigger_at).toBeNull();
+  });
+
+  it('returns null for a missing schedule in the attached account', async () => {
+    expect(await store.read('missing')).toBeNull();
+  });
+
   it('passes through a once schedule unchanged, including a null next_trigger_at', async () => {
     await repository.applyCloudSchedule(
       recurringSchedule({ schedule_kind: 'once', recurrence_rule: null }),
@@ -142,13 +175,19 @@ describe('SqliteReminderStateStore', () => {
     expect(runtime?.next_trigger_at).toBeNull();
   });
 
+  it('leaves the cursor null when the recurrence rule cannot be parsed', async () => {
+    await repository.applyCloudSchedule(recurringSchedule({ recurrence_rule: 'INVALID' }));
+
+    expect((await store.read('schedule-a'))?.next_trigger_at).toBeNull();
+  });
+
   it('write() persists a runtime patch and setDisposition() preserves the current cursor', async () => {
     await repository.applyCloudSchedule(recurringSchedule());
     await store.write('schedule-a', {
       reminder_disposition_state: 'pending',
       next_trigger_at: '2026-08-17T07:00:00Z',
       snoozed_until: null,
-      geofence_armed: false,
+      geofence_armed: true,
       disposition_updated_at: '2026-08-17T07:00:00Z',
       sync_status: 'pending',
       recorded_location: null,
@@ -167,5 +206,20 @@ describe('SqliteReminderStateStore', () => {
     // setDisposition 本身不该动 occurrence 光标，只有 confirmInternal 自己那次
     // 显式的 write() 才会把它清空。
     expect(stored?.next_trigger_at).toBe('2026-08-17T07:00:00Z');
+    expect(stored?.geofence_armed).toBe(1);
+  });
+
+  it('sets a disposition for a missing schedule without fabricating runtime state', async () => {
+    await expect(
+      store.setDisposition('missing', {
+        schedule_id: 'missing',
+        state: 'confirmed',
+        updated_at: '2026-08-17T07:05:00Z',
+        snoozed_until: null,
+        sync_status: 'pending',
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(await repository.getSchedule('account-a', 'missing')).toBeNull();
   });
 });
