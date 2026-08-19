@@ -106,6 +106,7 @@ export type LocalOccurrenceOverrideStorageColumnsContract = Assert<
 export type LocalRepositoryOperationsContract = Assert<
   Equal<
     keyof ScheduleLocalRepository,
+    | 'countSchedules'
     | 'getSchedule'
     | 'listSchedules'
     | 'withTransaction'

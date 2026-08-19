@@ -73,6 +73,14 @@ export interface LocalScheduleOccurrenceOverrideRow {
 export class ScheduleLocalRepository {
   public constructor(private readonly database: SQLiteDatabase) {}
 
+  public async countSchedules(accountId: string): Promise<number> {
+    const row = await this.database.getFirstAsync<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM local_schedules WHERE account_id = ?',
+      accountId,
+    );
+    return row?.count ?? 0;
+  }
+
   public getSchedule(accountId: string, scheduleId: string): Promise<LocalScheduleRow | null> {
     return this.database.getFirstAsync<LocalScheduleRow>(
       `SELECT * FROM local_schedules WHERE account_id = ? AND id = ?`,
