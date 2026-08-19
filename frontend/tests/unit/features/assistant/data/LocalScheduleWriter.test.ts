@@ -5,12 +5,17 @@ import { LocalScheduleWriter } from '../../../../../src/features/assistant/data/
 
 function createRepositoryMock() {
   const applyCloudSchedule = jest.fn(async () => true);
+  const patchScheduleCategory = jest.fn(async () => true);
   let repository: ScheduleLocalRepository;
   const withTransaction = jest.fn(
     async (task: (repository: ScheduleLocalRepository) => Promise<unknown>) => task(repository),
   );
-  repository = { applyCloudSchedule, withTransaction } as unknown as ScheduleLocalRepository;
-  return { applyCloudSchedule, repository };
+  repository = {
+    applyCloudSchedule,
+    patchScheduleCategory,
+    withTransaction,
+  } as unknown as ScheduleLocalRepository;
+  return { applyCloudSchedule, patchScheduleCategory, repository };
 }
 
 describe('LocalScheduleWriter', () => {
@@ -79,5 +84,14 @@ describe('LocalScheduleWriter', () => {
       }),
     ).rejects.toThrow('category has an unsupported value');
     expect(applyCloudSchedule).not.toHaveBeenCalled();
+  });
+
+  it('delegates an asynchronous category update without touching the full schedule', async () => {
+    const { patchScheduleCategory, repository } = createRepositoryMock();
+    const writer = new LocalScheduleWriter(repository);
+
+    await expect(writer.applyCategoryUpdate('account-a', 'schedule-a', 'work')).resolves.toBe(true);
+
+    expect(patchScheduleCategory).toHaveBeenCalledWith('account-a', 'schedule-a', 'work');
   });
 });
