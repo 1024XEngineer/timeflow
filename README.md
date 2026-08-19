@@ -49,14 +49,7 @@ npm ci
 npm start
 ```
 
-API 在 `http://127.0.0.1:8000`。Expo Web 请把 `EXPO_PUBLIC_API_URL` 设为 `http://127.0.0.1:8000/api/v1`。后端细节见 [backend/README.md](backend/README.md)。
 
-不启动后端时，可以用 mock 预览浏览登录页和示例日历：
-
-```bash
-cd frontend
-npm run web:preview
-```
 
 ## 仓库结构
 
