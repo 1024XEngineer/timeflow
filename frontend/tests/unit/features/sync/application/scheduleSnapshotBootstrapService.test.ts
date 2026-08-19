@@ -8,6 +8,32 @@ import {
 import type { FullScheduleSnapshotSyncService } from '../../../../../src/features/sync/application';
 
 const EMPTY_SNAPSHOT: CloudScheduleSnapshot = { schedules: [], occurrence_overrides: [] };
+const ACCOUNT_A_SCHEDULE = {
+  id: 'schedule-a',
+  account_id: 'account-a',
+  schedule_type: 'time',
+  schedule_kind: 'once',
+  category: 'work',
+  title: 'Planning',
+  is_all_day: false,
+  start_time: '2026-08-18T01:00:00Z',
+  end_time: '2026-08-18T02:00:00Z',
+  timezone: 'Asia/Shanghai',
+  recurrence_rule: null,
+  location_name: null,
+  latitude: null,
+  longitude: null,
+  reminder_type: null,
+  reminder_trigger_at: null,
+  reminder_offset_minutes: null,
+  reminder_strength: null,
+  reminder_disposition_state: null,
+  status: 'active',
+  revision: 1,
+  created_at: '2026-08-17T01:00:00Z',
+  updated_at: '2026-08-17T02:00:00Z',
+  deleted_at: null,
+} as const;
 
 function harness(localCount: number) {
   const schedules = { countSchedules: jest.fn(async () => localCount) };
@@ -103,6 +129,49 @@ describe('ScheduleSnapshotBootstrapService', () => {
     await expect(test.service.ensureLocalSnapshot('account-a')).rejects.toEqual(
       new ScheduleSnapshotBootstrapError('sqlite_transaction_failed'),
     );
+  });
+
+  it('rejects a snapshot that mixes in another account before syncing', async () => {
+    const test = harness(0);
+    test.access.getAccountSnapshot.mockResolvedValueOnce({
+      schedules: [
+        ACCOUNT_A_SCHEDULE,
+        { ...ACCOUNT_A_SCHEDULE, id: 'schedule-b', account_id: 'account-b' },
+      ],
+      occurrence_overrides: [],
+    });
+
+    await expect(test.service.ensureLocalSnapshot('account-a')).rejects.toMatchObject({
+      code: 'account_mismatch',
+    });
+    expect(test.sync.applyFullScheduleSnapshotToSqlite).not.toHaveBeenCalled();
+  });
+
+  it('rejects an override that points at a foreign replacement schedule', async () => {
+    const test = harness(0);
+    test.access.getAccountSnapshot.mockResolvedValueOnce({
+      schedules: [
+        ACCOUNT_A_SCHEDULE,
+        { ...ACCOUNT_A_SCHEDULE, id: 'replacement-a' },
+        { ...ACCOUNT_A_SCHEDULE, id: 'replacement-b', account_id: 'account-b' },
+      ],
+      occurrence_overrides: [
+        {
+          id: 'override-a',
+          schedule_id: 'schedule-a',
+          occurrence_start: '2026-08-25T01:00:00Z',
+          action: 'replace',
+          replacement_schedule_id: 'replacement-b',
+          created_at: '2026-08-17T01:00:00Z',
+          updated_at: '2026-08-17T02:00:00Z',
+        },
+      ],
+    });
+
+    await expect(test.service.ensureLocalSnapshot('account-a')).rejects.toMatchObject({
+      code: 'account_mismatch',
+    });
+    expect(test.sync.applyFullScheduleSnapshotToSqlite).not.toHaveBeenCalled();
   });
 
   it('checks each account independently', async () => {

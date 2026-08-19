@@ -48,6 +48,7 @@ export class ScheduleSnapshotBootstrapService {
     throwIfAborted(signal);
     const snapshot = await this.dependencies.access.getAccountSnapshot(signal);
     throwIfAborted(signal);
+    assertSnapshotBelongsToAccount(accountId, snapshot);
     const result = await this.dependencies.sync.applyFullScheduleSnapshotToSqlite({
       accountId,
       snapshot,
@@ -64,4 +65,25 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   const error = new Error('Schedule snapshot preparation aborted');
   error.name = 'AbortError';
   throw error;
+}
+
+function assertSnapshotBelongsToAccount(accountId: string, snapshot: CloudScheduleSnapshot): void {
+  const schedulesById = new Map(snapshot.schedules.map((schedule) => [schedule.id, schedule]));
+  for (const schedule of snapshot.schedules) {
+    if (schedule.account_id !== accountId) {
+      throw new ScheduleSnapshotBootstrapError('account_mismatch');
+    }
+  }
+  for (const override of snapshot.occurrence_overrides) {
+    const parent = schedulesById.get(override.schedule_id);
+    if (parent === undefined || parent.account_id !== accountId) {
+      throw new ScheduleSnapshotBootstrapError('account_mismatch');
+    }
+    if (override.replacement_schedule_id !== null) {
+      const replacement = schedulesById.get(override.replacement_schedule_id);
+      if (replacement === undefined || replacement.account_id !== accountId) {
+        throw new ScheduleSnapshotBootstrapError('account_mismatch');
+      }
+    }
+  }
 }
