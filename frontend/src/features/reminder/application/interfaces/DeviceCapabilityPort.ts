@@ -19,4 +19,6 @@ export interface DeviceCapabilityPort {
   getStatus(): Promise<DeviceCapabilityStatus>;
   requestPermission(permission: DevicePermission): Promise<boolean>;
   openSettings(permission: DevicePermission): Promise<boolean>;
+  /** 订阅应用回到前台；返回取消订阅函数。 */
+  onAppActive(listener: () => void): () => void;
 }

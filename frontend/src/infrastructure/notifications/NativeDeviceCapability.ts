@@ -1,4 +1,4 @@
-import { Platform } from 'react-native';
+import { AppState, Platform, type AppStateStatus } from 'react-native';
 
 import type {
   DeviceCapabilityPort,
@@ -74,6 +74,13 @@ export class NativeDeviceCapability implements DeviceCapabilityPort {
     } catch {
       return false;
     }
+  }
+
+  onAppActive(listener: () => void): () => void {
+    const subscription = AppState.addEventListener('change', (state: AppStateStatus) => {
+      if (state === 'active') listener();
+    });
+    return () => subscription.remove();
   }
 }
 

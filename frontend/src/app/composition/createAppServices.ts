@@ -21,7 +21,7 @@ import {
   NativeAlarmScheduler,
   NativeDeviceCapability,
 } from '../../infrastructure/notifications';
-import { MockTimeListener } from '../../shared/time';
+import { MockTimeListener } from '../../infrastructure/time';
 import { MockReminderPresenter } from '../../features/reminder/presentation';
 import { ScheduleViewStore } from '../../features/schedule/presentation';
 
