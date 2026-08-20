@@ -367,7 +367,7 @@ describe('AppRoot', () => {
 
     fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
 
-    await waitFor(() => expect(screen.getByText('登录或注册')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('登录')).toBeTruthy());
     expect(detachSchedules).toHaveBeenCalledTimes(1);
     expect(detachState).toHaveBeenCalledTimes(1);
   });
