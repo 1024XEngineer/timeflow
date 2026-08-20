@@ -2,12 +2,23 @@ import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
 import { AppRoot } from '../../../src/app/AppRoot';
-import { AuthController } from '../../../src/features/auth/application';
+import { createScheduleSnapshotPreparation } from '../../../src/app/composition/createScheduleSnapshotPreparation';
+import {
+  createAppServices,
+  type AppServices,
+} from '../../../src/app/composition/createAppServices';
+import type {
+  ScheduleSnapshotBootstrapResult,
+  ScheduleSnapshotBootstrapService,
+} from '../../../src/features/sync/application';
 import { FakeAuthSessionStore } from '../../fakes/FakeAuthSessionStore';
 import { openTimeflowDatabase } from '../../../src/infrastructure/database';
 
 jest.mock('../../../src/infrastructure/database', () => ({
   openTimeflowDatabase: jest.fn<() => Promise<unknown>>().mockResolvedValue({}),
+}));
+jest.mock('../../../src/app/composition/createScheduleSnapshotPreparation', () => ({
+  createScheduleSnapshotPreparation: jest.fn(),
 }));
 jest.mock('../../../src/features/schedule/data', () => ({ ScheduleLocalRepository: jest.fn() }));
 jest.mock('../../../src/features/schedule/application', () => ({
@@ -63,10 +74,25 @@ jest.mock('../../../src/features/assistant/presentation/AssistantVoiceOverlay', 
 const mockedOpenTimeflowDatabase = openTimeflowDatabase as jest.MockedFunction<
   typeof openTimeflowDatabase
 >;
+const mockedCreateScheduleSnapshotPreparation =
+  createScheduleSnapshotPreparation as jest.MockedFunction<
+    typeof createScheduleSnapshotPreparation
+  >;
+let mockedEnsureLocalSnapshot: jest.MockedFunction<
+  ScheduleSnapshotBootstrapService['ensureLocalSnapshot']
+>;
 
 beforeEach(() => {
   mockedOpenTimeflowDatabase.mockReset();
   mockedOpenTimeflowDatabase.mockResolvedValue({} as never);
+  mockedEnsureLocalSnapshot = jest.fn<ScheduleSnapshotBootstrapService['ensureLocalSnapshot']>(
+    async () => ({ status: 'skipped_local_data' }),
+  );
+  mockedCreateScheduleSnapshotPreparation.mockReset();
+  mockedCreateScheduleSnapshotPreparation.mockReturnValue({
+    repository: {},
+    bootstrap: { ensureLocalSnapshot: mockedEnsureLocalSnapshot },
+  } as never);
 });
 
 describe('AppRoot', () => {
@@ -95,8 +121,8 @@ describe('AppRoot', () => {
   ])(
     '%s',
     async (_name, session, readError, pending, expected) => {
-      const controller = createController(session, readError, pending);
-      render(<AppRoot authController={controller} />);
+      const services = createController(session, readError, pending);
+      render(<AppRoot services={services} />);
 
       await waitFor(() => expect(screen.getByText(expected)).toBeTruthy());
       expect(screen.queryByText('opaque-token')).toBeNull();
@@ -105,8 +131,8 @@ describe('AppRoot', () => {
   );
 
   it('enters the calendar after controller authentication without exposing the token', async () => {
-    const controller = createController();
-    render(<AppRoot authController={controller} />);
+    const services = createController();
+    render(<AppRoot services={services} />);
 
     await screen.findByLabelText('用户名');
     fireEvent.changeText(screen.getByLabelText('用户名'), '  timeflow_user  ');
@@ -124,13 +150,13 @@ describe('AppRoot', () => {
   });
 
   it('shows the restored username without rendering the internal account id', async () => {
-    const controller = createController({
+    const services = createController({
       accountId: 'acc_internal_001',
       accessToken: 'opaque-token',
       expiresAt: 200_000,
       username: 'restored_user',
     });
-    render(<AppRoot authController={controller} />);
+    render(<AppRoot services={services} />);
 
     await screen.findByText('restored_user');
     expect(screen.queryByText(/账号：/)).toBeNull();
@@ -138,19 +164,107 @@ describe('AppRoot', () => {
     expect(screen.queryByText('opaque-token')).toBeNull();
   });
 
-  it('can retry SQLite initialization after a failure', async () => {
-    mockedOpenTimeflowDatabase
-      .mockRejectedValueOnce(new Error('database unavailable'))
-      .mockResolvedValue({} as never);
-    const controller = createController({
+  it('waits for local snapshot preparation before rendering the calendar', async () => {
+    const preparation = createDeferred<ScheduleSnapshotBootstrapResult>();
+    mockedEnsureLocalSnapshot.mockReturnValueOnce(preparation.promise);
+    const services = createController({
       accountId: 'acc_001',
       accessToken: 'opaque-token',
       expiresAt: 200_000,
       username: 'timeflow_user',
     });
-    render(<AppRoot authController={controller} />);
 
-    await waitFor(() => expect(screen.getByText('本地日程存储初始化失败')).toBeTruthy());
+    render(<AppRoot services={services} />);
+
+    expect(await screen.findByText('正在准备日程')).toBeTruthy();
+    expect(screen.queryByText('日程日历')).toBeNull();
+    preparation.resolve({ status: 'applied' });
+    expect(await screen.findByText('日程日历')).toBeTruthy();
+  });
+
+  it('shows a retryable sync error and retries the whole preparation', async () => {
+    mockedEnsureLocalSnapshot
+      .mockRejectedValueOnce(new Error('snapshot unavailable'))
+      .mockResolvedValueOnce({ status: 'applied' });
+    const services = createController({
+      accountId: 'acc_001',
+      accessToken: 'opaque-token',
+      expiresAt: 200_000,
+      username: 'timeflow_user',
+    });
+
+    render(<AppRoot services={services} />);
+
+    expect(await screen.findByText('日程同步失败')).toBeTruthy();
+    fireEvent.press(screen.getByText('重试'));
+    expect(await screen.findByText('日程日历')).toBeTruthy();
+    expect(mockedEnsureLocalSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves the sync route when protected access invalidates authentication', async () => {
+    const services = createController({
+      accountId: 'acc_001',
+      accessToken: 'opaque-token',
+      expiresAt: 200_000,
+      username: 'timeflow_user',
+    });
+    const controller = services.auth.controller;
+    mockedEnsureLocalSnapshot.mockImplementationOnce(async () => {
+      await controller.invalidate('revoked');
+      throw new Error('unauthenticated');
+    });
+
+    render(<AppRoot services={services} />);
+
+    expect(await screen.findByText('登录或注册')).toBeTruthy();
+    expect(screen.queryByText('日程同步失败')).toBeNull();
+  });
+
+  it('ignores an old account preparation after the route is replaced', async () => {
+    const oldPreparation = createDeferred<ScheduleSnapshotBootstrapResult>();
+    mockedEnsureLocalSnapshot
+      .mockReturnValueOnce(oldPreparation.promise)
+      .mockResolvedValueOnce({ status: 'skipped_local_data' });
+    const firstServices = createController({
+      accountId: 'account-a',
+      accessToken: 'token-a',
+      expiresAt: 200_000,
+      username: 'user_a',
+    });
+    const secondServices = createController({
+      accountId: 'account-b',
+      accessToken: 'token-b',
+      expiresAt: 200_000,
+      username: 'user_b',
+    });
+    const view = render(<AppRoot services={firstServices} />);
+    await screen.findByText('正在准备日程');
+
+    view.rerender(<AppRoot services={secondServices} />);
+
+    expect(await screen.findByText('user_b')).toBeTruthy();
+    const oldSignal = (mockedEnsureLocalSnapshot.mock.calls[0] as unknown[])[1] as
+      AbortSignal | undefined;
+    expect(oldSignal?.aborted).toBe(true);
+    oldPreparation.resolve({ status: 'applied' });
+
+    await waitFor(() => expect(screen.getByText('user_b')).toBeTruthy());
+    expect(screen.queryByText('user_a')).toBeNull();
+  });
+
+  it('can retry SQLite initialization after a failure', async () => {
+    mockedOpenTimeflowDatabase
+      .mockRejectedValueOnce(new Error('database unavailable'))
+      .mockResolvedValue({} as never);
+    const services = createController({
+      accountId: 'acc_001',
+      accessToken: 'opaque-token',
+      expiresAt: 200_000,
+      username: 'timeflow_user',
+    });
+    render(<AppRoot services={services} />);
+
+    await waitFor(() => expect(screen.getByText('日程同步失败')).toBeTruthy());
     fireEvent.press(screen.getByText('重试'));
 
     await waitFor(() => expect(mockedOpenTimeflowDatabase).toHaveBeenCalledTimes(2));
@@ -161,15 +275,16 @@ describe('AppRoot', () => {
 
   it('can sign out when SQLite initialization fails', async () => {
     mockedOpenTimeflowDatabase.mockRejectedValue(new Error('database unavailable'));
-    const controller = createController({
+    const services = createController({
       accountId: 'acc_001',
       accessToken: 'opaque-token',
       expiresAt: 200_000,
       username: 'timeflow_user',
     });
-    render(<AppRoot authController={controller} />);
+    const controller = services.auth.controller;
+    render(<AppRoot services={services} />);
 
-    await screen.findByText('本地日程存储初始化失败');
+    await screen.findByText('日程同步失败');
     fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
 
     await waitFor(() => expect(screen.getByText('登录')).toBeTruthy());
@@ -178,13 +293,14 @@ describe('AppRoot', () => {
 
   it('can sign out while SQLite initialization is pending', async () => {
     mockedOpenTimeflowDatabase.mockImplementation(() => new Promise(() => undefined));
-    const controller = createController({
+    const services = createController({
       accountId: 'acc_001',
       accessToken: 'opaque-token',
       expiresAt: 200_000,
       username: 'timeflow_user',
     });
-    render(<AppRoot authController={controller} />);
+    const controller = services.auth.controller;
+    render(<AppRoot services={services} />);
 
     await screen.findByText('正在准备日程');
     fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
@@ -194,13 +310,14 @@ describe('AppRoot', () => {
   });
 
   it('signs out from the authenticated account shell', async () => {
-    const controller = createController({
+    const services = createController({
       accountId: 'acc_001',
       accessToken: 'opaque-token',
       expiresAt: 200_000,
       username: 'timeflow_user',
     });
-    render(<AppRoot authController={controller} />);
+    const controller = services.auth.controller;
+    render(<AppRoot services={services} />);
 
     await screen.findByText('日程日历');
     fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
@@ -214,20 +331,37 @@ function createController(
   session?: { accountId: string; accessToken: string; expiresAt: number; username: string },
   readError?: unknown,
   pending = false,
-) {
+): AppServices {
   const store = new FakeAuthSessionStore();
   store.session = session;
   store.readError = readError;
   if (pending) {
     store.beforeRead = () => new Promise(() => undefined);
   }
-  return new AuthController({
-    authAccess: async () => ({
+  const fetch = jest.fn(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
       access_token: 'opaque-token',
       account_id: 'acc_001',
       expires_in: 3600,
     }),
-    now: () => 100_000,
-    store,
+  })) as unknown as typeof globalThis.fetch;
+  return createAppServices({
+    auth: {
+      fetch,
+      now: () => 100_000,
+      store,
+    },
   });
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
 }

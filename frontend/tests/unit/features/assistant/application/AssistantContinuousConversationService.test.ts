@@ -95,6 +95,7 @@ function createFakeConnection() {
 function createDeps(
   overrides: {
     applyCommandResult?: () => Promise<void>;
+    applyCategoryUpdate?: () => Promise<boolean>;
     connection?: VoiceTransportConnection;
     requestPermission?: () => Promise<boolean>;
   } = {},
@@ -124,6 +125,7 @@ function createDeps(
   };
   const localScheduleWriter: LocalScheduleWriterPort = {
     applyCommandResult: jest.fn(overrides.applyCommandResult ?? (async () => undefined)),
+    applyCategoryUpdate: jest.fn(overrides.applyCategoryUpdate ?? (async () => true)),
   };
   const appState: AppStateProvider = {
     subscribe: jest.fn((listener: (status: AppLifecycleStatus) => void) => {
@@ -160,8 +162,28 @@ async function startListening(
   await turn;
 }
 
+const liveServices: AssistantContinuousConversationService[] = [];
+
+function createService(deps: ReturnType<typeof createDeps>) {
+  const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+  liveServices.push(service);
+  return service;
+}
+
+function disposeService(service: AssistantContinuousConversationService) {
+  const index = liveServices.indexOf(service);
+  if (index >= 0) {
+    liveServices.splice(index, 1);
+  }
+  service.dispose();
+}
+
 describe('AssistantContinuousConversationService', () => {
   afterEach(() => {
+    for (const service of liveServices.splice(0)) {
+      disposeService(service);
+    }
+    jest.clearAllTimers();
     jest.useRealTimers();
   });
 
@@ -169,7 +191,7 @@ describe('AssistantContinuousConversationService', () => {
     jest.useFakeTimers();
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
-    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    const service = createService(deps);
 
     await startListening(fake, service);
     await advanceAndFlush(SESSION_IDLE_TIMEOUT_MS);
@@ -186,7 +208,7 @@ describe('AssistantContinuousConversationService', () => {
     jest.useFakeTimers();
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
-    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    const service = createService(deps);
 
     await startListening(fake, service);
     await advanceAndFlush(SESSION_IDLE_TIMEOUT_MS - 1_000);
@@ -201,11 +223,117 @@ describe('AssistantContinuousConversationService', () => {
     expect(service.getState()).toMatchObject({ phase: 'listening' });
   });
 
+  it('accumulates transcript/reply pairs into turn history instead of overwriting', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_1',
+      payload: { duration_ms: 800, language: 'zh', transcript: '明天几点开会' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '明天下午三点' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_2',
+      payload: { duration_ms: 500, language: 'zh', transcript: '谁参加' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getTurns()).toEqual([
+      { id: 'req_1', replyText: '明天下午三点', transcript: '明天几点开会' },
+      { id: 'req_2', replyText: null, transcript: '谁参加' },
+    ]);
+  });
+
+  it.each([
+    ['missing_field', '你是想订哪一天的会议室？'],
+    ['ambiguous_target', '你是指三楼小会议室还是五楼大会议室？'],
+    ['confirmation', '确认要把这条日程删除吗？'],
+  ])(
+    'records a clarifying voice.dialogue.question (%s) as the reply for the current turn',
+    async (questionKind, speechText) => {
+      const fake = createFakeConnection();
+      const deps = createDeps({ connection: fake.connection });
+      const service = createService(deps);
+
+      await startListening(fake, service);
+      fake.emitMessage({
+        conversation_id: 'conv_001',
+        request_id: 'req_1',
+        payload: { duration_ms: 800, language: 'zh', transcript: '帮我订会议室' },
+        type: 'voice.asr.completed',
+      } as AssistantServerMessage);
+      fake.emitMessage({
+        conversation_id: 'conv_001',
+        payload: {
+          candidates: [],
+          question_id: 'q_1',
+          question_kind: questionKind,
+          speech_text: speechText,
+        },
+        type: 'voice.dialogue.question',
+      } as AssistantServerMessage);
+      await flushAsync();
+
+      expect(service.getTurns()).toEqual([
+        { id: 'req_1', replyText: speechText, transcript: '帮我订会议室' },
+      ]);
+      expect(service.getState()).toMatchObject({ phase: 'asking' });
+    },
+  );
+
+  it('does not create a history turn when a reply arrives before any transcript', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '好的' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getReplyText()).toBe('好的');
+    expect(service.getTurns()).toEqual([]);
+  });
+
+  it('clears turn history when a new call starts', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_1',
+      payload: { duration_ms: 800, language: 'zh', transcript: '明天几点开会' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getTurns()).toHaveLength(1);
+
+    await service.endTurn();
+    await startListening(fake, service);
+
+    expect(service.getTurns()).toHaveLength(0);
+  });
+
   it('resets the idle timer after a reply finishes playing', async () => {
     jest.useFakeTimers();
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
-    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    const service = createService(deps);
 
     await startListening(fake, service);
     await advanceAndFlush(SESSION_IDLE_TIMEOUT_MS - 1_000);
@@ -223,7 +351,7 @@ describe('AssistantContinuousConversationService', () => {
   it('ends the turn when the server reports voice.session.end, without surfacing an error', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
-    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    const service = createService(deps);
 
     await startListening(fake, service);
     fake.emitMessage({
@@ -243,7 +371,7 @@ describe('AssistantContinuousConversationService', () => {
   it('keeps the last successfully persisted command when a later local write fails', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
-    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    const service = createService(deps);
 
     await startListening(fake, service);
     fake.emitMessage({
@@ -288,13 +416,88 @@ describe('AssistantContinuousConversationService', () => {
     expect(fake.sent).not.toContainEqual(
       expect.objectContaining({ message_id: 'msg_failed', type: 'message.ack' }),
     );
+    disposeService(service);
+  });
+
+  it('patches an asynchronous category update while the call remains active', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      payload: { category: 'work', schedule_id: 'schedule_001' },
+      type: 'schedule.category.updated',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(deps.localScheduleWriter.applyCategoryUpdate).toHaveBeenCalledWith(
+      'acc_001',
+      'schedule_001',
+      'work',
+    );
+    expect(service.getState()).toMatchObject({ phase: 'listening' });
     service.dispose();
+  });
+
+  it('applies a buffered category after the command result creates the local row', async () => {
+    const fake = createFakeConnection();
+    const applyCategoryUpdate = jest
+      .fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const deps = createDeps({ applyCategoryUpdate, connection: fake.connection });
+    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      payload: { category: 'work', schedule_id: 'schedule_001' },
+      type: 'schedule.category.updated',
+    } as AssistantServerMessage);
+    await flushAsync();
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_001',
+      payload: {
+        operation: 'create_schedule',
+        schedule: { id: 'schedule_001' },
+        status: 'applied',
+      },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(applyCategoryUpdate).toHaveBeenNthCalledWith(2, 'acc_001', 'schedule_001', 'work');
+    service.dispose();
+  });
+
+  it('does not retain a category update that finishes after dispose', async () => {
+    const fake = createFakeConnection();
+    let finishPatch!: () => void;
+    const pendingPatch = new Promise<boolean>((resolve) => {
+      finishPatch = () => resolve(false);
+    });
+    const applyCategoryUpdate = jest.fn<() => Promise<boolean>>(() => pendingPatch);
+    const deps = createDeps({ applyCategoryUpdate, connection: fake.connection });
+    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      payload: { category: 'work', schedule_id: 'schedule_001' },
+      type: 'schedule.category.updated',
+    } as AssistantServerMessage);
+    await flushAsync();
+    service.dispose();
+    finishPatch();
+    await flushAsync();
+
+    expect(applyCategoryUpdate).toHaveBeenCalledTimes(1);
   });
 
   it('stops forwarding microphone frames while paused, and resumes them after togglePause()', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
-    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    const service = createService(deps);
 
     await startListening(fake, service);
     const chunk = new ArrayBuffer(4);
@@ -312,13 +515,13 @@ describe('AssistantContinuousConversationService', () => {
     expect(fake.sentAudioFrames).toHaveLength(2);
     // 关掉 startListening() 里 armIdleTimer() 挂的真实 setTimeout，不然会在
     // 进程里悬空，让 jest 报"未正常退出"。
-    service.dispose();
+    disposeService(service);
   });
 
   it('auto-pauses an active call when the app moves to the background', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
-    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    const service = createService(deps);
 
     await startListening(fake, service);
     deps.emitAppState('background');
@@ -327,13 +530,13 @@ describe('AssistantContinuousConversationService', () => {
     const chunk = new ArrayBuffer(4);
     deps.emitMicChunk(chunk);
     expect(fake.sentAudioFrames).toHaveLength(0);
-    service.dispose();
+    disposeService(service);
   });
 
   it('ignores a background transition while idle', () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
-    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    const service = createService(deps);
 
     deps.emitAppState('background');
 
@@ -344,10 +547,10 @@ describe('AssistantContinuousConversationService', () => {
     jest.useFakeTimers();
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
-    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    const service = createService(deps);
 
     await startListening(fake, service);
-    service.dispose();
+    disposeService(service);
     await advanceAndFlush(SESSION_IDLE_TIMEOUT_MS);
 
     expect(deps.unsubscribeAppState).toHaveBeenCalled();
@@ -359,7 +562,7 @@ describe('AssistantContinuousConversationService', () => {
   it('resets muted state on a fresh startTurn() even if the previous call ended while paused', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
-    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    const service = createService(deps);
 
     await startListening(fake, service);
     service.togglePause();
@@ -370,13 +573,13 @@ describe('AssistantContinuousConversationService', () => {
     deps.emitMicChunk(chunk);
 
     expect(fake.sentAudioFrames).toHaveLength(1);
-    service.dispose();
+    disposeService(service);
   });
 
   it('guards endTurn() against being run twice concurrently', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
-    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    const service = createService(deps);
 
     await startListening(fake, service);
     const first = service.endTurn();
@@ -394,7 +597,7 @@ describe('AssistantContinuousConversationService', () => {
     deps.capture.stop = jest.fn(async () => {
       throw new Error('native stop failed');
     });
-    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    const service = createService(deps);
 
     await startListening(fake, service);
     await service.endTurn();
@@ -410,7 +613,7 @@ describe('AssistantContinuousConversationService', () => {
   it('serializes pushChunk() calls so a slow chunk cannot be overtaken by the next one', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
-    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    const service = createService(deps);
     const calls: number[] = [];
     let resolveFirst: () => void = () => {};
     const first = new Promise<void>((resolve) => {
@@ -450,13 +653,13 @@ describe('AssistantContinuousConversationService', () => {
     await flushAsync();
 
     expect(calls).toEqual([1, 2]);
-    service.dispose();
+    disposeService(service);
   });
 
   it('waits for startStream() to finish before pushing the first audio chunk', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
-    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    const service = createService(deps);
     const calls: string[] = [];
     let resolveStart: () => void = () => {};
     (deps.playback.startStream as jest.Mock).mockImplementation(
@@ -492,7 +695,7 @@ describe('AssistantContinuousConversationService', () => {
     await flushAsync();
 
     expect(calls).toEqual(['startStream', 'pushChunk']);
-    service.dispose();
+    disposeService(service);
   });
 
   it('handleClose() unsubscribes from the shared connection before nulling it, even when a real disconnect races endTurn()', async () => {
@@ -505,7 +708,7 @@ describe('AssistantContinuousConversationService', () => {
           resolveStop = resolve;
         }),
     );
-    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    const service = createService(deps);
 
     await startListening(fake, service);
     const ending = service.endTurn();
@@ -523,7 +726,7 @@ describe('AssistantContinuousConversationService', () => {
   it('guards startTurn() against being run twice concurrently', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
-    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    const service = createService(deps);
 
     // 一次点击触发两次 startTurn()（比如双击）：没有门槛的话第二次会覆盖
     // this.connection/streamStartedWaiter，第一次的连接监听器就永久泄漏了。
@@ -540,7 +743,7 @@ describe('AssistantContinuousConversationService', () => {
     expect(deps.transport.connect).toHaveBeenCalledTimes(1);
     expect(fake.sent.filter((message) => message.type === 'voice.stream.start')).toHaveLength(1);
     expect(service.getState()).toEqual({ conversationId: 'conv_001', phase: 'listening' });
-    service.dispose();
+    disposeService(service);
   });
 
   it('ends the server stream and closes the connection when capture.start() rejects', async () => {
@@ -549,7 +752,7 @@ describe('AssistantContinuousConversationService', () => {
     deps.capture.start = jest.fn(async () => {
       throw new Error('native recording failed to start');
     });
-    const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    const service = createService(deps);
 
     const turn = service.startTurn();
     await flushAsync();

@@ -44,6 +44,7 @@ from timeflow.gateway.websocket.handlers.session import SessionHandshake
 from timeflow.gateway.websocket.handlers.voice_stream import VoiceStreamHandlers
 from timeflow.gateway.websocket.ports import AudioSink
 from timeflow.gateway.websocket.router import MessageRouter
+from timeflow.infrastructure.external.llm import OpenAICompatibleJsonLlm
 from timeflow.infrastructure.external.location.tencent_maps import TencentMapsLocationPort
 from timeflow.infrastructure.external.realtime.qwen_audio import (
     QwenAudioConfig,
@@ -56,6 +57,7 @@ from timeflow.intelligence.location import ClientLocation, LocationSearchService
 from timeflow.intelligence.realtime.agent import RealtimeAgent
 from timeflow.intelligence.realtime.instructions import build_instructions
 from timeflow.intelligence.realtime.schedule_tools import ToolBox
+from timeflow.intelligence.schedule_category import LlmScheduleCategoryClassifier
 
 logging.basicConfig(
     level=logging.INFO,
@@ -157,10 +159,9 @@ def create_app(
 
     if audio_sink is None:
         assert session_factory is not None
+        result_sink = WebSocketResultSink(connections)
         audio_sink = AgentAudioSink(
-            _build_agent(
-                settings, WebSocketResultSink(connections), session_factory, location_service
-            )
+            _build_agent(settings, result_sink, session_factory, location_service)
         )
 
     voice_streams = VoiceStreamHandlers(
@@ -254,8 +255,29 @@ def _build_realtime_agent(
     if settings.aliyun_audio_is_configured():
         logger.info("using the realtime model", extra={"model": settings.aliyun_audio_model})
 
+        category_classifier = None
+        if settings.openai_is_configured():
+            category_classifier = LlmScheduleCategoryClassifier(
+                OpenAICompatibleJsonLlm(
+                    settings,
+                    timeout_seconds=settings.schedule_category_timeout_seconds,
+                )
+            )
+        else:
+            logger.warning(
+                "schedule category classification is not configured; leaving category null",
+                extra={
+                    "needs": (
+                        "TIMEFLOW_OPENAI_BASE_URL, TIMEFLOW_OPENAI_API_KEY, "
+                        "and TIMEFLOW_OPENAI_MODEL"
+                    )
+                },
+            )
+
         schedule_service = ScheduleApplicationService(
-            lambda: SqlAlchemyScheduleUnitOfWork(session_factory)
+            lambda: SqlAlchemyScheduleUnitOfWork(session_factory),
+            category_classifier=category_classifier,
+            category_event_publisher=result_sink.publish_schedule_category_updated,
         )
 
         async def bind_account(

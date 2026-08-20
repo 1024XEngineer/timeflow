@@ -1,7 +1,13 @@
 import { useEffect, useState } from 'react';
 
 import type { AssistantApplicationPort } from '../application/AssistantApplication';
-import type { AppliedCommand, ConversationTurnState } from '../domain/ConversationTurn';
+import type {
+  AppliedCommand,
+  ConversationTurnRecord,
+  ConversationTurnState,
+} from '../domain/ConversationTurn';
+
+const NO_TURNS: readonly ConversationTurnRecord[] = [];
 
 /** 订阅编排服务的状态，展示层不用直接持有 AssistantConversationService。 */
 export function useAssistantConversation(application: AssistantApplicationPort) {
@@ -12,6 +18,9 @@ export function useAssistantConversation(application: AssistantApplicationPort) 
   );
   const [replyText, setReplyText] = useState<string | null>(() => application.getReplyText());
   const [soundLevel, setSoundLevel] = useState<number | null>(() => application.getSoundLevel());
+  const [turns, setTurns] = useState<readonly ConversationTurnRecord[]>(
+    () => application.getTurns?.() ?? NO_TURNS,
+  );
 
   // application 实例切换（如重新登录）时，渲染期间同步一次而不是在 effect 里
   // setState，避免多触发一轮 commit。
@@ -21,6 +30,7 @@ export function useAssistantConversation(application: AssistantApplicationPort) 
     setLastAppliedCommand(application.getLastAppliedCommand());
     setReplyText(application.getReplyText());
     setSoundLevel(application.getSoundLevel());
+    setTurns(application.getTurns?.() ?? NO_TURNS);
   }
 
   useEffect(() => {
@@ -29,6 +39,7 @@ export function useAssistantConversation(application: AssistantApplicationPort) 
       setLastAppliedCommand(application.getLastAppliedCommand());
       setReplyText(application.getReplyText());
       setSoundLevel(application.getSoundLevel());
+      setTurns(application.getTurns?.() ?? NO_TURNS);
     });
   }, [application]);
 
@@ -41,5 +52,6 @@ export function useAssistantConversation(application: AssistantApplicationPort) 
     startTurn: () => application.startTurn(),
     state,
     togglePause: () => application.togglePause?.(),
+    turns,
   };
 }

@@ -81,6 +81,7 @@ function createFakeConnection() {
 
 function createDeps(overrides: {
   applyCommandResult?: () => Promise<void>;
+  applyCategoryUpdate?: () => Promise<boolean>;
   connection?: VoiceTransportConnection;
   requestPermission?: () => Promise<boolean>;
   startCapture?: () => Promise<void>;
@@ -104,6 +105,7 @@ function createDeps(overrides: {
   };
   const localScheduleWriter: LocalScheduleWriterPort = {
     applyCommandResult: jest.fn(overrides.applyCommandResult ?? (async () => undefined)),
+    applyCategoryUpdate: jest.fn(overrides.applyCategoryUpdate ?? (async () => true)),
   };
   const appState: AppStateProvider = {
     subscribe: jest.fn(() => () => undefined),
@@ -259,6 +261,185 @@ describe('AssistantConversationService', () => {
 
     expect(fake.sent).not.toContainEqual(expect.objectContaining({ type: 'message.ack' }));
     expect(service.getLastAppliedCommand()).toBeNull();
+  });
+
+  it('patches an asynchronous category update without requiring a revision change', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    const turn = service.startTurn();
+    await completeStreamStart(fake, turn);
+    fake.emitMessage({
+      payload: { category: 'work', schedule_id: 'schedule_001' },
+      type: 'schedule.category.updated',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(deps.localScheduleWriter.applyCategoryUpdate).toHaveBeenCalledWith(
+      'acc_001',
+      'schedule_001',
+      'work',
+    );
+  });
+
+  it('buffers a category event that arrives before the command result', async () => {
+    const fake = createFakeConnection();
+    const applyCategoryUpdate = jest
+      .fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const deps = createDeps({ applyCategoryUpdate, connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    const turn = service.startTurn();
+    await completeStreamStart(fake, turn);
+    fake.emitMessage({
+      payload: { category: 'work', schedule_id: 'schedule_001' },
+      type: 'schedule.category.updated',
+    } as AssistantServerMessage);
+    await flushAsync();
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_001',
+      payload: {
+        operation: 'create_schedule',
+        schedule: { id: 'schedule_001' },
+        status: 'applied',
+      },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(applyCategoryUpdate).toHaveBeenNthCalledWith(2, 'acc_001', 'schedule_001', 'work');
+  });
+
+  it('retries a category event after a command result local write finishes', async () => {
+    const fake = createFakeConnection();
+    let finishWrite!: () => void;
+    const writePending = new Promise<void>((resolve) => {
+      finishWrite = resolve;
+    });
+    const applyCategoryUpdate = jest
+      .fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const deps = createDeps({
+      applyCategoryUpdate,
+      applyCommandResult: () => writePending,
+      connection: fake.connection,
+    });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    const turn = service.startTurn();
+    await completeStreamStart(fake, turn);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_001',
+      payload: {
+        operation: 'create_schedule',
+        schedule: { id: 'schedule_001' },
+        status: 'applied',
+      },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      payload: { category: 'work', schedule_id: 'schedule_001' },
+      type: 'schedule.category.updated',
+    } as AssistantServerMessage);
+    await flushAsync();
+    finishWrite();
+    await flushAsync();
+
+    expect(applyCategoryUpdate).toHaveBeenNthCalledWith(2, 'acc_001', 'schedule_001', 'work');
+  });
+
+  it('keeps the latest pending category when category events overlap', async () => {
+    const fake = createFakeConnection();
+    let finishFirst!: () => void;
+    const firstWrite = new Promise<boolean>((resolve) => {
+      finishFirst = () => resolve(false);
+    });
+    const applyCategoryUpdate = jest
+      .fn<() => Promise<boolean>>()
+      .mockImplementationOnce(() => firstWrite)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const deps = createDeps({ applyCategoryUpdate, connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    const turn = service.startTurn();
+    await completeStreamStart(fake, turn);
+    fake.emitMessage({
+      payload: { category: 'work', schedule_id: 'schedule_001' },
+      type: 'schedule.category.updated',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      payload: { category: 'study', schedule_id: 'schedule_001' },
+      type: 'schedule.category.updated',
+    } as AssistantServerMessage);
+    await flushAsync();
+    finishFirst();
+    await flushAsync();
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_001',
+      payload: {
+        operation: 'create_schedule',
+        schedule: { id: 'schedule_001' },
+        status: 'applied',
+      },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(applyCategoryUpdate).toHaveBeenNthCalledWith(3, 'acc_001', 'schedule_001', 'study');
+  });
+
+  it('does not recreate pending state after dispose during a category patch', async () => {
+    const fake = createFakeConnection();
+    let finishWrite!: () => void;
+    const pendingWrite = new Promise<boolean>((resolve) => {
+      finishWrite = () => resolve(false);
+    });
+    const applyCategoryUpdate = jest.fn<() => Promise<boolean>>(() => pendingWrite);
+    const deps = createDeps({ applyCategoryUpdate, connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    const turn = service.startTurn();
+    await completeStreamStart(fake, turn);
+    fake.emitMessage({
+      payload: { category: 'work', schedule_id: 'schedule_001' },
+      type: 'schedule.category.updated',
+    } as AssistantServerMessage);
+    await flushAsync();
+    service.dispose();
+    finishWrite();
+    await flushAsync();
+
+    expect(applyCategoryUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a failed asynchronous category patch', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({
+      applyCategoryUpdate: async () => {
+        throw new Error('disk full');
+      },
+      connection: fake.connection,
+    });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    const turn = service.startTurn();
+    await completeStreamStart(fake, turn);
+    fake.emitMessage({
+      payload: { category: 'work', schedule_id: 'schedule_001' },
+      type: 'schedule.category.updated',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getState()).toMatchObject({ phase: 'recording' });
   });
 
   it('dispose() unsubscribes every listener registered on the connection', async () => {

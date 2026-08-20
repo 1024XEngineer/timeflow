@@ -7,9 +7,17 @@ from typing import Protocol, Self
 
 from timeflow.business.calendar.contracts import (
     AccountScheduleSnapshot,
+    CreateScheduleCommand,
+    ScheduleCategory,
     ScheduleOccurrenceOverrideSnapshot,
     ScheduleSnapshot,
 )
+
+
+class ScheduleCategoryClassifier(Protocol):
+    """Classify one already-structured create command by schedule semantics."""
+
+    def classify(self, command: CreateScheduleCommand) -> ScheduleCategory | None: ...
 
 
 class ScheduleRevisionConflictError(RuntimeError):
@@ -71,6 +79,15 @@ class ScheduleRepositoryPort(Protocol):
         expected_revision: int,
     ) -> ScheduleSnapshot | None: ...
 
+    def set_schedule_category_if_unclassified(
+        self,
+        *,
+        account_id: str,
+        schedule_id: str,
+        category: ScheduleCategory,
+        updated_at: datetime,
+    ) -> ScheduleSnapshot | None: ...
+
     def confirm_reminder_disposition(
         self,
         *,
@@ -115,6 +132,7 @@ ScheduleUnitOfWorkFactory = Callable[[], ScheduleUnitOfWork]
 
 
 __all__ = [
+    "ScheduleCategoryClassifier",
     "ScheduleRepositoryPort",
     "ScheduleRevisionConflictError",
     "ScheduleUnitOfWork",

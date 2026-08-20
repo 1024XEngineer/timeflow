@@ -73,6 +73,14 @@ export interface LocalScheduleOccurrenceOverrideRow {
 export class ScheduleLocalRepository {
   public constructor(private readonly database: SQLiteDatabase) {}
 
+  public async countSchedules(accountId: string): Promise<number> {
+    const row = await this.database.getFirstAsync<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM local_schedules WHERE account_id = ?',
+      accountId,
+    );
+    return row?.count ?? 0;
+  }
+
   public getSchedule(accountId: string, scheduleId: string): Promise<LocalScheduleRow | null> {
     return this.database.getFirstAsync<LocalScheduleRow>(
       `SELECT * FROM local_schedules WHERE account_id = ? AND id = ?`,
@@ -167,6 +175,23 @@ export class ScheduleLocalRepository {
         $cloud_revision: row.cloud_revision,
         $updated_at: row.updated_at,
       },
+    );
+    return result.changes === 1;
+  }
+
+  /** Patch only the asynchronously classified category; cloud revision is untouched. */
+  public async patchScheduleCategory(
+    accountId: string,
+    scheduleId: string,
+    category: ScheduleCategory,
+  ): Promise<boolean> {
+    const result = await this.database.runAsync(
+      `UPDATE local_schedules
+       SET category = ?
+       WHERE account_id = ? AND id = ? AND status = 'active'`,
+      category,
+      accountId,
+      scheduleId,
     );
     return result.changes === 1;
   }
