@@ -342,6 +342,9 @@ export class AssistantConversationService implements AssistantApplicationPort {
   }
 
   private handleClose(event: { code: number; reason: string }): void {
+    // 必须真的执行：切到连续对话时共享 WS 会因 voiceMode 不同断开重连，只置空的话
+    // 旧服务仍订阅着新连接的 TTS/PCM，同一句话会被两个服务重复送进播放器。
+    this.unsubscribeConnection?.();
     this.connection = null;
     this.unsubscribeConnection = null;
     const message = event.reason || `连接已断开（${event.code}）`;
