@@ -115,6 +115,18 @@ def _tencent_environment() -> dict[str, str]:
     }
 
 
+def _composed_environment() -> dict[str, str]:
+    """模式 2 组合式 ASR/LLM/TTS 凭据就绪时的最小环境变量集合。"""
+    return {
+        "TIMEFLOW_ALIYUN_ASR_WS_URL": "wss://asr.example.test",
+        "TIMEFLOW_ALIYUN_ASR_API_KEY": "asr-key",
+        "TIMEFLOW_OPENAI_BASE_URL": "https://llm.example.test/v1",
+        "TIMEFLOW_OPENAI_API_KEY": "llm-key",
+        "TIMEFLOW_ALIYUN_TTS_WS_URL": "wss://tts.example.test",
+        "TIMEFLOW_ALIYUN_TTS_API_KEY": "tts-key",
+    }
+
+
 def _build_with_environment(
     environment: str,
     *,
@@ -474,10 +486,19 @@ def test_configured_category_llm_is_injected_into_the_schedule_service() -> None
     classifier_factory.assert_called_once_with(llm_factory.return_value)
 
 
-def test_voice_agent_mode_two_fails_closed_until_conversation_agent_is_wired() -> None:
-    """未实现 Agent 端口前，不能静默选择 LLM+ASR+TTS 模式。"""
-    with pytest.raises(RuntimeError, match="TIMEFLOW_VOICE_AGENT_MODE=2"):
-        _build_with_environment("development", voice_agent_mode="2")
+def test_voice_agent_mode_two_fails_closed_without_composed_credentials() -> None:
+    """模式 2 缺少组合式 ASR/LLM/TTS 凭据时快速失败，而不是静默降级。"""
+    missing = {
+        "TIMEFLOW_ALIYUN_ASR_WS_URL": "",
+        "TIMEFLOW_ALIYUN_ASR_API_KEY": "",
+        "TIMEFLOW_OPENAI_BASE_URL": "",
+        "TIMEFLOW_OPENAI_API_KEY": "",
+        "TIMEFLOW_ALIYUN_TTS_WS_URL": "",
+        "TIMEFLOW_ALIYUN_TTS_API_KEY": "",
+    }
+    with mock.patch.dict(os.environ, missing, clear=False):
+        with pytest.raises(RuntimeError, match="Composed voice agent is not configured"):
+            _build_with_environment("development", voice_agent_mode="2")
 
 
 def test_lifespan_disposes_the_database_engine_owned_by_the_application() -> None:
@@ -544,13 +565,19 @@ def test_lifespan_closes_the_owned_tencent_http_client() -> None:
     assert client.closed is True
 
 
-def test_voice_agent_mode_two_never_opens_a_tencent_http_client() -> None:
-    """mode=2 在能建出 Agent 之前就已失败，不该先泄漏一个没人关闭的 HTTP client。"""
-    with (
-        mock.patch("timeflow.main.httpx.AsyncClient") as factory,
-        mock.patch.dict(os.environ, _tencent_environment(), clear=False),
-        pytest.raises(RuntimeError, match="TIMEFLOW_VOICE_AGENT_MODE=2"),
-    ):
-        _build_with_environment("development", voice_agent_mode="2")
+def test_voice_agent_mode_two_opens_and_closes_a_tencent_http_client() -> None:
+    """模式 2 与模式 1 一样由组合根创建并释放腾讯地图 HTTP client。"""
+    client = _FakeAsyncClient(timeout=5.0)
+    environment = {**_tencent_environment(), **_composed_environment()}
 
-    factory.assert_not_called()
+    with (
+        mock.patch("timeflow.main.httpx.AsyncClient", return_value=client) as factory,
+        mock.patch.dict(os.environ, environment, clear=False),
+    ):
+        application = _build_with_environment("development", voice_agent_mode="2")
+
+    factory.assert_called_once()
+    with TestClient(application):
+        assert client.closed is False
+
+    assert client.closed is True
