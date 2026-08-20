@@ -17,6 +17,7 @@ function occurrenceOnSelectedDay(
   return {
     scheduleId: 'schedule-a',
     scheduleCategory: 'time',
+    category: null,
     recurrenceMode: 'once',
     title: '项目例会',
     isAllDay: false,
