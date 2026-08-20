@@ -124,7 +124,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
     fireEvent.press(lastRow);
     // 点开之后详情抽屉真的弹出来了，证明这一行不只是渲染出来、还真的可以点击响应，
     // 不是被浮动语音条盖住了个摆设。
-    expect(screen.getByText('时间日程')).toBeTruthy();
+    expect(screen.getByText('日程详情')).toBeTruthy();
   });
 
   it('avoids the Android status bar in edge-to-edge mode', async () => {
