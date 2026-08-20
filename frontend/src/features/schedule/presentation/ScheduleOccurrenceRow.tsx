@@ -2,7 +2,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { ScheduleOccurrenceView } from '../application';
 import { colors, spacing } from '../../../shared/ui/theme';
-import { formatRange, formatTime, scheduleCategoryLabel } from './scheduleDisplay';
+import { formatRange, formatTime } from './scheduleDisplay';
 
 const CARD_HEIGHT = 88;
 const ROW_FOLLOW_GAP = 10;
@@ -20,8 +20,7 @@ export function ScheduleOccurrenceRow({
   const endLabel =
     !item.isAllDay && item.occurrenceEnd ? formatTime(item.occurrenceEnd, item.timezone) : null;
   const isRecurring = item.recurrenceMode !== 'once';
-  const categoryLabel = scheduleCategoryLabel(item.category);
-  const hasMeta = Boolean(item.locationName) || isRecurring || Boolean(categoryLabel);
+  const hasMeta = Boolean(item.locationName) || isRecurring;
 
   return (
     <Pressable
@@ -62,11 +61,6 @@ export function ScheduleOccurrenceRow({
             {item.locationName ? (
               <Text numberOfLines={1} style={styles.metaText}>
                 {item.locationName}
-              </Text>
-            ) : null}
-            {categoryLabel ? (
-              <Text numberOfLines={1} style={styles.repeat}>
-                {categoryLabel}
               </Text>
             ) : null}
             {isRecurring ? <Text style={styles.repeat}>重复</Text> : null}

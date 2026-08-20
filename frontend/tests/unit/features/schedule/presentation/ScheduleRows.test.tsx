@@ -125,12 +125,14 @@ describe('ScheduleOccurrenceRow', () => {
     expect(screen.queryByText('15:00')).toBeNull();
   });
 
-  it('shows localized work and study category labels', () => {
-    const view = render(<ScheduleOccurrenceRow item={occurrence({ category: 'work' })} />);
+  it('does not show category on the list even when category is set', () => {
+    render(<ScheduleOccurrenceRow item={occurrence({ category: 'work' })} />);
 
-    expect(screen.getByText('工作')).toBeTruthy();
-    view.rerender(<ScheduleOccurrenceRow item={occurrence({ category: 'study' })} />);
-    expect(screen.getByText('学习')).toBeTruthy();
+    expect(screen.getByText('团队周会')).toBeTruthy();
+    expect(screen.getByText('上海科技馆')).toBeTruthy();
+    expect(screen.queryByText('工作')).toBeNull();
+    expect(screen.queryByText('学习')).toBeNull();
+    expect(screen.queryByText('未分类')).toBeNull();
   });
 
   it('does not show a category label while category is null', () => {
@@ -195,7 +197,7 @@ describe('LocationScheduleRow', () => {
     render(<LocationScheduleRow item={item} />);
 
     expect(screen.queryByText('位置日程')).toBeNull();
-    expect(screen.getByText('工作')).toBeTruthy();
+    expect(screen.queryByText('工作')).toBeNull();
     expect(screen.getByText('到公司提醒我打卡')).toBeTruthy();
     expect(screen.getByText('公司')).toBeTruthy();
     expect(screen.queryByText('location')).toBeNull();

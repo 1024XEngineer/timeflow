@@ -3,7 +3,6 @@ import Svg, { Circle, Path } from 'react-native-svg';
 
 import type { LocationScheduleView } from '../application';
 import { colors } from '../../../shared/ui/theme';
-import { scheduleCategoryLabel } from './scheduleDisplay';
 
 export function LocationScheduleRow({
   item,
@@ -13,7 +12,6 @@ export function LocationScheduleRow({
   onPress?: () => void;
 }) {
   const locationLabel = item.locationName ?? '地点触发';
-  const categoryLabel = scheduleCategoryLabel(item.category);
   return (
     <Pressable
       accessibilityRole={onPress ? 'button' : undefined}
@@ -31,11 +29,6 @@ export function LocationScheduleRow({
         <Text numberOfLines={1} style={styles.location}>
           {locationLabel}
         </Text>
-        {categoryLabel ? (
-          <Text numberOfLines={1} style={styles.location}>
-            {categoryLabel}
-          </Text>
-        ) : null}
       </View>
     </Pressable>
   );

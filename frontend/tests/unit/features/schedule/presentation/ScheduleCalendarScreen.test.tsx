@@ -259,7 +259,8 @@ describe('ScheduleCalendarScreen location schedules', () => {
     view.rerender(<ScheduleCalendarScreen {...props} refreshSignal={1} />);
 
     await waitFor(() => expect(getSchedulesByRange).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.getAllByText('工作')).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByText('工作')).toHaveLength(1));
+    expect(screen.getByText('分类')).toBeTruthy();
     expect(screen.getByText('日程详情')).toBeTruthy();
 
     fireEvent.press(screen.getByRole('button', { name: '关闭详情' }));
@@ -302,7 +303,8 @@ describe('ScheduleCalendarScreen location schedules', () => {
     view.rerender(<ScheduleCalendarScreen {...props} refreshSignal={1} />);
 
     await waitFor(() => expect(getLocationSchedules).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.getAllByText('学习')).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByText('学习')).toHaveLength(1));
+    expect(screen.getByText('分类')).toBeTruthy();
     expect(screen.getByText('日程详情')).toBeTruthy();
   });
 
