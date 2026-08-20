@@ -91,6 +91,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
       {
         scheduleId: 'schedule-last',
         scheduleCategory: 'time',
+        category: null,
         recurrenceMode: 'once',
         title: '当日最后一条日程',
         isAllDay: false,
