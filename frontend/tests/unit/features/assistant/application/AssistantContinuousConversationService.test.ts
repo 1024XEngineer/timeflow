@@ -698,6 +698,138 @@ describe('AssistantContinuousConversationService', () => {
     disposeService(service);
   });
 
+  it('stops immediately and drops queued chunks when TTS is canceled', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+    const calls: string[] = [];
+    let resolveFirst: () => void = () => {};
+    (deps.playback.pushChunk as jest.Mock)
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            calls.push('push-1');
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(async () => {
+        calls.push('push-2');
+      });
+    (deps.playback.stop as jest.Mock).mockImplementation(async () => {
+      calls.push('stop');
+    });
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      payload: {
+        format: 'pcm_s16le',
+        purpose: 'reply',
+        sample_rate_hz: 24000,
+        speech_text: '',
+      },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+    fake.emitAudioFrame(new ArrayBuffer(4));
+    fake.emitAudioFrame(new ArrayBuffer(4));
+    await flushAsync();
+
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.canceled',
+    } as AssistantServerMessage);
+    expect(calls).toEqual(['push-1', 'stop']);
+
+    resolveFirst();
+    await flushAsync();
+
+    // push-2 已经排在链上，但代次已经变了，必须被丢掉而不是补喂给播放器。
+    expect(calls).toEqual(['push-1', 'stop']);
+    expect(service.getState()).toEqual({ conversationId: 'conv_001', phase: 'interrupted' });
+    disposeService(service);
+  });
+
+  it('ignores the canceled stream end that arrives after interruption', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      payload: {
+        format: 'pcm_s16le',
+        purpose: 'reply',
+        sample_rate_hz: 24000,
+        speech_text: '',
+      },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.canceled',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.end',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(deps.playback.endStream).not.toHaveBeenCalled();
+    expect(service.getState()).toEqual({ conversationId: 'conv_001', phase: 'interrupted' });
+    disposeService(service);
+  });
+
+  it('does not stop a newer TTS when a late cancellation belongs to the old audio', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    const startMessage = (audioId: string): AssistantServerMessage =>
+      ({
+        audio_id: audioId,
+        conversation_id: 'conv_001',
+        payload: {
+          format: 'pcm_s16le',
+          purpose: 'reply',
+          sample_rate_hz: 24000,
+          speech_text: '',
+        },
+        type: 'voice.tts.start',
+      }) as AssistantServerMessage;
+
+    fake.emitMessage(startMessage('audio_001'));
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.end',
+    } as AssistantServerMessage);
+    fake.emitMessage(startMessage('audio_002'));
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.canceled',
+    } as AssistantServerMessage);
+    // 兼容尚未升级的后端：旧实现把这种晚到的取消发成空 id，不能把新流停掉。
+    fake.emitMessage({
+      audio_id: '',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.canceled',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(deps.playback.stop).not.toHaveBeenCalled();
+    expect(service.getState()).toEqual({ conversationId: 'conv_001', phase: 'speaking' });
+    disposeService(service);
+  });
+
   it('handleClose() unsubscribes from the shared connection before nulling it, even when a real disconnect races endTurn()', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
