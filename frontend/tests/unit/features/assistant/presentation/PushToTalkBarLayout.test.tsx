@@ -5,7 +5,7 @@ import { StyleSheet } from 'react-native';
 import { PushToTalkBar } from '../../../../../src/features/assistant/presentation/PushToTalkBar';
 
 describe('PushToTalkBar layout', () => {
-  it('uses a dark pill treatment in the idle state', () => {
+  it('uses a light bordered input treatment in the idle state', () => {
     render(
       <PushToTalkBar
         disabled={false}
@@ -18,8 +18,8 @@ describe('PushToTalkBar layout', () => {
 
     const button = screen.getByRole('button');
     expect(StyleSheet.flatten(button.props.style)).toMatchObject({
-      backgroundColor: '#12352D',
-      borderRadius: 999,
+      backgroundColor: '#F0F2EE',
+      borderWidth: 1,
     });
   });
 });

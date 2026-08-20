@@ -9,10 +9,6 @@ import type {
 import type { ScheduleCalendarReadService } from '../../../src/features/schedule/application';
 import { HomeScreen } from '../../../src/screens/HomeScreen';
 
-jest.mock('react-native-safe-area-context', () => ({
-  useSafeAreaInsets: () => ({ bottom: 0, left: 0, right: 0, top: 0 }),
-}));
-
 jest.mock('../../../src/features/assistant/presentation/AssistantVoiceOverlay', () => ({
   AssistantVoiceOverlay: () => null,
 }));

@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, spacing } from '../../../shared/ui/theme';
 
@@ -15,7 +14,6 @@ export function ScheduleDetailSheet({
   title: string;
   visible: boolean;
 }) {
-  const insets = useSafeAreaInsets();
   return (
     <Modal animationType="slide" transparent visible={visible} onRequestClose={onClose}>
       <View style={styles.backdrop}>
@@ -33,14 +31,7 @@ export function ScheduleDetailSheet({
               <Text style={styles.closeIcon}>×</Text>
             </Pressable>
           </View>
-          <ScrollView
-            contentContainerStyle={[
-              styles.content,
-              { paddingBottom: Math.max(spacing.xl, insets.bottom + spacing.md) },
-            ]}
-            showsVerticalScrollIndicator={false}
-            testID="schedule-detail-content"
-          >
+          <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
             <View style={styles.titleBlock}>
               <Text style={styles.title}>{title}</Text>
             </View>

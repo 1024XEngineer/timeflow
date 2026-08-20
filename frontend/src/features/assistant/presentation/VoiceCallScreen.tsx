@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 import {
   Animated,
   Easing,
@@ -10,7 +9,6 @@ import {
   Text,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, spacing } from '../../../shared/ui/theme';
 import type { ConversationTurnRecord } from '../domain/ConversationTurn';
@@ -29,7 +27,6 @@ interface VoiceCallScreenProps {
 
 const BREATH_SCALE = { duration: 1600, from: 1, to: 1.06 };
 const TALK_SCALE = { duration: 650, from: 1, to: 1.14 };
-const STICK_TO_BOTTOM_THRESHOLD = 48;
 
 /**
  * 免提通话的沉浸式全屏层：主体是一份可回看的完整问答记录（每轮一条用户话
@@ -47,14 +44,8 @@ export function VoiceCallScreen({
   onEnd,
   onTogglePause,
 }: VoiceCallScreenProps) {
-  const insets = useSafeAreaInsets();
   const [scale] = useState(() => new Animated.Value(1));
-  const [statusRowHeight, setStatusRowHeight] = useState(0);
   const historyRef = useRef<ScrollView>(null);
-  // 回复是流式的（累计文字每收到一段就整段刷新一次），跟着一路自动滚会跟
-  // 用户手动上滑打架——用户一滑走就不再强制拉回底部，直到他自己滑回底部
-  // 附近才恢复跟随，不然会出现看似“滑不动”的情况。
-  const stickToBottomRef = useRef(true);
 
   useEffect(() => {
     scale.stopAnimation();
@@ -84,58 +75,24 @@ export function VoiceCallScreen({
     return undefined;
   }, [status, scale]);
 
-  // 只在用户真的拖动结束时才重新判断是否贴底——不能用 onScroll，流式内容
-  // 一直在长，我们自己触发的 scrollToEnd 也会产生 onScroll 事件，那时候
-  // contentSize 可能已经比滚动目标又长了一截，会被误判成“用户滑走了”，
-  // 之后就再也不会自动跟随，导致流式说完了还有一段没露出来。
-  // onScrollEndDrag/onMomentumScrollEnd 只在手指真正划过之后才触发，不受
-  // animated:false 的程序化跳转影响。
-  function handleScrollSettled(event: NativeSyntheticEvent<NativeScrollEvent>) {
-    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    const distanceFromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height;
-    stickToBottomRef.current = distanceFromBottom <= STICK_TO_BOTTOM_THRESHOLD;
-  }
-
   return (
     <View style={styles.screen}>
-      <View
-        style={[styles.navigation, { paddingTop: Math.max(spacing.md, insets.top) }]}
-        testID="voice-call-navigation"
+      <Pressable
+        accessibilityLabel="收起通话"
+        accessibilityRole="button"
+        onPress={onCollapse}
+        style={({ pressed }) => [styles.collapseButton, pressed && styles.buttonPressed]}
       >
-        <Pressable
-          accessibilityLabel="收起通话"
-          accessibilityRole="button"
-          onPress={onCollapse}
-          style={({ pressed }) => [styles.collapseButton, pressed && styles.buttonPressed]}
-        >
-          <PhoneCallIcon color={colors.onPrimary} size={18} />
-        </Pressable>
-      </View>
+        <PhoneCallIcon color={colors.onPrimary} size={18} />
+      </Pressable>
 
       <ScrollView
         ref={historyRef}
         contentContainerStyle={[
           styles.historyContent,
-          // 用实测的“聆听中”状态行高度兜底，不管这行到底多高、有没有跟
-          // ScrollView 自身的 flex 计算对不上，最后一条记录都保证能完整
-          // 露出来，不会被这一行挡住最后一点。
-          { paddingBottom: spacing.xl + statusRowHeight },
           turns.length === 0 && styles.historyContentEmpty,
         ]}
-        onContentSizeChange={() => {
-          if (!stickToBottomRef.current) {
-            return;
-          }
-          // 延后两帧再滚：Android 上 onContentSizeChange 触发时原生 ScrollView
-          // 有时还没把新内容高度提交完，内容越高时越容易滚不到底。用
-          // animated:false 直接跳到底，流式刷新很密集，动画会跟下一次
-          // 内容变化互相打断、显得卡住不动。
-          requestAnimationFrame(() =>
-            requestAnimationFrame(() => historyRef.current?.scrollToEnd({ animated: false })),
-          );
-        }}
-        onMomentumScrollEnd={handleScrollSettled}
-        onScrollEndDrag={handleScrollSettled}
+        onContentSizeChange={() => historyRef.current?.scrollToEnd({ animated: true })}
         style={styles.history}
       >
         {turns.length > 0 ? (
@@ -152,10 +109,7 @@ export function VoiceCallScreen({
         )}
       </ScrollView>
 
-      <View
-        onLayout={(event) => setStatusRowHeight(event.nativeEvent.layout.height)}
-        style={styles.body}
-      >
+      <View style={styles.body}>
         <Pressable
           accessibilityLabel={status === 'paused' ? '继续' : '暂停'}
           accessibilityRole="button"
@@ -176,13 +130,7 @@ export function VoiceCallScreen({
         </Pressable>
       </View>
 
-      <View
-        style={[
-          styles.actions,
-          { paddingBottom: Math.max(spacing.xl, insets.bottom + spacing.md) },
-        ]}
-        testID="voice-call-actions"
-      >
+      <View style={styles.actions}>
         <Pressable
           accessibilityLabel="结束对话"
           accessibilityRole="button"
@@ -233,6 +181,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     height: 40,
     justifyContent: 'center',
+    left: spacing.lg,
+    position: 'absolute',
+    top: spacing.xl,
     width: 40,
   },
   endButton: {
@@ -241,16 +192,13 @@ const styles = StyleSheet.create({
   endText: {
     color: colors.onPrimary,
   },
-  navigation: {
-    paddingBottom: spacing.sm,
-    paddingHorizontal: spacing.lg,
-  },
   history: {
     flex: 1,
     paddingTop: spacing.xl * 2,
   },
   historyContent: {
     gap: spacing.md,
+    paddingBottom: spacing.md,
     paddingHorizontal: spacing.xl,
   },
   historyContentEmpty: {

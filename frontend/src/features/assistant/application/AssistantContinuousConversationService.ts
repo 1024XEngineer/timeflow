@@ -393,7 +393,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       case 'voice.dialogue.question':
         // 缺字段/地点歧义之类的追问，对当前这轮来说就是系统的回复——记进历史，
         // 不然标题过了这一阵子就变回通用文案，这句追问在记录里再也找不到。
-        this.updateLastTurnReply(message.request_id, message.payload.speech_text);
+        this.updateLastTurnReply(message.payload.speech_text);
         this.setState({
           conversationId: message.conversation_id,
           phase: 'asking',
@@ -402,7 +402,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         return;
       case 'voice.dialogue.reply':
         this.replyText = message.payload.speech_text;
-        this.updateLastTurnReply(message.request_id, message.payload.speech_text);
+        this.updateLastTurnReply(message.payload.speech_text);
         this.notifyListeners();
         return;
       case 'voice.tts.start':
@@ -594,21 +594,15 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     return this.connection;
   }
 
-  /** speech_text 是累计到目前为止的完整文字（不是增量），直接覆盖对应轮次即可。
-   * 必须按 request_id 找到它真正所属的那一轮，不能想当然地假设"最后一轮"——
-   * 麦克风连续开着，用户可能在上一轮的回复还没到达前就已经开口问了下一句，
-   * asr.completed 先把新一轮 push 进 turns，这条迟到的回复到达时"最后一轮"
-   * 已经变成了下一轮，会把上一轮的回复错记成下一轮的（下一轮回复还没来时
-   * 显示的会是上一轮内容）。找不到匹配 id（服务端没带 request_id 这种理论上
-   * 不该发生的情况）时退化成更新最后一轮，好歹不丢内容。 */
-  private updateLastTurnReply(requestId: string | undefined, replyText: string): void {
+  /** speech_text 是累计到目前为止的完整文字（不是增量），直接覆盖最后一轮即可。
+   * 没有轮次可更新时（理论上不会发生，reply 总跟在 asr.completed 后面）不做
+   * 任何事，不新建一条没有 transcript 的记录。 */
+  private updateLastTurnReply(replyText: string): void {
     if (this.turns.length === 0) {
       return;
     }
-    const targetIndex =
-      requestId !== undefined ? this.turns.findIndex((turn) => turn.id === requestId) : -1;
-    const index = targetIndex === -1 ? this.turns.length - 1 : targetIndex;
-    this.turns = this.turns.map((turn, i) => (i === index ? { ...turn, replyText } : turn));
+    const last = this.turns[this.turns.length - 1];
+    this.turns = [...this.turns.slice(0, -1), { ...last, replyText }];
   }
 
   private armIdleTimer(): void {

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import { describe, expect, it, jest } from '@jest/globals';
-import { Modal, StyleSheet } from 'react-native';
+import { Modal } from 'react-native';
 
 import type {
   LocationScheduleView,
@@ -8,12 +8,6 @@ import type {
 } from '../../../../../src/features/schedule/application';
 import { LocationScheduleDetailSheet } from '../../../../../src/features/schedule/presentation/LocationScheduleDetailSheet';
 import { ScheduleOccurrenceDetailSheet } from '../../../../../src/features/schedule/presentation/ScheduleOccurrenceDetailSheet';
-
-let mockBottomInset = 0;
-
-jest.mock('react-native-safe-area-context', () => ({
-  useSafeAreaInsets: () => ({ bottom: mockBottomInset, left: 0, right: 0, top: 0 }),
-}));
 
 const timedOccurrence: ScheduleOccurrenceView = {
   scheduleId: 'schedule-a',
@@ -46,17 +40,6 @@ const allDayOccurrence: ScheduleOccurrenceView = {
 };
 
 describe('schedule detail sheets', () => {
-  it('keeps detail content above the system navigation area', () => {
-    mockBottomInset = 34;
-    render(<ScheduleOccurrenceDetailSheet occurrence={timedOccurrence} onClose={() => {}} />);
-
-    const content = screen.getByTestId('schedule-detail-content');
-    expect(StyleSheet.flatten(content.props.contentContainerStyle)).toMatchObject({
-      paddingBottom: 50,
-    });
-    mockBottomInset = 0;
-  });
-
   it('prioritizes occurrence date and time while retaining optional information', () => {
     render(<ScheduleOccurrenceDetailSheet occurrence={timedOccurrence} onClose={() => {}} />);
 
