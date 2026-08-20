@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
-import { fireEvent, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { ScrollView, StyleSheet } from 'react-native';
 
 import { VoiceCallScreen } from '../../../../../src/features/assistant/presentation/VoiceCallScreen';
@@ -103,11 +103,17 @@ describe('VoiceCallScreen', () => {
     expect(screen.getByText('对话开始后，这里会显示完整记录')).toBeTruthy();
   });
 
-  it('scrolls the history area when its content grows', () => {
+  it('scrolls the history area when its content grows', async () => {
     renderScreen({ turns: [{ id: 't1', replyText: null, transcript: '明天几点开会' }] });
     const history = screen.UNSAFE_getByType(ScrollView);
 
     expect(history.props.onContentSizeChange).toEqual(expect.any(Function));
-    history.props.onContentSizeChange();
+    await act(async () => {
+      history.props.onContentSizeChange();
+      // 滚动被延后了两帧，测试要等这两帧都跑完再收尾，不然回调会在
+      // jest 环境已经卸载之后才触发。
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
   });
 });
