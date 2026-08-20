@@ -214,7 +214,15 @@ async def _default_connector(
     timeout: float,
 ) -> WebSocketConnection:
     """Open a provider connection using the websockets asyncio client."""
-    return await connect(url, additional_headers=dict(headers), open_timeout=timeout)
+    return await connect(
+        url,
+        additional_headers=dict(headers),
+        open_timeout=timeout,
+        # The provider does not acknowledge a close frame until its idle timeout
+        # (~10s) expires. All audio has already been delivered by then, so cap the
+        # closing handshake instead of blocking the turn on it.
+        close_timeout=0.2,
+    )
 
 
 class QwenAudioTts(TtsPort):
