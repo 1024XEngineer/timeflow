@@ -101,7 +101,13 @@ beforeEach(() => {
   );
   mockedCreateScheduleSnapshotPreparation.mockReset();
   mockedCreateScheduleSnapshotPreparation.mockReturnValue({
-    repository: {},
+    // scheduleReader.refresh() (wired in AppRoot's ready-state effect) calls through to
+    // these two on whatever repository the snapshot preparation hands back, so the stub
+    // needs real methods now, not just an opaque {} -- see SqliteLocalScheduleReader.
+    repository: {
+      getSchedule: jest.fn<() => Promise<null>>().mockResolvedValue(null),
+      listSchedules: jest.fn<() => Promise<never[]>>().mockResolvedValue([]),
+    },
     bootstrap: { ensureLocalSnapshot: mockedEnsureLocalSnapshot },
   } as never);
   jest.mocked(LocalScheduleWriter).mockClear();
@@ -339,20 +345,19 @@ describe('AppRoot', () => {
   });
 
   it('binds the reminder SQLite adapters and detaches them on sign out', async () => {
-    const controller = createController({
+    const services = createController({
       accountId: 'acc_001',
       accessToken: 'opaque-token',
       expiresAt: 200_000,
       username: 'timeflow_user',
     });
-    const services = createAppServices();
     const attachSchedules = jest.spyOn(services.schedules, 'attach');
     const detachSchedules = jest.spyOn(services.schedules, 'detach');
     const refreshSchedules = jest.spyOn(services.schedules, 'refresh').mockResolvedValue(undefined);
     const attachState = jest.spyOn(services.reminderState, 'attach');
     const detachState = jest.spyOn(services.reminderState, 'detach');
 
-    render(<AppRoot authController={controller} services={services} />);
+    render(<AppRoot services={services} />);
 
     await screen.findByText('日程日历');
     expect(attachSchedules).toHaveBeenCalledWith(expect.anything(), 'acc_001');
