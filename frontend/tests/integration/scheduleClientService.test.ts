@@ -98,10 +98,10 @@ describe('SqliteScheduleClientService', () => {
     });
   });
 
-  it('returns only active location schedules for the requested account', async () => {
+  it('returns only active unconfirmed location schedules for the requested account', async () => {
     await repository.applyCloudSchedule(
       cloudSchedule({
-        id: 'location-a',
+        id: 'location-pending',
         schedule_type: 'location',
         title: '到公司提醒我打卡',
         start_time: null,
@@ -110,6 +110,43 @@ describe('SqliteScheduleClientService', () => {
         longitude: 121.4737,
         reminder_type: 'arrive_location',
         reminder_strength: 'high',
+      }),
+    );
+    await repository.updateReminderRuntime('account-a', 'location-pending', {
+      reminder_disposition_state: 'pending',
+      next_trigger_at: null,
+      snoozed_until: null,
+      geofence_armed: 0,
+      disposition_updated_at: '2026-08-11T08:00:00Z',
+      sync_status: 'synced',
+    });
+    await repository.applyCloudSchedule(
+      cloudSchedule({
+        id: 'location-snoozed',
+        schedule_type: 'location',
+        title: 'Snoozed location',
+        start_time: null,
+        latitude: 31.2304,
+        longitude: 121.4737,
+      }),
+    );
+    await repository.updateReminderRuntime('account-a', 'location-snoozed', {
+      reminder_disposition_state: 'snoozed',
+      next_trigger_at: null,
+      snoozed_until: '2026-08-11T08:10:00Z',
+      geofence_armed: 0,
+      disposition_updated_at: '2026-08-11T08:00:00Z',
+      sync_status: 'synced',
+    });
+    await repository.applyCloudSchedule(
+      cloudSchedule({
+        id: 'location-confirmed',
+        schedule_type: 'location',
+        title: 'Confirmed location',
+        start_time: null,
+        latitude: 31.2304,
+        longitude: 121.4737,
+        reminder_disposition_state: 'confirmed',
       }),
     );
     await repository.applyCloudSchedule(
@@ -138,13 +175,22 @@ describe('SqliteScheduleClientService', () => {
 
     await expect(service.getLocationSchedules({ accountId: 'account-a' })).resolves.toEqual([
       {
-        scheduleId: 'location-a',
+        scheduleId: 'location-pending',
         scheduleCategory: 'location',
         title: '到公司提醒我打卡',
         timezone: 'Asia/Shanghai',
         locationName: '公司',
         reminderType: 'arrive_location',
         reminderStrength: 'high',
+      },
+      {
+        scheduleId: 'location-snoozed',
+        scheduleCategory: 'location',
+        title: 'Snoozed location',
+        timezone: 'Asia/Shanghai',
+        locationName: null,
+        reminderType: null,
+        reminderStrength: null,
       },
     ]);
   });
