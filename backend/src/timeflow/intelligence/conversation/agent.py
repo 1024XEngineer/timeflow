@@ -13,7 +13,6 @@ from zoneinfo import ZoneInfo
 from timeflow.intelligence.conversation.llm import (
     AssistantToolCallMessage,
     ChatMessage,
-    LlmEvent,
     LlmMessage,
     LlmPort,
     LlmStreamCompleted,
@@ -374,19 +373,6 @@ class Agent:
             ToolResultMessage(tool_call_id=pending.tool_call_id, content=answer)
         )
         conversation.pending_question = None
-
-    @staticmethod
-    def _collect_llm_event(
-        event: LlmEvent,
-        accumulators: dict[int, _ToolCallAccumulator],
-        assistant_content: list[str],
-    ) -> None:
-        if isinstance(event, TextDelta):
-            assistant_content.append(event.text)
-        elif isinstance(event, ToolCallDelta):
-            accumulators.setdefault(event.index, _ToolCallAccumulator()).add(event)
-        elif not isinstance(event, LlmStreamCompleted):
-            raise AgentProtocolError("Unsupported LLM stream event")
 
 
 def _complete_tool_call(accumulator: _ToolCallAccumulator) -> ToolCall:
