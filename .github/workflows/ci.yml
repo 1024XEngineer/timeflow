@@ -29,7 +29,7 @@ jobs:
     # Repeated per job because there is no workflow-level `if`. The event_name guard
     # comes first so push and workflow_dispatch runs are unaffected.
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: [qiniu, ubuntu-24.04]
     timeout-minutes: 15
     permissions:
       contents: read
@@ -80,7 +80,7 @@ jobs:
   migrations:
     name: Backend (migrations)
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: [qiniu, ubuntu-24.04]
     timeout-minutes: 10
     defaults:
       run:
@@ -137,7 +137,7 @@ jobs:
   frontend:
     name: Frontend (lint, types, build)
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: [qiniu, ubuntu-24.04]
     timeout-minutes: 15
     permissions:
       contents: read
