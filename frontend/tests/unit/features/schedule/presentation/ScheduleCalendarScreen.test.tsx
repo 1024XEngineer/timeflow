@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
-import { StyleSheet } from 'react-native';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { Platform, StyleSheet } from 'react-native';
 
 import type {
   ScheduleCalendarReadService,
@@ -9,9 +9,10 @@ import type {
 import { ScheduleCalendarScreen } from '../../../../../src/features/schedule/presentation/ScheduleCalendarScreen';
 
 let mockBottomInset = 0;
+let mockTopInset = 0;
 
 jest.mock('react-native-safe-area-context', () => ({
-  useSafeAreaInsets: () => ({ bottom: mockBottomInset, left: 0, right: 0, top: 0 }),
+  useSafeAreaInsets: () => ({ bottom: mockBottomInset, left: 0, right: 0, top: mockTopInset }),
 }));
 
 function occurrenceOnSelectedDay(
@@ -65,13 +66,42 @@ function createService(
 }
 
 describe('ScheduleCalendarScreen location schedules', () => {
-  afterEach(() => {
-    mockBottomInset = 0;
+  beforeEach(() => {
+    Platform.OS = 'ios';
   });
 
-  it('leaves enough scroll space for the floating voice controls and system navigation', async () => {
+  afterEach(() => {
+    mockBottomInset = 0;
+    mockTopInset = 0;
+    Platform.OS = 'ios';
+  });
+
+  it('leaves enough scroll space for the floating voice controls and system navigation, and keeps the last occurrence reachable', async () => {
     mockBottomInset = 34;
     const service = createService();
+    // 补上真正渲染出来的最后一项日程，不能只断言算出来的 padding 数字——
+    // 那个数字本身不能证明这一项没被浮动语音条挡住、还是可以点开的。
+    // selectedOccurrences 来自 getSchedulesByRange（不是 getSchedulesByDay），
+    // 按当前选中日期在客户端分组，所以要选到日程所在的那一天才会渲染出来。
+    (
+      service.getSchedulesByRange as jest.MockedFunction<
+        ScheduleCalendarReadService['getSchedulesByRange']
+      >
+    ).mockResolvedValue([
+      {
+        scheduleId: 'schedule-last',
+        scheduleCategory: 'time',
+        recurrenceMode: 'once',
+        title: '当日最后一条日程',
+        isAllDay: false,
+        timezone: 'Asia/Shanghai',
+        locationName: null,
+        reminderType: null,
+        reminderStrength: null,
+        occurrenceStart: '2026-08-13T09:00:00.000Z',
+        occurrenceEnd: '2026-08-13T10:00:00.000Z',
+      },
+    ]);
     render(
       <ScheduleCalendarScreen
         accountId="account-a"
@@ -88,6 +118,57 @@ describe('ScheduleCalendarScreen location schedules', () => {
         screen.getByTestId('schedule-calendar-scroll').props.contentContainerStyle,
       ),
     ).toMatchObject({ paddingBottom: 118, paddingTop: 0 });
+
+    fireEvent.press(screen.getByLabelText(/月13日$/));
+    const lastRow = await screen.findByLabelText(/当日最后一条日程$/);
+    fireEvent.press(lastRow);
+    // 点开之后详情抽屉真的弹出来了，证明这一行不只是渲染出来、还真的可以点击响应，
+    // 不是被浮动语音条盖住了个摆设。
+    expect(screen.getByText('时间日程')).toBeTruthy();
+  });
+
+  it('avoids the Android status bar in edge-to-edge mode', async () => {
+    Platform.OS = 'android';
+    mockTopInset = 24;
+    const service = createService();
+    render(
+      <ScheduleCalendarScreen
+        accountId="account-a"
+        onSignOut={() => {}}
+        service={service}
+        timezone="Asia/Shanghai"
+        username="Sarah"
+      />,
+    );
+
+    await waitFor(() => expect(service.getLocationSchedules).toHaveBeenCalled());
+    expect(
+      StyleSheet.flatten(
+        screen.getByTestId('schedule-calendar-scroll').props.contentContainerStyle,
+      ),
+    ).toMatchObject({ paddingTop: 24 });
+  });
+
+  it('leaves iOS to its own automatic safe-area adjustment instead of double-padding the top', async () => {
+    Platform.OS = 'ios';
+    mockTopInset = 44;
+    const service = createService();
+    render(
+      <ScheduleCalendarScreen
+        accountId="account-a"
+        onSignOut={() => {}}
+        service={service}
+        timezone="Asia/Shanghai"
+        username="Sarah"
+      />,
+    );
+
+    await waitFor(() => expect(service.getLocationSchedules).toHaveBeenCalled());
+    expect(
+      StyleSheet.flatten(
+        screen.getByTestId('schedule-calendar-scroll').props.contentContainerStyle,
+      ),
+    ).toMatchObject({ paddingTop: 0 });
   });
 
   it('keeps accountId in the calendar data flow without rendering it', async () => {

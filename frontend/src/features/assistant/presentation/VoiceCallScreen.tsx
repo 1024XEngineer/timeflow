@@ -79,7 +79,10 @@ export function VoiceCallScreen({
 
   return (
     <View style={styles.screen}>
-      <View style={[styles.navigation, { paddingTop: Math.max(spacing.md, insets.top) }]}>
+      <View
+        style={[styles.navigation, { paddingTop: Math.max(spacing.md, insets.top) }]}
+        testID="voice-call-navigation"
+      >
         <Pressable
           accessibilityLabel="收起通话"
           accessibilityRole="button"
@@ -139,6 +142,7 @@ export function VoiceCallScreen({
           styles.actions,
           { paddingBottom: Math.max(spacing.xl, insets.bottom + spacing.md) },
         ]}
+        testID="voice-call-actions"
       >
         <Pressable
           accessibilityLabel="结束对话"

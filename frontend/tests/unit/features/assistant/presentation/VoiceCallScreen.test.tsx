@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { fireEvent, render, screen } from '@testing-library/react-native';
-import { ScrollView } from 'react-native';
+import { ScrollView, StyleSheet } from 'react-native';
 
 import { VoiceCallScreen } from '../../../../../src/features/assistant/presentation/VoiceCallScreen';
 
+let mockTopInset = 0;
+let mockBottomInset = 0;
+
 jest.mock('react-native-safe-area-context', () => ({
-  useSafeAreaInsets: () => ({ bottom: 0, left: 0, right: 0, top: 0 }),
+  useSafeAreaInsets: () => ({ bottom: mockBottomInset, left: 0, right: 0, top: mockTopInset }),
 }));
 
 function renderScreen(overrides: Partial<Parameters<typeof VoiceCallScreen>[0]> = {}) {
@@ -24,6 +27,30 @@ function renderScreen(overrides: Partial<Parameters<typeof VoiceCallScreen>[0]> 
 describe('VoiceCallScreen', () => {
   afterEach(() => {
     jest.useRealTimers();
+    mockTopInset = 0;
+    mockBottomInset = 0;
+  });
+
+  it.each([
+    ['keeps the default top padding on devices with a small top inset', 4, 16],
+    ['pads the collapse button below a notch or status bar', 44, 44],
+  ])('%s', (_name, topInset, expectedPaddingTop) => {
+    mockTopInset = topInset;
+    renderScreen();
+    expect(
+      StyleSheet.flatten(screen.getByTestId('voice-call-navigation').props.style),
+    ).toMatchObject({ paddingTop: expectedPaddingTop });
+  });
+
+  it.each([
+    ['keeps the default bottom padding on devices with a small home indicator', 4, 32],
+    ['moves the call actions above the home indicator / gesture nav area', 34, 50],
+  ])('%s', (_name, bottomInset, expectedPaddingBottom) => {
+    mockBottomInset = bottomInset;
+    renderScreen();
+    expect(StyleSheet.flatten(screen.getByTestId('voice-call-actions').props.style)).toMatchObject({
+      paddingBottom: expectedPaddingBottom,
+    });
   });
 
   it('shows the status title', () => {
