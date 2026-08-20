@@ -1,6 +1,7 @@
 """Composition-root validation for the injectable composed voice agent."""
 
 from dataclasses import replace
+from unittest import mock
 
 import pytest
 
@@ -47,6 +48,34 @@ def test_factory_builds_injectable_agent_without_changing_app_default() -> None:
     agent = build_composed_voice_agent(settings(), NullResultSink())
 
     assert isinstance(agent, ComposedVoiceAgent)
+
+
+def test_factory_injects_schedule_category_classification() -> None:
+    configured = settings()
+    classifier = mock.Mock()
+    publisher = mock.Mock()
+
+    with (
+        mock.patch("timeflow.composition.ScheduleApplicationService") as service_factory,
+        mock.patch("timeflow.composition.OpenAICompatibleJsonLlm") as json_llm_factory,
+        mock.patch(
+            "timeflow.composition.LlmScheduleCategoryClassifier",
+            return_value=classifier,
+        ) as classifier_factory,
+    ):
+        build_composed_voice_agent(
+            configured,
+            NullResultSink(),
+            category_event_publisher=publisher,
+        )
+
+    json_llm_factory.assert_called_once_with(
+        configured,
+        timeout_seconds=configured.schedule_category_timeout_seconds,
+    )
+    classifier_factory.assert_called_once_with(json_llm_factory.return_value)
+    assert service_factory.call_args.kwargs["category_classifier"] is classifier
+    assert service_factory.call_args.kwargs["category_event_publisher"] is publisher
 
 
 @pytest.mark.parametrize(

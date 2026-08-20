@@ -1,12 +1,17 @@
 """Composition-root factory for the injectable composed voice agent."""
 
+from collections.abc import Callable
+
 from sqlalchemy.orm import Session, sessionmaker
 
-from timeflow.business.calendar import ScheduleApplicationService
+from timeflow.business.calendar import ScheduleApplicationService, ScheduleCategory
 from timeflow.data.database import build_engine, build_session_factory
 from timeflow.data.schedule_unit_of_work import SqlAlchemyScheduleUnitOfWork
 from timeflow.infrastructure.external.asr.qwen_realtime import QwenRealtimeAsr
-from timeflow.infrastructure.external.llm.openai_compatible import OpenAICompatibleLlm
+from timeflow.infrastructure.external.llm.openai_compatible import (
+    OpenAICompatibleJsonLlm,
+    OpenAICompatibleLlm,
+)
 from timeflow.infrastructure.external.tts.qwen_audio_tts import QwenAudioTts
 from timeflow.infrastructure.settings import Settings
 from timeflow.intelligence.composed.agent import ComposedVoiceAgent
@@ -15,6 +20,7 @@ from timeflow.intelligence.conversation.schedule_tools import ScheduleResultObse
 from timeflow.intelligence.conversation.tools import build_agent_tool_registry
 from timeflow.intelligence.location import ClientLocation, LocationSearchService
 from timeflow.intelligence.ports import ResultSink
+from timeflow.intelligence.schedule_category import LlmScheduleCategoryClassifier
 
 
 def build_composed_voice_agent(
@@ -23,6 +29,7 @@ def build_composed_voice_agent(
     *,
     session_factory: sessionmaker[Session] | None = None,
     location_service: LocationSearchService | None = None,
+    category_event_publisher: Callable[[str, str, ScheduleCategory], None] | None = None,
 ) -> ComposedVoiceAgent:
     """Build complete composed dependencies for the mode-2 gateway adapter."""
     _validate_settings(settings)
@@ -30,7 +37,14 @@ def build_composed_voice_agent(
         engine = build_engine(settings.database_url)
         session_factory = build_session_factory(engine)
     schedule_service = ScheduleApplicationService(
-        lambda: SqlAlchemyScheduleUnitOfWork(session_factory)
+        lambda: SqlAlchemyScheduleUnitOfWork(session_factory),
+        category_classifier=LlmScheduleCategoryClassifier(
+            OpenAICompatibleJsonLlm(
+                settings,
+                timeout_seconds=settings.schedule_category_timeout_seconds,
+            )
+        ),
+        category_event_publisher=category_event_publisher,
     )
     llm = OpenAICompatibleLlm(settings)
 
