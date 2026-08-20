@@ -43,7 +43,7 @@ jobs:
         && github.event.comment.user.login != 'github-actions[bot]'
         && contains(github.event.comment.body, '/android-preview')
       )
-    runs-on: github-runner-ubuntu-24-04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       ok: ${{ steps.target.outputs.ok }}
@@ -142,7 +142,7 @@ jobs:
     name: Build preview APK
     needs: resolve
     if: needs.resolve.result == 'success' && needs.resolve.outputs.ok == 'true'
-    runs-on: github-runner-ubuntu-24-04
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
@@ -265,7 +265,7 @@ jobs:
     name: Publish Appetize preview
     needs: [resolve, build]
     if: needs.build.result == 'success' && needs.resolve.outputs.ok == 'true'
-    runs-on: github-runner-ubuntu-24-04
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
