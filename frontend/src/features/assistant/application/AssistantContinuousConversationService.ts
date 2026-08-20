@@ -3,8 +3,8 @@ import type { ScheduleCategory } from '../../../contracts/schedule';
 import type { AppLifecycleStatus } from '../../../infrastructure/appState/AppStateProvider';
 import type {
   AppliedCommand,
-  ConversationTurnRecord,
   ConversationTurnState,
+  VoiceChatMessage,
 } from '../domain/ConversationTurn';
 
 import type {
@@ -64,9 +64,8 @@ export class AssistantContinuousConversationService implements AssistantApplicat
   private unsubscribeConnection: (() => void) | null = null;
   private replyText: string | null = null;
   private soundLevel: number | null = null;
-  /** 本次开麦以来的问答历史，追加不覆盖；startTurn() 清空，跟 replyText 各管各的
-   * ——replyText 是当前这一轮的气泡内容，turns 是完整历史。 */
-  private turns: ConversationTurnRecord[] = [];
+  /** 本通免提电话里已经落屏的用户/助手对白，挂断后下一通 startTurn 会清空。 */
+  private messages: VoiceChatMessage[] = [];
   /** endTurn() 主动关闭连接期间为 true，让 handleClose 认出这是预期内的挂断。 */
   private endingCall = false;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -122,12 +121,12 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     return this.replyText;
   }
 
-  getSoundLevel(): number | null {
-    return this.soundLevel;
+  getMessages(): readonly VoiceChatMessage[] {
+    return this.messages;
   }
 
-  getTurns(): readonly ConversationTurnRecord[] {
-    return this.turns;
+  getSoundLevel(): number | null {
+    return this.soundLevel;
   }
 
   /** 打开连续会话：建连、开一次流、开始持续推流麦克风。 */
@@ -139,7 +138,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     try {
       this.replyText = null;
       this.soundLevel = null;
-      this.turns = [];
+      this.messages = [];
       // 上一通电话可能是在暂停期间被空闲超时兜底挂断的，muted 只在用户手动
       // togglePause() 里恢复；不在这里清一次，新开的电话会继承上一通的静音,
       // UI 显示 listening 但麦克风帧全被吞掉。
@@ -353,16 +352,8 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         return;
       case 'voice.asr.completed':
         // 听到一句真实语音：这是空闲计时器真正要等的信号，重新给一个完整窗口。
+        this.appendUserTranscript(message.payload.transcript);
         this.armIdleTimer();
-        this.turns = [
-          ...this.turns,
-          {
-            id: message.request_id ?? `turn-${this.turns.length}`,
-            replyText: null,
-            transcript: message.payload.transcript,
-          },
-        ];
-        this.notifyListeners();
         return;
       case 'voice.command.result': {
         const command: AppliedCommand = {
@@ -382,9 +373,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         void this.applyCategoryUpdate(message.payload.schedule_id, message.payload.category);
         return;
       case 'voice.dialogue.question':
-        // 缺字段/地点歧义之类的追问，对当前这轮来说就是系统的回复——记进历史，
-        // 不然标题过了这一阵子就变回通用文案，这句追问在记录里再也找不到。
-        this.updateLastTurnReply(message.payload.speech_text);
+        this.upsertAssistantTranscript(message.payload.question_id, message.payload.speech_text);
         this.setState({
           conversationId: message.conversation_id,
           phase: 'asking',
@@ -393,7 +382,11 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         return;
       case 'voice.dialogue.reply':
         this.replyText = message.payload.speech_text;
-        this.updateLastTurnReply(message.payload.speech_text);
+        this.upsertAssistantTranscript(
+          message.payload.reply_id,
+          message.payload.speech_text,
+          !message.payload.done,
+        );
         this.notifyListeners();
         return;
       case 'voice.tts.start':
@@ -542,15 +535,32 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     return this.connection;
   }
 
-  /** speech_text 是累计到目前为止的完整文字（不是增量），直接覆盖最后一轮即可。
-   * 没有轮次可更新时（理论上不会发生，reply 总跟在 asr.completed 后面）不做
-   * 任何事，不新建一条没有 transcript 的记录。 */
-  private updateLastTurnReply(replyText: string): void {
-    if (this.turns.length === 0) {
+  private appendUserTranscript(transcript: string): void {
+    const text = transcript.trim();
+    if (text.length === 0) {
       return;
     }
-    const last = this.turns[this.turns.length - 1];
-    this.turns = [...this.turns.slice(0, -1), { ...last, replyText }];
+    this.messages = [
+      ...this.messages,
+      { id: `user-${this.messages.length + 1}`, role: 'user', text },
+    ];
+    this.notifyListeners();
+  }
+
+  private upsertAssistantTranscript(id: string, speechText: string, pending = false): void {
+    const text = speechText.trim();
+    if (text.length === 0) {
+      return;
+    }
+    const next: VoiceChatMessage = pending
+      ? { id, role: 'assistant', text, pending: true }
+      : { id, role: 'assistant', text };
+    const existing = this.messages.findIndex((message) => message.id === id);
+    if (existing >= 0) {
+      this.messages = this.messages.map((message, index) => (index === existing ? next : message));
+      return;
+    }
+    this.messages = [...this.messages, next];
   }
 
   private armIdleTimer(): void {

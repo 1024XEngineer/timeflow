@@ -27,6 +27,7 @@ class FakeAssistantApplication implements AssistantApplicationPort {
   endTurn = async () => {};
   getLastAppliedCommand = () => this.command;
   getReplyText = () => null;
+  getMessages = () => [];
   getSoundLevel = () => null;
   getState = (): ConversationTurnState => ({ phase: 'idle' });
   startTurn = async () => {};

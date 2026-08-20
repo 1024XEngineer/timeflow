@@ -16,7 +16,7 @@ jest.mock('../../../../../src/features/assistant/presentation/useAssistantConver
     startTurn: application.startTurn,
     state: application === mockPttApplication ? { phase: 'idle' as const } : mockCallState,
     togglePause: () => {},
-    turns: [],
+    messages: [],
   }),
 }));
 jest.mock('react-native-safe-area-context', () => ({
@@ -35,6 +35,7 @@ function createApplication(): AssistantApplicationPort {
     endTurn: async () => {},
     getLastAppliedCommand: () => null,
     getReplyText: () => null,
+    getMessages: () => [],
     getSoundLevel: () => null,
     getState: () => ({ phase: 'idle' }),
     startTurn: async () => {},
@@ -113,7 +114,7 @@ describe('AssistantVoiceOverlay layout', () => {
 
     fireEvent.press(screen.getByLabelText('进入免提通话'));
 
-    expect(screen.getByText('回答中…')).toBeTruthy();
+    expect(screen.getByText('正在回复')).toBeTruthy();
   });
 
   it('shows a generic "已打断" label when the reply is interrupted', () => {
@@ -145,6 +146,8 @@ describe('AssistantVoiceOverlay layout', () => {
 
     fireEvent.press(screen.getByLabelText('进入免提通话'));
 
-    expect(screen.getByText('已暂停，点一下继续')).toBeTruthy();
+    expect(screen.getByText('已暂停，点击圆圈继续')).toBeTruthy();
+    expect(screen.queryByLabelText('打断当前对话')).toBeNull();
+    expect(screen.getByLabelText('结束对话')).toBeTruthy();
   });
 });
