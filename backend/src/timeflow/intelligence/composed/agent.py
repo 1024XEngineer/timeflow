@@ -322,8 +322,10 @@ class ComposedVoiceAgent:
             tuple[TranscriptCompleted, float | None, float | None, float] | None
         ] = asyncio.Queue()
         barge_in = asyncio.Event()
+        pump_error: Exception | None = None
 
         async def pump() -> None:
+            nonlocal pump_error
             speech_started_at: float | None = None
             speech_stopped_at: float | None = None
             try:
@@ -352,6 +354,8 @@ class ComposedVoiceAgent:
                     elif isinstance(event, SpeechStopped):
                         if speech_stopped_at is None:
                             speech_stopped_at = self._monotonic()
+            except Exception as exc:
+                pump_error = exc
             finally:
                 await completed_queue.put(None)
 
@@ -413,6 +417,9 @@ class ComposedVoiceAgent:
                 await asyncio.gather(pump_task, return_exceptions=True)
             if isinstance(events, _ClosableAsyncIterator):
                 await events.aclose()
+
+        if pump_error is not None:
+            raise pump_error
 
     async def _act_on_transcript(
         self,
