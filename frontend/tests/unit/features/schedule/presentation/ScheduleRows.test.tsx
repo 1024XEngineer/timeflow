@@ -56,6 +56,15 @@ describe('ScheduleOccurrenceRow', () => {
     expect(screen.queryByText('未分类')).toBeNull();
   });
 
+  it('shows only the recurring badge for an unclassified recurring schedule', () => {
+    render(
+      <ScheduleOccurrenceRow item={occurrence({ category: null, recurrenceMode: 'recurring' })} />,
+    );
+
+    expect(screen.getByText('重复')).toBeTruthy();
+    expect(screen.queryByText('工作')).toBeNull();
+  });
+
   it('shows an explicit all-day label for an all-day schedule', () => {
     render(
       <ScheduleOccurrenceRow

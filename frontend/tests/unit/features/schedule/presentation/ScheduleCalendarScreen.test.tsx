@@ -161,6 +161,9 @@ describe('ScheduleCalendarScreen location schedules', () => {
     expect(screen.getByText('提醒强度 · 强提醒')).toBeTruthy();
     expect(screen.queryByText('编辑')).toBeNull();
     expect(screen.queryByText('删除')).toBeNull();
+
+    fireEvent.press(screen.getByRole('button', { name: '关闭详情' }));
+    expect(screen.queryByText('日程详情')).toBeNull();
   });
 
   it('updates an open occurrence detail after an asynchronous category refresh', async () => {
@@ -211,6 +214,9 @@ describe('ScheduleCalendarScreen location schedules', () => {
     await waitFor(() => expect(getSchedulesByRange).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.getAllByText('工作')).toHaveLength(2));
     expect(screen.getByText('日程详情')).toBeTruthy();
+
+    fireEvent.press(screen.getByRole('button', { name: '关闭详情' }));
+    expect(screen.queryByText('日程详情')).toBeNull();
   });
 
   it('updates an open location detail after an asynchronous category refresh', async () => {
