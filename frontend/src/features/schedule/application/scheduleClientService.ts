@@ -150,7 +150,9 @@ export class SqliteScheduleClientService implements ScheduleCalendarReadService 
     return schedules
       .filter(
         (schedule): schedule is LocalScheduleRow & { schedule_type: 'location' } =>
-          schedule.schedule_type === 'location' && schedule.status === 'active',
+          schedule.schedule_type === 'location' &&
+          schedule.status === 'active' &&
+          schedule.reminder_disposition_state !== 'confirmed',
       )
       .map(toLocationView);
   }
