@@ -1,4 +1,4 @@
-import { describe, expect, it, jest } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { act, renderHook } from '@testing-library/react-native';
 import type {
   LayoutChangeEvent,
@@ -6,13 +6,17 @@ import type {
   NativeSyntheticEvent,
   ScrollView,
 } from 'react-native';
+import { Platform } from 'react-native';
 
 import {
   PINNED_TO_BOTTOM_THRESHOLD,
+  TRANSCRIPT_IDLE_MS,
   contentFitsViewport,
   isPinnedToBottom,
   usePinnedTranscriptScroll,
 } from '../../../../../src/features/assistant/presentation/usePinnedTranscriptScroll';
+
+const originalOs = Platform.OS;
 
 function layoutEvent(height: number): LayoutChangeEvent {
   return {
@@ -83,7 +87,12 @@ describe('isPinnedToBottom', () => {
 });
 
 describe('usePinnedTranscriptScroll', () => {
-  it('keeps short content pinned to the dock and does not overflow', () => {
+  afterEach(() => {
+    Platform.OS = originalOs;
+    jest.useRealTimers();
+  });
+
+  it('follows the latest turn when the user is not scrolling', () => {
     const { result } = renderHook(() => usePinnedTranscriptScroll());
     const scrollToEnd = jest.fn();
     result.current.transcriptRef.current = { scrollToEnd } as unknown as ScrollView;
@@ -108,47 +117,84 @@ describe('usePinnedTranscriptScroll', () => {
     expect(result.current.fitsViewport).toBe(false);
   });
 
-  it('does not yank the user back while they are reading earlier turns', () => {
+  it.each(['ios', 'android'] as const)(
+    'does not follow the latest turn on %s while the user is dragging',
+    (os) => {
+      Platform.OS = os;
+      const { result } = renderHook(() => usePinnedTranscriptScroll());
+      const scrollToEnd = jest.fn();
+      result.current.transcriptRef.current = { scrollToEnd } as unknown as ScrollView;
+
+      act(() => {
+        result.current.onScrollBeginDrag();
+        result.current.onMomentumScrollBegin();
+        result.current.onContentSizeChange(390, 2200);
+      });
+
+      expect(scrollToEnd).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['ios', 'android'] as const)(
+    'follows the latest turn on %s after the user stops scrolling',
+    (os) => {
+      Platform.OS = os;
+      jest.useFakeTimers();
+      const { result } = renderHook(() => usePinnedTranscriptScroll());
+      const scrollToEnd = jest.fn();
+      result.current.transcriptRef.current = { scrollToEnd } as unknown as ScrollView;
+
+      act(() => {
+        result.current.onScrollBeginDrag();
+        result.current.onContentSizeChange(390, 2000);
+      });
+      expect(scrollToEnd).not.toHaveBeenCalled();
+
+      act(() => {
+        result.current.onMomentumScrollEnd();
+      });
+      expect(scrollToEnd).toHaveBeenCalledWith({ animated: true });
+    },
+  );
+
+  it('follows the latest turn on web after the user stops scrolling', () => {
+    Platform.OS = 'web';
+    jest.useFakeTimers();
     const { result } = renderHook(() => usePinnedTranscriptScroll());
     const scrollToEnd = jest.fn();
     result.current.transcriptRef.current = { scrollToEnd } as unknown as ScrollView;
 
     act(() => {
-      result.current.onLayout(layoutEvent(400));
       result.current.onScroll(
         scrollEvent({ contentHeight: 2000, offsetY: 0, viewportHeight: 400 }),
       );
-    });
-    scrollToEnd.mockClear();
-
-    act(() => {
       result.current.onContentSizeChange(390, 2200);
     });
-
     expect(scrollToEnd).not.toHaveBeenCalled();
-    expect(result.current.fitsViewport).toBe(false);
+
+    act(() => {
+      jest.advanceTimersByTime(TRANSCRIPT_IDLE_MS);
+    });
+    expect(scrollToEnd).toHaveBeenCalledWith({ animated: true });
   });
 
-  it('resumes sticking to the latest turn after the user returns to the bottom', () => {
+  it('uses the drag-end idle timer when momentum does not follow', () => {
+    Platform.OS = 'ios';
+    jest.useFakeTimers();
     const { result } = renderHook(() => usePinnedTranscriptScroll());
     const scrollToEnd = jest.fn();
     result.current.transcriptRef.current = { scrollToEnd } as unknown as ScrollView;
 
     act(() => {
-      result.current.onScroll(
-        scrollEvent({ contentHeight: 2000, offsetY: 0, viewportHeight: 400 }),
-      );
-      result.current.onContentSizeChange(390, 2000);
+      result.current.onScrollBeginDrag();
+      result.current.onScrollEndDrag();
+      result.current.onContentSizeChange(390, 2100);
     });
     expect(scrollToEnd).not.toHaveBeenCalled();
 
     act(() => {
-      result.current.onScroll(
-        scrollEvent({ contentHeight: 2000, offsetY: 1600, viewportHeight: 400 }),
-      );
-      result.current.onContentSizeChange(390, 2100);
+      jest.advanceTimersByTime(TRANSCRIPT_IDLE_MS);
     });
-
     expect(scrollToEnd).toHaveBeenCalledWith({ animated: true });
   });
 });
