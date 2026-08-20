@@ -1,7 +1,17 @@
 import { useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 
+import { floatingVoiceContentBottomInset } from '../../../shared/ui/floatingVoiceBarLayout';
 import { colors, spacing } from '../../../shared/ui/theme';
 import type { ScheduleCalendarReadService, ScheduleOccurrenceView } from '../application';
 import { LocationScheduleDetailSheet } from './LocationScheduleDetailSheet';
@@ -41,6 +51,7 @@ export function ScheduleCalendarScreen({
   refreshSignal,
   focusTarget,
 }: ScheduleCalendarScreenProps) {
+  const insets = useSafeAreaInsets();
   const calendar = useScheduleCalendar(
     service,
     accountId,
@@ -56,6 +67,7 @@ export function ScheduleCalendarScreen({
     null;
   const selectedLocation =
     calendar.locationSchedules.find((item) => item.scheduleId === selectedLocationId) ?? null;
+  const topSafeAreaPadding = Platform.OS === 'android' ? insets.top : 0;
   const selectedLabel = SELECTED_DATE_FORMATTER.format(calendar.selectedDate);
   const agendaTitle = formatAgendaSectionTitle(calendar.selectedDate);
   const emptyAgenda = emptyAgendaMessage(calendar.selectedDate);
@@ -65,9 +77,16 @@ export function ScheduleCalendarScreen({
   return (
     <View style={styles.screen}>
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[
+          styles.scrollContent,
+          {
+            paddingBottom: floatingVoiceContentBottomInset(insets.bottom),
+            paddingTop: topSafeAreaPadding,
+          },
+        ]}
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}
+        testID="schedule-calendar-scroll"
       >
         <View style={styles.content}>
           <View style={styles.header}>
