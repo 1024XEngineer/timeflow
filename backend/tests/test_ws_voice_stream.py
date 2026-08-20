@@ -60,6 +60,20 @@ class CapturingSink:
         return b"".join(self.chunks)
 
 
+class LifecycleSink(CapturingSink):
+    """Record session lifecycle callbacks in addition to consumed audio."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.lifecycle: list[tuple[str, str]] = []
+
+    async def interrupt(self, session_id: str, reason: str) -> None:
+        self.lifecycle.append(("interrupt", f"{session_id}:{reason}"))
+
+    async def close_session(self, session_id: str) -> None:
+        self.lifecycle.append(("close", session_id))
+
+
 class ExplodingSink:
     """A sink that fails the way a provider outage would."""
 
@@ -107,6 +121,26 @@ def _build_app(
         )
 
     return application
+
+
+def test_stateful_sink_receives_start_interruption_and_disconnect_cleanup() -> None:
+    """A composed sink gets lifecycle hooks while stateless sinks remain supported."""
+    sink = LifecycleSink()
+    client = TestClient(_build_app(sink))
+
+    with client.websocket_connect("/ws?device_id=device_001") as websocket:
+        websocket.send_json(VALID_HELLO)
+        websocket.receive_json()
+        websocket.send_json(START)
+        websocket.receive_json()
+        websocket.send_bytes(b"\x01\x02")
+        websocket.send_json({"type": "voice.stream.end", "payload": {"stream_id": "stream_test"}})
+        assert sink.completed.wait(timeout=2)
+
+    assert sink.lifecycle == [
+        ("interrupt", "ws_session_test:new_audio_stream"),
+        ("close", "ws_session_test"),
+    ]
 
 
 def test_stream_start_assigns_stream_and_conversation_ids() -> None:

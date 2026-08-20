@@ -37,7 +37,9 @@ class Settings:
     aliyun_asr_api_key: str = ""
     aliyun_asr_model: str = "qwen3-asr-flash-realtime"
     aliyun_asr_language: str = "zh"
-    aliyun_asr_vad_threshold: float = 0.0
+    # Tuned above the vendor default (0.2): in a room with background sound, a
+    # lower threshold lets the server VAD treat noise as speech and fire spurious turns.
+    aliyun_asr_vad_threshold: float = 0.6
     aliyun_asr_vad_silence_duration_ms: int = 400
     aliyun_asr_connect_timeout_seconds: float = 10.0
     aliyun_asr_finish_timeout_seconds: float = 10.0
@@ -76,7 +78,7 @@ class Settings:
         """Load settings from TIMEFLOW-prefixed environment variables."""
         load_dotenv(dotenv_path=env_file, override=False)
 
-        aliyun_asr_vad_threshold = float(environ.get("TIMEFLOW_ALIYUN_ASR_VAD_THRESHOLD", "0.0"))
+        aliyun_asr_vad_threshold = float(environ.get("TIMEFLOW_ALIYUN_ASR_VAD_THRESHOLD", "0.6"))
         aliyun_asr_vad_silence_duration_ms = int(
             environ.get("TIMEFLOW_ALIYUN_ASR_VAD_SILENCE_DURATION_MS", "400")
         )

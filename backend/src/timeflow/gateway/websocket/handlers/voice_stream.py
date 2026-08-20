@@ -18,6 +18,7 @@ from timeflow.gateway.websocket.messages.voice import (
 )
 from timeflow.gateway.websocket.ports import (
     AudioConfig,
+    AudioSessionLifecycle,
     AudioSink,
     SessionContext,
     StreamContext,
@@ -104,6 +105,9 @@ class VoiceStreamHandlers:
         )
         if invalid is not None:
             return self._error(request_id, invalid)
+
+        if isinstance(self._audio_sink, AudioSessionLifecycle):
+            await self._audio_sink.interrupt(session.session_id, "new_audio_stream")
 
         audio_config = AudioConfig(
             audio_format=payload.audio_format,
@@ -192,6 +196,8 @@ class VoiceStreamHandlers:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        if isinstance(self._audio_sink, AudioSessionLifecycle):
+            await self._audio_sink.close_session(session.session_id)
 
     async def _drain_to_sink(self, stream: _ActiveStream) -> None:
         """Feed queued chunks to the sink once the first frame has arrived."""
