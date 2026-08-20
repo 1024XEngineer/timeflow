@@ -102,18 +102,21 @@ export class NativeDeviceCapability implements DeviceCapabilityPort {
       try {
         const Location = await this.loadLocationModule();
         if (Location != null) {
-          // Expo uses the foreground request for the normal runtime dialog. On
-          // Android 11+, the background request opens the system's "all the time"
-          // location flow instead of the generic app settings page.
+          // Read-only: the caller already ran requestPermission() and got a
+          // denial. Calling the request API again here would resurface the
+          // same system dialog instead of routing to settings. Only fall
+          // back to Linking once the system has actually stopped offering
+          // its own prompt (canAskAgain === false).
           const response =
             permission === 'location_foreground'
-              ? await Location.requestForegroundPermissionsAsync()
-              : await Location.requestBackgroundPermissionsAsync();
+              ? await Location.getForegroundPermissionsAsync()
+              : await Location.getBackgroundPermissionsAsync();
           if (response.status === Location.PermissionStatus.GRANTED) {
             return true;
           }
-          // A denied request that can still be asked again did not navigate to
-          // settings. Let the caller mark this prompt as skipped for this session.
+          // Still able to ask again: no settings page to route to yet. Let
+          // the caller mark this prompt as skipped for this session instead
+          // of re-triggering the system dialog.
           if (response.canAskAgain) {
             return false;
           }
