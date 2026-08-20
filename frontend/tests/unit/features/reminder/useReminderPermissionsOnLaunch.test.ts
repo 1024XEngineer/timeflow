@@ -164,6 +164,58 @@ describe('useReminderPermissionsOnLaunch', () => {
     expect(dialog.show).toHaveBeenCalledWith(expect.objectContaining({ title: '需要悬浮窗权限' }));
   });
 
+  it('skips the permission and moves on when returning from settings without granting it', async () => {
+    jest.useFakeTimers();
+    const device = createDevice({
+      platform: 'android',
+      supported: true,
+      permissions: { ...deniedPermissions(), notifications: true, overlay: true },
+    });
+    const dialog = createDialog();
+    const onPermissionsUpdated = jest.fn();
+    renderHook(() => useReminderPermissionsOnLaunch(device, dialog, onPermissionsUpdated));
+    await flush(600);
+    expect(device.openSettings).toHaveBeenCalledWith('exact_alarm');
+
+    // Permission stays unchanged after returning from settings — must not
+    // reopen the same dialog, just move on to the next permission.
+    await act(async () => {
+      (device as unknown as { fireAppActive: () => void }).fireAppActive();
+      await Promise.resolve();
+    });
+    await flush(300);
+    expect(onPermissionsUpdated).not.toHaveBeenCalled();
+    expect(dialog.show).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '需要全屏通知权限' }),
+    );
+  });
+
+  it('recovers and moves on when the status check after returning from settings rejects', async () => {
+    jest.useFakeTimers();
+    const device = createDevice({
+      platform: 'android',
+      supported: true,
+      permissions: { ...deniedPermissions(), notifications: true, overlay: true },
+    });
+    const dialog = createDialog();
+    renderHook(() => useReminderPermissionsOnLaunch(device, dialog));
+    await flush(600);
+    expect(device.openSettings).toHaveBeenCalledWith('exact_alarm');
+
+    device.getStatus = jest.fn(async () => {
+      throw new Error('boom');
+    });
+    await act(async () => {
+      (device as unknown as { fireAppActive: () => void }).fireAppActive();
+    });
+    await flush(0);
+    device.getStatus = jest.fn(async () => device.status);
+    await flush(300);
+    expect(dialog.show).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '需要全屏通知权限' }),
+    );
+  });
+
   it('resumes prompting after a logout that happens while waiting to return from settings', async () => {
     jest.useFakeTimers();
     const firstDevice = createDevice({

@@ -219,6 +219,14 @@ describe('NativeDeviceCapability', () => {
     ]);
   });
 
+  it('falls back to the real expo-location module when no loader is injected', async () => {
+    // Exercises the default constructor arg (loadExpoLocation), which the rest of
+    // this suite bypasses by always injecting a fake loader. Without a native
+    // module present, expo-location's read throws and the call fails closed.
+    const device = new NativeDeviceCapability();
+    await expect(device.openSettings('location_foreground')).resolves.toBe(false);
+  });
+
   describe('location permission requests', () => {
     it('requestPermission(location_foreground) grants immediately when already granted', async () => {
       getForeground.mockResolvedValue(granted());
@@ -304,17 +312,40 @@ describe('NativeDeviceCapability', () => {
       jest.restoreAllMocks();
     });
 
-    it('opens the OS app settings page via Linking for foreground/background location', async () => {
+    it('reads current status instead of re-requesting when already granted', async () => {
       const openLinkingSettings = jest.spyOn(Linking, 'openSettings').mockResolvedValue();
+      getForeground.mockResolvedValue(granted());
+      getBackground.mockResolvedValue(granted());
       const device = newDevice();
       await expect(device.openSettings('location_foreground')).resolves.toBe(true);
       await expect(device.openSettings('location_background')).resolves.toBe(true);
-      expect(openLinkingSettings).toHaveBeenCalledTimes(2);
+      expect(requestForeground).not.toHaveBeenCalled();
+      expect(requestBackground).not.toHaveBeenCalled();
+      expect(openLinkingSettings).not.toHaveBeenCalled();
       expect(openSettings).not.toHaveBeenCalled();
     });
 
-    it('returns false when Linking.openSettings rejects', async () => {
+    it('fails closed without re-prompting when the system can still ask again', async () => {
+      const openLinkingSettings = jest.spyOn(Linking, 'openSettings').mockResolvedValue();
+      getForeground.mockResolvedValue(denied(true));
+      const device = newDevice();
+      await expect(device.openSettings('location_foreground')).resolves.toBe(false);
+      expect(requestForeground).not.toHaveBeenCalled();
+      expect(openLinkingSettings).not.toHaveBeenCalled();
+    });
+
+    it('falls back to app settings when the system no longer offers a location prompt', async () => {
+      const openLinkingSettings = jest.spyOn(Linking, 'openSettings').mockResolvedValue();
+      getForeground.mockResolvedValue(denied(false));
+      const device = newDevice();
+      await expect(device.openSettings('location_foreground')).resolves.toBe(true);
+      expect(requestForeground).not.toHaveBeenCalled();
+      expect(openLinkingSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns false when the location settings fallback cannot open', async () => {
       jest.spyOn(Linking, 'openSettings').mockRejectedValue(new Error('cannot open settings'));
+      getForeground.mockResolvedValue(denied(false));
       const device = newDevice();
       await expect(device.openSettings('location_foreground')).resolves.toBe(false);
     });
