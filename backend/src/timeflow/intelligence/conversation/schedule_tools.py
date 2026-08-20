@@ -20,6 +20,7 @@ from timeflow.business.calendar import (
     ReminderType,
     ScheduleAgentService,
     ScheduleBusinessError,
+    ScheduleCategory,
     ScheduleKind,
     ScheduleMutationResult,
     ScheduleSearchResult,
@@ -52,6 +53,10 @@ _MISSING = object()
 
 _DATETIME_SCHEMA = {"type": ["string", "null"], "format": "date-time"}
 _NULLABLE_STRING_SCHEMA = {"type": ["string", "null"]}
+_CATEGORY_SCHEMA = {
+    "type": ["string", "null"],
+    "enum": [*(category.value for category in ScheduleCategory), None],
+}
 _REMINDER_TYPE_SCHEMA = {
     "type": ["string", "null"],
     "enum": [
@@ -268,6 +273,7 @@ def schedule_tool_definitions() -> tuple[ToolDefinition, ...]:
                     "starts_at_or_after": _DATETIME_SCHEMA,
                     "starts_before": _DATETIME_SCHEMA,
                     "location_name": _NULLABLE_STRING_SCHEMA,
+                    "category": _CATEGORY_SCHEMA,
                     "include_deleted": {"type": "boolean"},
                 },
                 "additionalProperties": False,
@@ -356,6 +362,7 @@ def map_find_schedules_query(arguments: Mapping[str, object]) -> FindSchedulesQu
         "starts_at_or_after",
         "starts_before",
         "location_name",
+        "category",
         "include_deleted",
     }
     _reject_unknown(arguments, allowed)
@@ -365,6 +372,7 @@ def map_find_schedules_query(arguments: Mapping[str, object]) -> FindSchedulesQu
         starts_at_or_after=_optional_datetime(arguments, "starts_at_or_after"),
         starts_before=_optional_datetime(arguments, "starts_before"),
         location_name=_optional_string(arguments, "location_name"),
+        category=_optional_enum(arguments, "category", ScheduleCategory),
         include_deleted=_optional_bool(arguments, "include_deleted", default=False),
     )
 

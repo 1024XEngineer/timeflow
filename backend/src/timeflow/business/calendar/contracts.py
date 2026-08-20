@@ -219,6 +219,7 @@ class FindSchedulesQuery:
     starts_at_or_after: datetime | None = None
     starts_before: datetime | None = None
     location_name: str | None = None
+    category: ScheduleCategory | None = None
     include_deleted: bool = False
 
 

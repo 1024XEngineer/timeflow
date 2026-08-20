@@ -10,7 +10,7 @@ import {
   normalizeDetailText,
   ScheduleDetailSheet,
 } from './ScheduleDetailSheet';
-import { dateKeyInTimezone, formatTime } from './scheduleDisplay';
+import { dateKeyInTimezone, formatTime, scheduleCategoryLabel } from './scheduleDisplay';
 
 export function ScheduleOccurrenceDetailSheet({
   occurrence,
@@ -41,7 +41,9 @@ export function ScheduleOccurrenceDetailSheet({
     detailOccurrence.occurrenceEnd,
     detailOccurrence.timezone,
   );
+  const categoryLabel = scheduleCategoryLabel(detailOccurrence.category);
   const badges = [
+    ...(categoryLabel ? [categoryLabel] : []),
     detailOccurrence.scheduleCategory === 'time' ? '时间日程' : '地点日程',
     detailOccurrence.recurrenceMode === 'recurring' ? '周期日程' : '一次性',
     ...(detailOccurrence.isAllDay ? ['全天'] : []),

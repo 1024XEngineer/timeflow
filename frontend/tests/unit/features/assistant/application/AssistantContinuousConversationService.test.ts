@@ -423,6 +423,7 @@ describe('AssistantContinuousConversationService', () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
     const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    expect(service.getScheduleDataRevision()).toBe(0);
 
     await startListening(fake, service);
     fake.emitMessage({
@@ -436,6 +437,7 @@ describe('AssistantContinuousConversationService', () => {
       'schedule_001',
       'work',
     );
+    expect(service.getScheduleDataRevision()).toBe(1);
     expect(service.getState()).toMatchObject({ phase: 'listening' });
     service.dispose();
   });

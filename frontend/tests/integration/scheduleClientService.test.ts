@@ -60,7 +60,9 @@ describe('SqliteScheduleClientService', () => {
   });
 
   it('returns active one-time and multi-day all-day schedules for the selected local date', async () => {
-    await repository.applyCloudSchedule(cloudSchedule({ id: 'inside', title: 'Timed inside' }));
+    await repository.applyCloudSchedule(
+      cloudSchedule({ id: 'inside', title: 'Timed inside', category: 'work' }),
+    );
     await repository.applyCloudSchedule(
       cloudSchedule({
         id: 'outside',
@@ -96,6 +98,7 @@ describe('SqliteScheduleClientService', () => {
       occurrenceStart: '2026-08-16T16:00:00.000Z',
       occurrenceEnd: '2026-08-19T16:00:00.000Z',
     });
+    expect(result[1]).toMatchObject({ scheduleId: 'inside', category: 'work' });
   });
 
   it('returns only active unconfirmed location schedules for the requested account', async () => {

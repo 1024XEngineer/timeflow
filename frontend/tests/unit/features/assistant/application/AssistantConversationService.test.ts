@@ -146,7 +146,6 @@ describe('AssistantConversationService', () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
     const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
-
     const turn = service.startTurn();
     await flushAsync();
     fake.emitMessage({
@@ -163,7 +162,6 @@ describe('AssistantConversationService', () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
     const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
-
     const turn = service.startTurn();
     await flushAsync();
     fake.emitClose({ code: 1006, reason: '' });
@@ -267,6 +265,7 @@ describe('AssistantConversationService', () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
     const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+    expect(service.getScheduleDataRevision()).toBe(0);
 
     const turn = service.startTurn();
     await completeStreamStart(fake, turn);
@@ -281,6 +280,7 @@ describe('AssistantConversationService', () => {
       'schedule_001',
       'work',
     );
+    expect(service.getScheduleDataRevision()).toBe(1);
   });
 
   it('buffers a category event that arrives before the command result', async () => {

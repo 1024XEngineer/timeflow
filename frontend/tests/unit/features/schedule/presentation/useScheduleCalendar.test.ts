@@ -51,6 +51,7 @@ describe('useScheduleCalendar', () => {
     const occurrence = {
       scheduleId: 'weekly',
       scheduleCategory: 'time' as const,
+      category: null,
       recurrenceMode: 'recurring' as const,
       title: 'Weekly meeting',
       isAllDay: false,
@@ -149,6 +150,7 @@ describe('useScheduleCalendar', () => {
     const occurrence = {
       scheduleId: 'yearly',
       scheduleCategory: 'time' as const,
+      category: null,
       recurrenceMode: 'recurring' as const,
       title: 'Yearly meeting',
       isAllDay: false,
@@ -204,6 +206,7 @@ describe('useScheduleCalendar', () => {
     const occurrence = {
       scheduleId: 'biennial',
       scheduleCategory: 'time' as const,
+      category: null,
       recurrenceMode: 'recurring' as const,
       title: 'Biennial event',
       isAllDay: false,

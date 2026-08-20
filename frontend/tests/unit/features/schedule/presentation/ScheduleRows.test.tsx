@@ -12,6 +12,7 @@ function occurrence(overrides: Partial<ScheduleOccurrenceView> = {}): ScheduleOc
   return {
     scheduleId: 'schedule-a',
     scheduleCategory: 'time',
+    category: 'work',
     recurrenceMode: 'once',
     title: '团队周会',
     isAllDay: false,
@@ -37,6 +38,22 @@ describe('ScheduleOccurrenceRow', () => {
     render(<ScheduleOccurrenceRow item={occurrence({ recurrenceMode: 'recurring' })} />);
 
     expect(screen.getByText('重复')).toBeTruthy();
+  });
+
+  it('shows localized work and study category badges', () => {
+    const view = render(<ScheduleOccurrenceRow item={occurrence({ category: 'work' })} />);
+
+    expect(screen.getByText('工作')).toBeTruthy();
+    view.rerender(<ScheduleOccurrenceRow item={occurrence({ category: 'study' })} />);
+    expect(screen.getByText('学习')).toBeTruthy();
+  });
+
+  it('does not show a category badge while category is null', () => {
+    render(<ScheduleOccurrenceRow item={occurrence({ category: null })} />);
+
+    expect(screen.queryByText('工作')).toBeNull();
+    expect(screen.queryByText('其他')).toBeNull();
+    expect(screen.queryByText('未分类')).toBeNull();
   });
 
   it('shows an explicit all-day label for an all-day schedule', () => {

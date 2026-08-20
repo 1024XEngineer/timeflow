@@ -51,6 +51,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
   private connection: VoiceTransportConnection | null = null;
   private state: ConversationTurnState = { phase: 'idle' };
   private lastAppliedCommand: AppliedCommand | null = null;
+  private scheduleDataRevision = 0;
   private readonly listeners = new Set<(state: ConversationTurnState) => void>();
 
   private conversationId: string | null = null;
@@ -116,6 +117,10 @@ export class AssistantContinuousConversationService implements AssistantApplicat
 
   getLastAppliedCommand(): AppliedCommand | null {
     return this.lastAppliedCommand;
+  }
+
+  getScheduleDataRevision(): number {
+    return this.scheduleDataRevision;
   }
 
   getReplyText(): string | null {
@@ -443,7 +448,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       return;
     }
     this.lastAppliedCommand = command;
-    this.notifyListeners();
+    this.markScheduleDataChanged();
     this.connection?.send({ message_id: messageId, status: 'applied', type: 'message.ack' });
     const schedules = command.schedules ?? (command.schedule ? [command.schedule] : []);
     await this.applyPendingCategoryUpdates(
@@ -464,6 +469,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       if (this.disposed) return;
       if (applied === true && this.pendingCategoryUpdates.get(key) === category) {
         this.pendingCategoryUpdates.delete(key);
+        this.markScheduleDataChanged();
       }
     } catch {
       if (!this.disposed) this.pendingCategoryUpdates.set(key, category);
@@ -482,7 +488,10 @@ export class AssistantContinuousConversationService implements AssistantApplicat
           category,
         );
         if (this.disposed) return;
-        if (applied === true) this.pendingCategoryUpdates.delete(key);
+        if (applied === true) {
+          this.pendingCategoryUpdates.delete(key);
+          this.markScheduleDataChanged();
+        }
       } catch {
         // Keep the latest pending value for a later authoritative local write.
       }
@@ -491,6 +500,11 @@ export class AssistantContinuousConversationService implements AssistantApplicat
 
   private categoryKey(scheduleId: string): string {
     return `${this.options.accountId}\u0000${scheduleId}`;
+  }
+
+  private markScheduleDataChanged(): void {
+    this.scheduleDataRevision += 1;
+    this.notifyListeners();
   }
 
   private handleAudioFrame(chunk: ArrayBuffer): void {

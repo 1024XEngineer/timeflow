@@ -1,6 +1,22 @@
+import type { ScheduleCategory } from '../../../contracts/schedule';
 import type { ScheduleOccurrenceView } from '../application';
 
 export const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日'];
+
+export const SCHEDULE_CATEGORY_LABELS: Record<ScheduleCategory, string> = {
+  work: '工作',
+  study: '学习',
+  exercise: '运动',
+  entertainment: '娱乐',
+  social: '社交',
+  rest: '休息',
+  personal: '个人事务',
+  other: '其他',
+};
+
+export function scheduleCategoryLabel(category: ScheduleCategory | null): string | null {
+  return category === null ? null : SCHEDULE_CATEGORY_LABELS[category];
+}
 
 export function dateKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(

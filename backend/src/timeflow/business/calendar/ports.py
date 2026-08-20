@@ -60,6 +60,7 @@ class ScheduleRepositoryPort(Protocol):
         self,
         *,
         account_id: str,
+        category: ScheduleCategory | None = None,
         include_deleted: bool = False,
     ) -> tuple[ScheduleSnapshot, ...]: ...
 
@@ -69,6 +70,7 @@ class ScheduleRepositoryPort(Protocol):
         account_id: str,
         starts_at_or_after: datetime | None,
         starts_before: datetime | None,
+        category: ScheduleCategory | None = None,
         include_deleted: bool = False,
     ) -> tuple[ScheduleSnapshot, ...]: ...
 

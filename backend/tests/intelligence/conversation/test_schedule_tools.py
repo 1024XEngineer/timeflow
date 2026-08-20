@@ -20,6 +20,7 @@ from timeflow.business.calendar import (
     ReminderType,
     ScheduleAgentService,
     ScheduleBusinessError,
+    ScheduleCategory,
     ScheduleErrorCode,
     ScheduleKind,
     ScheduleMutationResult,
@@ -191,12 +192,36 @@ def test_definitions_match_business_contract_dimensions() -> None:
     assert isinstance(query_properties, dict)
     assert isinstance(update_properties, dict)
     assert isinstance(delete_properties, dict)
-    assert "category" not in query_properties
+    assert query_properties["category"] == {
+        "type": ["string", "null"],
+        "enum": [
+            "work",
+            "study",
+            "exercise",
+            "entertainment",
+            "social",
+            "rest",
+            "personal",
+            "other",
+            None,
+        ],
+    }
     assert "category" not in update_properties
     assert "category" not in delete_properties
     changes = update_properties["changes"]
     assert isinstance(changes, dict)
     assert "category" not in changes["properties"]
+
+
+def test_query_category_maps_to_the_existing_business_contract() -> None:
+    query = map_find_schedules_query({"category": "work"})
+
+    assert query.category is ScheduleCategory.WORK
+
+
+def test_query_rejects_an_unsupported_category() -> None:
+    with pytest.raises(ScheduleToolInputError, match="category has an unsupported value"):
+        map_find_schedules_query({"category": "chores"})
 
 
 def test_create_arguments_map_to_existing_business_command() -> None:

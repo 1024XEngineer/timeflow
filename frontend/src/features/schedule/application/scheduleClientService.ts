@@ -1,6 +1,7 @@
 import type {
   ReminderStrength,
   ReminderType,
+  ScheduleCategory,
   ScheduleKind,
   ScheduleType,
 } from '../../../contracts/schedule';
@@ -53,6 +54,7 @@ export interface GetLocationSchedulesQuery {
 export interface ScheduleOccurrenceView {
   scheduleId: string;
   scheduleCategory: ScheduleType;
+  category: ScheduleCategory | null;
   recurrenceMode: ScheduleKind;
   title: string;
   isAllDay: boolean;
@@ -276,6 +278,7 @@ function toView(
   return {
     scheduleId: schedule.id,
     scheduleCategory: schedule.schedule_type,
+    category: schedule.category,
     recurrenceMode: schedule.schedule_kind,
     title: schedule.title,
     isAllDay: schedule.is_all_day === 1,

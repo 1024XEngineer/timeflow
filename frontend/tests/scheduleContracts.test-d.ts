@@ -130,6 +130,7 @@ export type ScheduleOccurrenceViewContract = Assert<
     keyof ScheduleOccurrenceView,
     | 'scheduleId'
     | 'scheduleCategory'
+    | 'category'
     | 'recurrenceMode'
     | 'title'
     | 'isAllDay'
