@@ -66,7 +66,7 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
     const listener_id = `location-${request.schedule_id}`;
     this.watches.set(listener_id, { listener_id, request: { ...request }, listener });
     this.scheduleToListener.set(request.schedule_id, listener_id);
-    await this.enqueueSync();
+    await this.chainSync();
 
     const sample = await this.getCurrentSample();
     if (sample != null) {
@@ -89,7 +89,7 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
       await this.removeWatch(listenerId, false);
     }
 
-    // 直接灌 Map，不逐个调用 watch()：watch() 自己的 enqueueSync()+getCurrentSample()
+    // 直接灌 Map，不逐个调用 watch()：watch() 自己的 chainSync()+getCurrentSample()
     // 是为单条增量注册设计的，N 个 target 各跑一次会把 startGeofencingAsync 的区域
     // 列表越注册越长（O(N²) 总区域数）、定位请求也打 N 次；这里全部灌完只同步一次、
     // 取一次定位，再扇给每个刚注册的 watch。
@@ -110,7 +110,7 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
       this.scheduleToListener.set(target.schedule_id, listener_id);
       handles.push({ listener_id, schedule_id: target.schedule_id });
     }
-    await this.enqueueSync();
+    await this.chainSync();
 
     const sample = await this.getCurrentSample();
     if (sample != null) {
@@ -158,7 +158,7 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
 
   private readonly handleAppState = (state: AppStateStatus): void => {
     if (state !== 'active' || this.watches.size === 0) return;
-    void this.enqueueSync();
+    void this.chainSync();
   };
 
   /** 补上 headless task 期间（没有订阅者时）攒下的围栏事件，按正常路径重放一遍。 */
@@ -202,11 +202,15 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
     this.watches.delete(listenerId);
     this.scheduleToListener.delete(watch.request.schedule_id);
     if (sync) {
-      await this.enqueueSync();
+      await this.chainSync();
     }
   }
 
-  private enqueueSync(): Promise<void> {
+  /** 把一次区域同步接到 syncChain 末尾，保证上一次真正执行完（不管成功与否）才轮到
+   * 这一次——不是排队等着处理各自不同的输入，每次都是重新读 this.watches 当前
+   * 状态，纯粹为了不让 syncRegions() 并发跑，参照 AssistantContinuousConversationService
+   * 的 chainPlayback()/playbackChain 同一个模式。 */
+  private chainSync(): Promise<void> {
     this.syncChain = this.syncChain.then(
       () => this.syncRegions(),
       () => this.syncRegions(),
