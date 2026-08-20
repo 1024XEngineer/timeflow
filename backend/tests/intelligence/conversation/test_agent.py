@@ -15,9 +15,11 @@ from timeflow.intelligence.conversation.agent import (
     AgentConversation,
     AgentProtocolError,
     AgentQuestion,
+    AgentSessionEnd,
     AgentTextDelta,
     AgentToolError,
     AgentToolRoundLimitError,
+    AgentTurnTiming,
 )
 from timeflow.intelligence.conversation.llm import (
     AssistantToolCallMessage,
@@ -103,15 +105,14 @@ def question_events(
     required_response: object = "start_time",
     candidates: object = None,
 ) -> list[LlmEvent]:
-    arguments = json.dumps(
-        {
-            "question_kind": question_kind,
-            "speech_text": speech_text,
-            "required_response": required_response,
-            "candidates": [] if candidates is None else candidates,
-        },
-        ensure_ascii=False,
-    )
+    payload: dict[str, object] = {
+        "question_kind": question_kind,
+        "speech_text": speech_text,
+        "required_response": required_response,
+    }
+    if candidates is not None:
+        payload["candidates"] = candidates
+    arguments = json.dumps(payload, ensure_ascii=False)
     return tool_events("request_user_input", arguments, call_id)
 
 
@@ -222,6 +223,100 @@ async def test_tool_round_text_is_not_exposed_as_agent_text_delta() -> None:
     )
     assert conversation.messages[-1] == ChatMessage(role="assistant", content="日程服务尚未接入。")
     assert llm.requests[1][0][-1] == conversation.messages[-2]
+
+
+@pytest.mark.asyncio
+async def test_final_round_text_is_streamed_before_completion() -> None:
+    """The final-answer round yields text as it streams, not after the round ends."""
+    release = asyncio.Event()
+
+    class GatedLlm:
+        def __init__(self) -> None:
+            self.requests: list[tuple[tuple[LlmMessage, ...], tuple[ToolDefinition, ...]]] = []
+
+        def stream(
+            self,
+            messages: Sequence[LlmMessage],
+            tools: Sequence[ToolDefinition],
+        ) -> AsyncIterator[LlmEvent]:
+            self.requests.append((tuple(messages), tuple(tools)))
+            round_index = len(self.requests)
+
+            async def generate() -> AsyncIterator[LlmEvent]:
+                if round_index == 1:
+                    yield ToolCallDelta(0, "call_1", "schedule_create", "{}")
+                    yield LlmStreamCompleted("tool_calls", LlmUsage(1, 1, 2))
+                else:
+                    yield TextDelta("已创建")
+                    await release.wait()
+                    yield LlmStreamCompleted("stop", LlmUsage(2, 2, 4))
+
+            return generate()
+
+    tool = RecordingTool(ToolDefinition("schedule_create", "创建日程", {"type": "object"}))
+    agent = Agent(GatedLlm(), ToolRegistry([tool]))
+
+    generator = agent.run_turn(AgentConversation(), "创建日程")
+
+    # The first yielded event is the final-round text, delivered while the stream is
+    # still blocked on the gate. A buffering implementation would hang here waiting for
+    # the round to complete before yielding anything.
+    first = await generator.__anext__()
+    assert first == AgentTextDelta("已创建")
+    assert not release.is_set()
+
+    release.set()
+    remaining = [event async for event in generator]
+    assert remaining == [AgentCompleted(LlmUsage(3, 3, 6))]
+
+
+class ScriptedClock:
+    """Return scripted monotonic values in order and fail on extra calls."""
+
+    def __init__(self, *values: float) -> None:
+        self._values = iter(values)
+
+    def __call__(self) -> float:
+        return next(self._values)
+
+
+@pytest.mark.asyncio
+async def test_completed_reports_tool_turn_phase_timing() -> None:
+    """A tool turn splits its wall-clock into tool-call, execution, and text phases."""
+    tool = RecordingTool(
+        ToolDefinition("schedule_create", "创建日程", {"type": "object"}),
+        result='{"status":"ok"}',
+    )
+    llm = FakeLlm(
+        [
+            tool_events("schedule_create", '{"title":"开会"}'),
+            [TextDelta("已创建。"), completed()],
+        ]
+    )
+    agent = Agent(
+        llm,
+        ToolRegistry([tool]),
+        monotonic=ScriptedClock(0.0, 0.5, 1.0, 1.5, 2.0, 2.5),
+    )
+
+    events = [event async for event in agent.run_turn(AgentConversation(), "创建开会日程")]
+
+    completed_event = events[-1]
+    assert isinstance(completed_event, AgentCompleted)
+    assert completed_event.timing == AgentTurnTiming(500.0, 500.0, 500.0)
+
+
+@pytest.mark.asyncio
+async def test_completed_reports_text_only_turn_timing() -> None:
+    """A turn without a tool call reports zero tool-call and execution time."""
+    llm = FakeLlm([[TextDelta("你好。"), completed()]])
+    agent = Agent(llm, ToolRegistry([]), monotonic=ScriptedClock(0.0, 0.5))
+
+    events = [event async for event in agent.run_turn(AgentConversation(), "你好")]
+
+    completed_event = events[-1]
+    assert isinstance(completed_event, AgentCompleted)
+    assert completed_event.timing == AgentTurnTiming(0.0, 0.0, 500.0)
 
 
 @pytest.mark.asyncio
@@ -424,24 +519,80 @@ async def test_pending_answer_becomes_tool_result_without_duplicate_user_message
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "events",
+    "bad_events",
     [
         question_events(question_kind="invalid"),
         question_events(speech_text=""),
         question_events(required_response=""),
         question_events(candidates=[1]),
         question_events(question_kind="ambiguous_target", candidates=[]),
-        question_events(question_kind="recurrence_scope", candidates=[]),
+        question_events(question_kind="recurrence_scope", candidates=[1]),
     ],
 )
-async def test_invalid_questions_do_not_pollute_conversation(events: Sequence[LlmEvent]) -> None:
+async def test_invalid_question_is_refused_and_model_retries(
+    bad_events: Sequence[LlmEvent],
+) -> None:
+    llm = FakeLlm([bad_events, [TextDelta("好的。"), completed()]])
     conversation = AgentConversation()
-    agent = Agent(FakeLlm([events]), ToolRegistry([RecordingTool(request_user_input_definition())]))
+    agent = Agent(
+        llm, ToolRegistry([RecordingTool(request_user_input_definition())]), max_tool_rounds=4
+    )
 
-    with pytest.raises(AgentToolError):
-        _ = [event async for event in agent.run_turn(conversation, "test")]
+    events = [event async for event in agent.run_turn(conversation, "test")]
 
+    assert events == [AgentTextDelta("好的。"), AgentCompleted(LlmUsage(4, 3, 7))]
     assert conversation.pending_question is None
+    assert isinstance(conversation.messages[-2], ToolResultMessage)
+    assert '"status":"failed"' in conversation.messages[-2].content
+    assert conversation.messages[-1] == ChatMessage(role="assistant", content="好的。")
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_target_without_candidates_refusal_names_schedule_query() -> None:
+    llm = FakeLlm([question_events(question_kind="ambiguous_target", candidates=[]), [completed()]])
+    conversation = AgentConversation()
+    agent = Agent(
+        llm, ToolRegistry([RecordingTool(request_user_input_definition())]), max_tool_rounds=4
+    )
+
+    _ = [event async for event in agent.run_turn(conversation, "test")]
+
+    refusal = conversation.messages[-2]
+    assert isinstance(refusal, ToolResultMessage)
+    assert "schedule_query" in refusal.content
+
+
+@pytest.mark.asyncio
+async def test_end_conversation_streams_farewell_before_terminal_events() -> None:
+    events = [
+        TextDelta("再见。"),
+        *tool_events("end_conversation", "{}", "end_1"),
+    ]
+    conversation = AgentConversation()
+    agent = Agent(FakeLlm([events]), ToolRegistry([]))
+
+    delivered = [event async for event in agent.run_turn(conversation, "先这样")]
+
+    assert delivered == [
+        AgentTextDelta("再见。"),
+        AgentSessionEnd(),
+        AgentCompleted(DEFAULT_TOOL_USAGE),
+    ]
+    assert isinstance(conversation.messages[-1], AssistantToolCallMessage)
+    assert conversation.messages[-1].content == "再见。"
+
+
+@pytest.mark.asyncio
+async def test_end_conversation_rejects_non_empty_arguments() -> None:
+    conversation = AgentConversation()
+    agent = Agent(
+        FakeLlm([tool_events("end_conversation", '{"reason":"done"}', "end_1")]),
+        ToolRegistry([]),
+    )
+
+    with pytest.raises(AgentToolError, match="arguments must be empty"):
+        _ = [event async for event in agent.run_turn(conversation, "结束")]
+
     assert not any(
         isinstance(message, AssistantToolCallMessage) for message in conversation.messages
     )

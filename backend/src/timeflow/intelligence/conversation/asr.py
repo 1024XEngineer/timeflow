@@ -17,7 +17,17 @@ class TranscriptCompleted:
     text: str
 
 
-AsrEvent: TypeAlias = TranscriptPreview | TranscriptCompleted
+@dataclass(frozen=True, slots=True)
+class SpeechStarted:
+    """The provider detected the start of user speech (server VAD)."""
+
+
+@dataclass(frozen=True, slots=True)
+class SpeechStopped:
+    """The provider detected the end of user speech (server VAD)."""
+
+
+AsrEvent: TypeAlias = TranscriptPreview | TranscriptCompleted | SpeechStarted | SpeechStopped
 
 
 class AsrPort(Protocol):
