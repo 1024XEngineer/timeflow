@@ -1,4 +1,4 @@
-import { NativeModules, Platform } from 'react-native';
+import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 
 export type NativeAlarmPermissionStatus = {
   exactAlarm: boolean;
@@ -8,24 +8,49 @@ export type NativeAlarmPermissionStatus = {
   battery: boolean;
 };
 
+export type NativeAlarmEventPayload = {
+  type: 'fired' | 'dismissed' | 'snoozed';
+  scheduleId: string;
+  alarmId: string;
+  title: string;
+  atMillis: number;
+};
+
+export type NativeAlarmDispositionPayload = {
+  scheduleId: string;
+  alarmId: string;
+  state: string;
+  updatedAtMillis: number;
+};
+
 type TimeflowAlarmNative = {
   schedule: (
     triggerAtMillis: number,
     title?: string | null,
     scheduleId?: string | null,
-  ) => Promise<{ alarmId: string }>;
+  ) => Promise<{ alarmId: string; scheduleId?: string }>;
   cancel: (alarmId: string) => Promise<boolean>;
+  cancelAll: () => Promise<number>;
+  stopRinging: () => Promise<boolean>;
+  peekNativeDispositions: () => Promise<NativeAlarmDispositionPayload[]>;
+  ackNativeDispositions: (scheduleIds: string[]) => Promise<boolean>;
   getPermissionStatus: () => Promise<NativeAlarmPermissionStatus>;
   openPermissionSettings: (
     kind: 'exactAlarm' | 'overlay' | 'fullScreen' | 'battery' | 'app',
   ) => Promise<boolean>;
   requestNotificationPermission: () => Promise<boolean>;
+  addListener?: (eventName: string) => void;
+  removeListeners?: (count: number) => void;
 };
 
-const NativeAlarm = NativeModules.TimeflowAlarm as TimeflowAlarmNative | undefined;
+const EVENT_NAME = 'TimeflowAlarmEvent';
+
+function getNativeAlarm(): TimeflowAlarmNative | undefined {
+  return NativeModules.TimeflowAlarm as TimeflowAlarmNative | undefined;
+}
 
 export function isTimeflowAlarmAvailable(): boolean {
-  return Platform.OS === 'android' && NativeAlarm != null;
+  return Platform.OS === 'android' && getNativeAlarm() != null;
 }
 
 export async function nativeScheduleAlarm(
@@ -33,46 +58,117 @@ export async function nativeScheduleAlarm(
   title: string,
   scheduleId?: string,
 ): Promise<string | null> {
-  if (!isTimeflowAlarmAvailable() || NativeAlarm == null) return null;
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null) return null;
   try {
-    const result = await NativeAlarm.schedule(triggerAtMillis, title, scheduleId ?? '');
-    const alarmId = result?.alarmId;
-    if (alarmId == null || alarmId.length === 0) return null;
-    return alarmId;
+    const result = await native.schedule(triggerAtMillis, title, scheduleId ?? '');
+    return result.alarmId;
   } catch {
     return null;
   }
 }
 
 export async function nativeCancelAlarm(alarmId: string | null | undefined): Promise<boolean> {
-  if (!isTimeflowAlarmAvailable() || NativeAlarm == null || !alarmId) return false;
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null || !alarmId) return false;
   try {
-    return Boolean(await NativeAlarm.cancel(alarmId));
+    return await native.cancel(alarmId);
   } catch {
     return false;
   }
 }
 
+export async function nativeCancelAllAlarms(): Promise<void> {
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null) return;
+  try {
+    await native.cancelAll();
+  } catch {
+    // 尽力全部取消，忽略失败。
+  }
+}
+
+export async function nativeStopAlarmRinging(): Promise<void> {
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null) return;
+  try {
+    await native.stopRinging();
+  } catch {
+    // 尽力停铃，忽略失败。
+  }
+}
+
+export async function nativePeekAlarmDispositions(): Promise<NativeAlarmDispositionPayload[]> {
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null) return [];
+  try {
+    return await native.peekNativeDispositions();
+  } catch {
+    return [];
+  }
+}
+
+export async function nativeAckAlarmDispositions(scheduleIds: readonly string[]): Promise<void> {
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null || scheduleIds.length === 0) return;
+  try {
+    await native.ackNativeDispositions([...scheduleIds]);
+  } catch {
+    // 确认失败就不清缓冲区，下次冷启动重新 peek 到、重放同样的幂等状态转换。
+  }
+}
+
 export async function nativeGetAlarmPermissionStatus(): Promise<NativeAlarmPermissionStatus | null> {
-  if (!isTimeflowAlarmAvailable() || NativeAlarm == null) return null;
-  return NativeAlarm.getPermissionStatus();
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null) return null;
+  try {
+    return await native.getPermissionStatus();
+  } catch {
+    return null;
+  }
 }
 
 export async function nativeOpenAlarmPermissionSettings(
   kind: 'exactAlarm' | 'overlay' | 'fullScreen' | 'battery' | 'app',
 ): Promise<boolean> {
-  if (!isTimeflowAlarmAvailable() || NativeAlarm == null) return false;
-  return NativeAlarm.openPermissionSettings(kind);
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null) return false;
+  try {
+    return await native.openPermissionSettings(kind);
+  } catch {
+    return false;
+  }
 }
 
 export async function nativeRequestNotificationPermission(): Promise<boolean> {
-  if (!isTimeflowAlarmAvailable() || NativeAlarm == null) return false;
-  return NativeAlarm.requestNotificationPermission();
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null) return false;
+  try {
+    return await native.requestNotificationPermission();
+  } catch {
+    return false;
+  }
 }
 
 export async function nativeAreAlarmPermissionsGranted(): Promise<boolean> {
   const status = await nativeGetAlarmPermissionStatus();
   if (status == null) return false;
-  // 挂闹钟的最低要求：精确闹钟 + 通知；悬浮窗/全屏/电池影响展示，不阻塞调度。
   return status.exactAlarm && status.notifications;
+}
+
+export function subscribeNativeAlarmEvents(
+  listener: (event: NativeAlarmEventPayload) => void,
+): () => void {
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null) {
+    return () => undefined;
+  }
+  const emitter = new NativeEventEmitter(native as never);
+  const subscription = emitter.addListener(EVENT_NAME, (payload: NativeAlarmEventPayload) => {
+    if (payload?.type !== 'fired' && payload?.type !== 'dismissed' && payload?.type !== 'snoozed') {
+      return;
+    }
+    listener(payload);
+  });
+  return () => subscription.remove();
 }
