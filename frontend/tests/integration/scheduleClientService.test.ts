@@ -180,6 +180,7 @@ describe('SqliteScheduleClientService', () => {
       {
         scheduleId: 'location-pending',
         scheduleCategory: 'location',
+        category: 'other',
         title: '到公司提醒我打卡',
         timezone: 'Asia/Shanghai',
         locationName: '公司',
@@ -189,6 +190,7 @@ describe('SqliteScheduleClientService', () => {
       {
         scheduleId: 'location-snoozed',
         scheduleCategory: 'location',
+        category: 'other',
         title: 'Snoozed location',
         timezone: 'Asia/Shanghai',
         locationName: null,

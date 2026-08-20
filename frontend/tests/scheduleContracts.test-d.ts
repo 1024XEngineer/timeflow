@@ -148,6 +148,7 @@ export type LocationScheduleViewContract = Assert<
     keyof LocationScheduleView,
     | 'scheduleId'
     | 'scheduleCategory'
+    | 'category'
     | 'title'
     | 'timezone'
     | 'locationName'

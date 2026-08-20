@@ -70,6 +70,7 @@ export interface ScheduleOccurrenceView {
 export interface LocationScheduleView {
   scheduleId: string;
   scheduleCategory: 'location';
+  category: ScheduleCategory | null;
   title: string;
   timezone: string;
   locationName: string | null;
@@ -297,6 +298,7 @@ function toLocationView(
   return {
     scheduleId: schedule.id,
     scheduleCategory: schedule.schedule_type,
+    category: schedule.category,
     title: schedule.title,
     timezone: schedule.timezone,
     locationName: schedule.location_name,

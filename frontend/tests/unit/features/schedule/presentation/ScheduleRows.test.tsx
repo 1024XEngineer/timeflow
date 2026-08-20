@@ -77,6 +77,7 @@ describe('LocationScheduleRow', () => {
     const item: LocationScheduleView = {
       scheduleId: 'location-a',
       scheduleCategory: 'location',
+      category: 'work',
       title: '到公司提醒我打卡',
       timezone: 'Asia/Shanghai',
       locationName: '公司',
@@ -87,11 +88,32 @@ describe('LocationScheduleRow', () => {
     render(<LocationScheduleRow item={item} />);
 
     expect(screen.getByText('位置日程')).toBeTruthy();
+    expect(screen.getByText('工作')).toBeTruthy();
     expect(screen.getByText('到公司提醒我打卡')).toBeTruthy();
     expect(screen.getByText('公司')).toBeTruthy();
     expect(screen.queryByText('location')).toBeNull();
     expect(screen.queryByText('arrive_location')).toBeNull();
     expect(screen.queryByText('high')).toBeNull();
     expect(screen.queryByText('strong')).toBeNull();
+  });
+
+  it('does not show a category badge for an unclassified location schedule', () => {
+    const item: LocationScheduleView = {
+      scheduleId: 'location-a',
+      scheduleCategory: 'location',
+      category: null,
+      title: '地点触发日程',
+      timezone: 'Asia/Shanghai',
+      locationName: null,
+      reminderType: null,
+      reminderStrength: null,
+    };
+
+    render(<LocationScheduleRow item={item} />);
+
+    expect(screen.getByText('位置日程')).toBeTruthy();
+    expect(screen.queryByText('工作')).toBeNull();
+    expect(screen.queryByText('其他')).toBeNull();
+    expect(screen.queryByText('未分类')).toBeNull();
   });
 });

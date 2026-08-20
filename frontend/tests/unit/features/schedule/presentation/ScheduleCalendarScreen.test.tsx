@@ -19,6 +19,7 @@ function createService(): ScheduleCalendarReadService {
         {
           scheduleId: 'location-a',
           scheduleCategory: 'location',
+          category: 'work',
           title: '到公司提醒我打卡',
           timezone: 'Asia/Shanghai',
           locationName: '公司',
@@ -160,5 +161,95 @@ describe('ScheduleCalendarScreen location schedules', () => {
     expect(screen.getByText('提醒强度 · 强提醒')).toBeTruthy();
     expect(screen.queryByText('编辑')).toBeNull();
     expect(screen.queryByText('删除')).toBeNull();
+  });
+
+  it('updates an open occurrence detail after an asynchronous category refresh', async () => {
+    const service = createService();
+    (
+      service.getLocationSchedules as jest.MockedFunction<
+        ScheduleCalendarReadService['getLocationSchedules']
+      >
+    ).mockResolvedValue([]);
+    const occurrenceStart = new Date().toISOString();
+    const initialOccurrence = {
+      scheduleId: 'time-a',
+      scheduleCategory: 'time' as const,
+      category: null,
+      recurrenceMode: 'once' as const,
+      title: '异步分类日程',
+      isAllDay: false,
+      timezone: 'Asia/Shanghai',
+      locationName: null,
+      reminderType: null,
+      reminderStrength: null,
+      occurrenceStart,
+      occurrenceEnd: null,
+    };
+    const getSchedulesByRange = service.getSchedulesByRange as jest.MockedFunction<
+      ScheduleCalendarReadService['getSchedulesByRange']
+    >;
+    getSchedulesByRange
+      .mockReset()
+      .mockResolvedValueOnce([initialOccurrence])
+      .mockResolvedValueOnce([{ ...initialOccurrence, category: 'work' }]);
+    const props = {
+      accountId: 'account-a',
+      onSignOut: () => {},
+      service,
+      timezone: 'Asia/Shanghai',
+      username: 'Sarah',
+    };
+    const view = render(<ScheduleCalendarScreen {...props} refreshSignal={0} />);
+
+    await waitFor(() => expect(screen.getByText('异步分类日程')).toBeTruthy());
+    fireEvent.press(screen.getByRole('button', { name: /异步分类日程/ }));
+    expect(screen.getByText('日程详情')).toBeTruthy();
+    expect(screen.queryByText('工作')).toBeNull();
+
+    view.rerender(<ScheduleCalendarScreen {...props} refreshSignal={1} />);
+
+    await waitFor(() => expect(getSchedulesByRange).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getAllByText('工作')).toHaveLength(2));
+    expect(screen.getByText('日程详情')).toBeTruthy();
+  });
+
+  it('updates an open location detail after an asynchronous category refresh', async () => {
+    const service = createService();
+    const initialLocation = {
+      scheduleId: 'location-a',
+      scheduleCategory: 'location' as const,
+      category: null,
+      title: '到公司提醒我打卡',
+      timezone: 'Asia/Shanghai',
+      locationName: '公司',
+      reminderType: 'arrive_location' as const,
+      reminderStrength: 'high' as const,
+    };
+    const getLocationSchedules = service.getLocationSchedules as jest.MockedFunction<
+      ScheduleCalendarReadService['getLocationSchedules']
+    >;
+    getLocationSchedules
+      .mockReset()
+      .mockResolvedValueOnce([initialLocation])
+      .mockResolvedValueOnce([{ ...initialLocation, category: 'study' }]);
+    const props = {
+      accountId: 'account-a',
+      onSignOut: () => {},
+      service,
+      timezone: 'Asia/Shanghai',
+      username: 'Sarah',
+    };
+    const view = render(<ScheduleCalendarScreen {...props} refreshSignal={0} />);
+
+    await waitFor(() => expect(screen.getByLabelText('公司 到公司提醒我打卡')).toBeTruthy());
+    fireEvent.press(screen.getByLabelText('公司 到公司提醒我打卡'));
+    expect(screen.getByText('日程详情')).toBeTruthy();
+    expect(screen.queryByText('学习')).toBeNull();
+
+    view.rerender(<ScheduleCalendarScreen {...props} refreshSignal={1} />);
+
+    await waitFor(() => expect(getLocationSchedules).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getAllByText('学习')).toHaveLength(2));
+    expect(screen.getByText('日程详情')).toBeTruthy();
   });
 });

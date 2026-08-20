@@ -256,6 +256,7 @@ describe('useScheduleCalendar', () => {
         {
           scheduleId: 'location-a',
           scheduleCategory: 'location',
+          category: null,
           title: '到公司提醒我打卡',
           timezone: 'Asia/Shanghai',
           locationName: '公司',

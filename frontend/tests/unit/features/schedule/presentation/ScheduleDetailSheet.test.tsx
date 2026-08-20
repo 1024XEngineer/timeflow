@@ -106,6 +106,7 @@ describe('schedule detail sheets', () => {
     const schedule: LocationScheduleView = {
       scheduleId: 'location-a',
       scheduleCategory: 'location',
+      category: 'study',
       title: '地点触发日程',
       timezone: 'Asia/Shanghai',
       locationName: null,
@@ -115,6 +116,7 @@ describe('schedule detail sheets', () => {
     render(<LocationScheduleDetailSheet onClose={onClose} schedule={schedule} />);
 
     expect(screen.getByText('地点日程')).toBeTruthy();
+    expect(screen.getByText('学习')).toBeTruthy();
     expect(screen.queryByText('未命名地点')).toBeNull();
     expect(screen.queryByText('未配置')).toBeNull();
     expect(screen.queryByText('地点')).toBeNull();
