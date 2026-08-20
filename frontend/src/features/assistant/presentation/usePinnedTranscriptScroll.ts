@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import {
-  Platform,
-  type LayoutChangeEvent,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
-  type ScrollView,
+import type {
+  LayoutChangeEvent,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
+  ScrollView,
 } from 'react-native';
 
 export const PINNED_TO_BOTTOM_THRESHOLD = 80;
@@ -141,10 +140,6 @@ export function usePinnedTranscriptScroll() {
       return;
     }
     setFollowing(atBottom);
-    if (Platform.OS === 'web') {
-      markInteracting();
-      idleTimerRef.current = setTimeout(markIdle, TRANSCRIPT_IDLE_MS);
-    }
   };
 
   const onContentSizeChange = (_width: number, height: number) => {

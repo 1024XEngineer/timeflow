@@ -206,51 +206,6 @@ describe('usePinnedTranscriptScroll', () => {
     expect(scrollToEnd).not.toHaveBeenCalled();
   });
 
-  it('does not snap back on web after the user stops on earlier turns', () => {
-    Platform.OS = 'web';
-    jest.useFakeTimers();
-    const { result } = renderHook(() => usePinnedTranscriptScroll());
-    const scrollToEnd = jest.fn();
-    result.current.transcriptRef.current = { scrollToEnd } as unknown as ScrollView;
-
-    act(() => {
-      result.current.onScroll(
-        scrollEvent({ contentHeight: 2000, offsetY: 0, viewportHeight: 400 }),
-      );
-      result.current.onContentSizeChange(390, 2200);
-    });
-    expect(scrollToEnd).not.toHaveBeenCalled();
-    expect(result.current.hasUnseenLatest).toBe(true);
-
-    act(() => {
-      jest.advanceTimersByTime(TRANSCRIPT_IDLE_MS);
-    });
-    expect(scrollToEnd).not.toHaveBeenCalled();
-    expect(result.current.hasUnseenLatest).toBe(true);
-  });
-
-  it('follows the latest turn on web after idle if still at the bottom', () => {
-    Platform.OS = 'web';
-    jest.useFakeTimers();
-    const { result } = renderHook(() => usePinnedTranscriptScroll());
-    const scrollToEnd = jest.fn();
-    result.current.transcriptRef.current = { scrollToEnd } as unknown as ScrollView;
-
-    act(() => {
-      result.current.onScroll(
-        scrollEvent({ contentHeight: 2000, offsetY: 1600, viewportHeight: 400 }),
-      );
-      result.current.onContentSizeChange(390, 2100);
-    });
-    expect(scrollToEnd).not.toHaveBeenCalled();
-
-    act(() => {
-      jest.advanceTimersByTime(TRANSCRIPT_IDLE_MS);
-    });
-    expect(scrollToEnd).toHaveBeenCalledWith({ animated: true });
-    expect(result.current.hasUnseenLatest).toBe(false);
-  });
-
   it('uses the drag-end idle timer when momentum does not follow', () => {
     Platform.OS = 'ios';
     jest.useFakeTimers();

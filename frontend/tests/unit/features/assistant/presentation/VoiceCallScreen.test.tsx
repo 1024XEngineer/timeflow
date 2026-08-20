@@ -259,7 +259,7 @@ describe('VoiceCallScreen', () => {
     },
   );
 
-  it.each(['ios', 'android', 'web'] as const)(
+  it.each(['ios', 'android'] as const)(
     'shows a jump-to-latest chip on %s after scrolling away from new turns',
     (os) => {
       const original = Platform.OS;
