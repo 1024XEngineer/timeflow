@@ -1,12 +1,13 @@
-import { describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
-import { Image, StyleSheet } from 'react-native';
+import { Dimensions, Image, Keyboard, StyleSheet, type KeyboardEvent } from 'react-native';
 
 import { AuthAccessError, type AuthAccess } from '../../../src/contracts/auth';
 import { AuthController } from '../../../src/features/auth/application';
 import { AuthProvider } from '../../../src/features/auth/presentation/AuthProvider';
 import { FakeAuthSessionStore } from '../../fakes/FakeAuthSessionStore';
 import { LoginScreen } from '../../../src/screens/LoginScreen';
+import { colors } from '../../../src/shared/ui/theme';
 
 function renderLogin(authAccess: AuthAccess) {
   const controller = new AuthController({
@@ -28,6 +29,9 @@ function fillValidForm() {
 }
 
 describe('LoginScreen', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
   it('shows the left-aligned Timeflow wordmark and login copy without the old marks', () => {
     renderLogin(async () => ({
       access_token: 'opaque-token',
@@ -62,6 +66,51 @@ describe('LoginScreen', () => {
     }));
 
     expect(screen.getByLabelText('密码').props.secureTextEntry).toBe(true);
+  });
+
+  it('focuses fields, advances to the password, and lifts with the IME', () => {
+    const listeners = new Map<string, (event: KeyboardEvent) => void>();
+    jest.spyOn(Keyboard, 'addListener').mockImplementation((event, listener) => {
+      listeners.set(event, listener as (event: KeyboardEvent) => void);
+      return {
+        remove() {
+          listeners.delete(event);
+        },
+      } as ReturnType<typeof Keyboard.addListener>;
+    });
+    jest.spyOn(Keyboard, 'scheduleLayoutAnimation').mockImplementation(() => {});
+
+    renderLogin(async () => ({
+      access_token: 'opaque-token',
+      account_id: 'acc_001',
+      expires_in: 3600,
+    }));
+
+    const username = screen.getByLabelText('用户名');
+    const password = screen.getByLabelText('密码');
+    fireEvent(username, 'focus');
+    expect(StyleSheet.flatten(username.props.style)).toMatchObject({ borderColor: colors.focus });
+    fireEvent(username, 'submitEditing');
+    fireEvent(username, 'blur');
+    fireEvent(password, 'focus');
+    expect(StyleSheet.flatten(password.props.style)).toMatchObject({ borderColor: colors.focus });
+    fireEvent(password, 'blur');
+    fireEvent(screen.getByRole('button', { name: '继续' }), 'pressIn');
+
+    const windowHeight = Dimensions.get('window').height;
+    act(() => {
+      listeners.get('keyboardWillChangeFrame')?.({
+        duration: 0,
+        easing: 'keyboard',
+        endCoordinates: {
+          height: 300,
+          screenX: 0,
+          screenY: windowHeight - 300,
+          width: 400,
+        },
+      });
+    });
+    expect(screen.getByTestId('login-ime-lift')).toHaveStyle({ transform: [{ translateY: -300 }] });
   });
 
   it('disables fields and the submit control while authenticating', async () => {

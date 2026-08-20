@@ -1,6 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Dimensions, Keyboard, Platform, type KeyboardEvent } from 'react-native';
 
+export type VisualViewportLike = {
+  addEventListener: (type: string, listener: () => void) => void;
+  height: number;
+  offsetTop: number;
+  removeEventListener: (type: string, listener: () => void) => void;
+};
+
 export function imeOverlapFromKeyboardFrame(windowHeight: number, keyboardScreenY: number): number {
   return Math.max(0, Math.round(windowHeight - keyboardScreenY));
 }
@@ -9,17 +16,19 @@ function overlapFromEvent(event: KeyboardEvent): number {
   return imeOverlapFromKeyboardFrame(Dimensions.get('window').height, event.endCoordinates.screenY);
 }
 
-function subscribeWebVisualViewport(onOverlap: (overlap: number) => void): () => void {
-  const viewport = typeof window === 'undefined' ? null : window.visualViewport;
+export function subscribeWebVisualViewport(
+  onOverlap: (overlap: number) => void,
+  viewport: VisualViewportLike | null = typeof window === 'undefined'
+    ? null
+    : window.visualViewport,
+  layoutHeight: () => number = () => window.innerHeight,
+): () => void {
   if (!viewport) {
     return () => {};
   }
 
   const update = () => {
-    const overlap = Math.max(
-      0,
-      Math.round(window.innerHeight - viewport.height - viewport.offsetTop),
-    );
+    const overlap = Math.max(0, Math.round(layoutHeight() - viewport.height - viewport.offsetTop));
     onOverlap(overlap);
   };
 
