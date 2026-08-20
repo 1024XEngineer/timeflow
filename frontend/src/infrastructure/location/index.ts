@@ -1,2 +1,2 @@
-export { MockLocationMonitor, MOCK_LOCATION_SAMPLE } from './MockLocationMonitor';
+export { ExpoLocationMonitor } from './ExpoLocationMonitor';
 export type { LocationProvider } from './LocationProvider';

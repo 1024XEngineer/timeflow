@@ -107,6 +107,7 @@ class CreateThenAnswerLlm:
             "schedule_delete",
             "location_search",
             "request_user_input",
+            "end_conversation",
         )
 
         async def generate() -> AsyncIterator[LlmEvent]:

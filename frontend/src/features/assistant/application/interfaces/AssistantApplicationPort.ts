@@ -29,6 +29,8 @@ export interface AssistantApplicationPort {
   subscribe(listener: (state: ConversationTurnState) => void): () => void;
   /** 最近一次成功应用的命令，供展示层显示"刚刚做了什么"。 */
   getLastAppliedCommand(): AppliedCommand | null;
+  /** 本地日程数据每次成功写入后递增，供日历复用现有重读机制。 */
+  getScheduleDataRevision?(): number;
   /** voice.dialogue.reply 的流式文字，给气泡展示；新一轮开始时清空。 */
   getReplyText(): string | null;
   /** 当前这一帧麦克风音量（dBFS），给录音中的波形展示；不在录音时是 null。 */

@@ -173,6 +173,48 @@ describe('ScheduleLocalRepository SQLite behavior', () => {
     });
   });
 
+  it('patches only category without changing the cloud revision', async () => {
+    await repository.applyCloudSchedule(cloudSchedule({ category: null, cloud_revision: 3 }));
+
+    await expect(
+      repository.patchScheduleCategory('account-a', 'schedule-a', 'study'),
+    ).resolves.toBe(true);
+
+    await expect(repository.getSchedule('account-a', 'schedule-a')).resolves.toMatchObject({
+      category: 'study',
+      cloud_revision: 3,
+    });
+  });
+
+  it('ignores a category patch for a missing or different-account schedule', async () => {
+    await expect(repository.patchScheduleCategory('account-a', 'missing', 'study')).resolves.toBe(
+      false,
+    );
+    await repository.applyCloudSchedule(cloudSchedule({ category: null }));
+    await expect(
+      repository.patchScheduleCategory('account-b', 'schedule-a', 'study'),
+    ).resolves.toBe(false);
+    await expect(repository.getSchedule('account-a', 'schedule-a')).resolves.toMatchObject({
+      category: null,
+    });
+  });
+
+  it('ignores a delayed category patch for a deleted schedule', async () => {
+    await repository.applyCloudSchedule(cloudSchedule({ category: null }));
+    await repository.applyCloudSchedule(
+      cloudSchedule({ category: null, status: 'deleted', cloud_revision: 2 }),
+    );
+
+    await expect(
+      repository.patchScheduleCategory('account-a', 'schedule-a', 'study'),
+    ).resolves.toBe(false);
+    await expect(repository.getSchedule('account-a', 'schedule-a')).resolves.toMatchObject({
+      category: null,
+      cloud_revision: 2,
+      status: 'deleted',
+    });
+  });
+
   it('rejects a category outside the shared enum at the SQLite boundary', async () => {
     await expect(
       repository.applyCloudSchedule(
@@ -180,6 +222,22 @@ describe('ScheduleLocalRepository SQLite behavior', () => {
       ),
     ).rejects.toThrow();
     expect(await repository.getSchedule('account-a', 'schedule-a')).toBeNull();
+  });
+
+  it('counts only schedules owned by the requested account', async () => {
+    expect(await repository.countSchedules('account-a')).toBe(0);
+
+    await repository.applyCloudSchedule(cloudSchedule({ id: 'schedule-a' }));
+    await repository.applyCloudSchedule(
+      cloudSchedule({ id: 'schedule-b', account_id: 'account-b' }),
+    );
+    await repository.applyCloudSchedule(
+      cloudSchedule({ id: 'schedule-deleted', status: 'deleted' }),
+    );
+
+    expect(await repository.countSchedules('account-a')).toBe(2);
+    expect(await repository.countSchedules('account-b')).toBe(1);
+    expect(await repository.countSchedules('account-c')).toBe(0);
   });
 
   it('applies cloud fields without overwriting device runtime state', async () => {

@@ -1,4 +1,4 @@
-import { AppState, Platform, type AppStateStatus } from 'react-native';
+import { AppState, Linking, Platform, type AppStateStatus } from 'react-native';
 
 import type {
   DeviceCapabilityPort,
@@ -12,6 +12,16 @@ import {
   nativeRequestNotificationPermission,
 } from './native/TimeflowAlarmBridge';
 
+type LocationModule = typeof import('expo-location');
+
+async function loadExpoLocation(): Promise<LocationModule | null> {
+  try {
+    return await import('expo-location');
+  } catch {
+    return null;
+  }
+}
+
 const SETTINGS_KIND: Partial<
   Record<DevicePermission, 'exactAlarm' | 'overlay' | 'fullScreen' | 'battery' | 'app'>
 > = {
@@ -22,22 +32,42 @@ const SETTINGS_KIND: Partial<
   notifications: 'app',
 };
 
-/** 基于 TimeflowAlarm 原生模块的设备权限适配器。 */
+/** 基于 TimeflowAlarm + expo-location 的设备权限适配器。 */
 export class NativeDeviceCapability implements DeviceCapabilityPort {
+  /** 默认走真实的动态 import；测试注入一个假实现，绕开 expo-location 这个原生模块。 */
+  constructor(
+    private readonly loadLocationModule: () => Promise<LocationModule | null> = loadExpoLocation,
+  ) {}
+
   async getStatus(): Promise<DeviceCapabilityStatus> {
     const platform = toPlatform();
+    const location = await this.readLocationPermissions();
+
     if (!isTimeflowAlarmAvailable()) {
-      return unsupportedStatus(platform);
+      return {
+        platform,
+        supported: false,
+        permissions: {
+          ...emptyPermissions(false),
+          location_foreground: location.foreground,
+          location_background: location.background,
+        },
+        background_execution: false,
+      };
     }
 
-    let status;
-    try {
-      status = await nativeGetAlarmPermissionStatus();
-    } catch {
-      return unsupportedStatus(platform);
-    }
+    const status = await nativeGetAlarmPermissionStatus();
     if (status == null) {
-      return unsupportedStatus(platform);
+      return {
+        platform,
+        supported: false,
+        permissions: {
+          ...emptyPermissions(false),
+          location_foreground: location.foreground,
+          location_background: location.background,
+        },
+        background_execution: false,
+      };
     }
 
     return {
@@ -49,8 +79,8 @@ export class NativeDeviceCapability implements DeviceCapabilityPort {
         overlay: status.overlay,
         full_screen: status.fullScreen,
         battery_optimization: status.battery,
-        location_foreground: false,
-        location_background: false,
+        location_foreground: location.foreground,
+        location_background: location.background,
       },
       background_execution: status.battery,
     };
@@ -58,22 +88,25 @@ export class NativeDeviceCapability implements DeviceCapabilityPort {
 
   async requestPermission(permission: DevicePermission): Promise<boolean> {
     if (permission === 'notifications') {
-      try {
-        return await nativeRequestNotificationPermission();
-      } catch {
-        return false;
-      }
+      return nativeRequestNotificationPermission();
+    }
+    if (permission === 'location_foreground' || permission === 'location_background') {
+      return this.requestLocationPermission(permission);
     }
     return this.openSettings(permission);
   }
 
   async openSettings(permission: DevicePermission): Promise<boolean> {
-    const kind = SETTINGS_KIND[permission] ?? 'app';
-    try {
-      return await nativeOpenAlarmPermissionSettings(kind);
-    } catch {
-      return false;
+    if (permission === 'location_foreground' || permission === 'location_background') {
+      try {
+        await Linking.openSettings();
+        return true;
+      } catch {
+        return false;
+      }
     }
+    const kind = SETTINGS_KIND[permission] ?? 'app';
+    return nativeOpenAlarmPermissionSettings(kind);
   }
 
   onAppActive(listener: () => void): () => void {
@@ -82,6 +115,66 @@ export class NativeDeviceCapability implements DeviceCapabilityPort {
     });
     return () => subscription.remove();
   }
+
+  private async readLocationPermissions(): Promise<{ foreground: boolean; background: boolean }> {
+    try {
+      const Location = await this.loadLocationModule();
+      if (Location == null) return { foreground: false, background: false };
+      const foreground = await Location.getForegroundPermissionsAsync();
+      const background = await Location.getBackgroundPermissionsAsync();
+      return {
+        foreground: foreground.status === Location.PermissionStatus.GRANTED,
+        background: background.status === Location.PermissionStatus.GRANTED,
+      };
+    } catch {
+      return { foreground: false, background: false };
+    }
+  }
+
+  private async requestLocationPermission(
+    permission: 'location_foreground' | 'location_background',
+  ): Promise<boolean> {
+    try {
+      const Location = await this.loadLocationModule();
+      if (Location == null) return false;
+      if (permission === 'location_foreground') {
+        const current = await Location.getForegroundPermissionsAsync();
+        if (current.status === Location.PermissionStatus.GRANTED) {
+          return true;
+        }
+        // 系统不再弹授权框时不要空等，交给上层 openSettings。
+        if (current.canAskAgain === false) {
+          return false;
+        }
+        const result = await Location.requestForegroundPermissionsAsync();
+        return result.status === Location.PermissionStatus.GRANTED;
+      }
+
+      const foreground = await Location.getForegroundPermissionsAsync();
+      if (foreground.status !== Location.PermissionStatus.GRANTED) {
+        if (foreground.canAskAgain === false) {
+          return false;
+        }
+        const requested = await Location.requestForegroundPermissionsAsync();
+        if (requested.status !== Location.PermissionStatus.GRANTED) {
+          return false;
+        }
+      }
+
+      const currentBackground = await Location.getBackgroundPermissionsAsync();
+      if (currentBackground.status === Location.PermissionStatus.GRANTED) {
+        return true;
+      }
+      if (currentBackground.canAskAgain === false) {
+        return false;
+      }
+
+      const background = await Location.requestBackgroundPermissionsAsync();
+      return background.status === Location.PermissionStatus.GRANTED;
+    } catch {
+      return false;
+    }
+  }
 }
 
 function toPlatform(): DeviceCapabilityStatus['platform'] {
@@ -89,15 +182,6 @@ function toPlatform(): DeviceCapabilityStatus['platform'] {
   if (Platform.OS === 'ios') return 'ios';
   if (Platform.OS === 'web') return 'web';
   return 'unknown';
-}
-
-function unsupportedStatus(platform: DeviceCapabilityStatus['platform']): DeviceCapabilityStatus {
-  return {
-    platform,
-    supported: false,
-    permissions: emptyPermissions(false),
-    background_execution: false,
-  };
 }
 
 function emptyPermissions(value: boolean): Readonly<Record<DevicePermission, boolean>> {

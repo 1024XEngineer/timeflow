@@ -1,4 +1,5 @@
 import { SCHEDULE_CATEGORIES, type ScheduleCategory } from '../../../../contracts/schedule';
+import type { SqliteLocalScheduleReader } from '../../../reminder';
 import type {
   CloudScheduleRow,
   LocalScheduleOccurrenceOverrideRow,
@@ -33,7 +34,10 @@ import type { AppliedCommand, AppliedOccurrenceOverride } from '../../domain/Con
  * message.ack，不会向服务端谎报已落库、也不会在本地留下半吊子状态。
  */
 export class LocalScheduleWriter implements LocalScheduleWriterPort {
-  public constructor(private readonly repository: ScheduleLocalRepository) {}
+  public constructor(
+    private readonly repository: ScheduleLocalRepository,
+    private readonly scheduleReader?: SqliteLocalScheduleReader,
+  ) {}
 
   public async applyCommandResult(accountId: string, command: AppliedCommand): Promise<void> {
     if (command.status !== 'applied' || command.operation === 'list_schedules') {
@@ -60,6 +64,17 @@ export class LocalScheduleWriter implements LocalScheduleWriterPort {
         }
       }
     });
+    // 提醒引擎读的是 SqliteLocalScheduleReader 的投影，不是这个仓储本身；写完
+    // 必须主动刷新一次，不然新建/改动的日程要等下次 rebuild 才会被提醒引擎看到。
+    await this.scheduleReader?.refresh();
+  }
+
+  public applyCategoryUpdate(
+    accountId: string,
+    scheduleId: string,
+    category: ScheduleCategory,
+  ): Promise<boolean> {
+    return this.repository.patchScheduleCategory(accountId, scheduleId, category);
   }
 }
 

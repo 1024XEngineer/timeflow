@@ -7,9 +7,17 @@ from typing import Protocol, Self
 
 from timeflow.business.calendar.contracts import (
     AccountScheduleSnapshot,
+    CreateScheduleCommand,
+    ScheduleCategory,
     ScheduleOccurrenceOverrideSnapshot,
     ScheduleSnapshot,
 )
+
+
+class ScheduleCategoryClassifier(Protocol):
+    """Classify one already-structured create command by schedule semantics."""
+
+    def classify(self, command: CreateScheduleCommand) -> ScheduleCategory | None: ...
 
 
 class ScheduleRevisionConflictError(RuntimeError):
@@ -52,6 +60,7 @@ class ScheduleRepositoryPort(Protocol):
         self,
         *,
         account_id: str,
+        category: ScheduleCategory | None = None,
         include_deleted: bool = False,
     ) -> tuple[ScheduleSnapshot, ...]: ...
 
@@ -61,6 +70,7 @@ class ScheduleRepositoryPort(Protocol):
         account_id: str,
         starts_at_or_after: datetime | None,
         starts_before: datetime | None,
+        category: ScheduleCategory | None = None,
         include_deleted: bool = False,
     ) -> tuple[ScheduleSnapshot, ...]: ...
 
@@ -69,6 +79,15 @@ class ScheduleRepositoryPort(Protocol):
         *,
         snapshot: ScheduleSnapshot,
         expected_revision: int,
+    ) -> ScheduleSnapshot | None: ...
+
+    def set_schedule_category_if_unclassified(
+        self,
+        *,
+        account_id: str,
+        schedule_id: str,
+        category: ScheduleCategory,
+        updated_at: datetime,
     ) -> ScheduleSnapshot | None: ...
 
     def confirm_reminder_disposition(
@@ -115,6 +134,7 @@ ScheduleUnitOfWorkFactory = Callable[[], ScheduleUnitOfWork]
 
 
 __all__ = [
+    "ScheduleCategoryClassifier",
     "ScheduleRepositoryPort",
     "ScheduleRevisionConflictError",
     "ScheduleUnitOfWork",

@@ -1,7 +1,9 @@
 """Agent-facing schedule service boundary and application implementation."""
 
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import NoReturn
@@ -30,6 +32,7 @@ from timeflow.business.calendar.contracts import (
     UpdateScheduleCommand,
 )
 from timeflow.business.calendar.ports import (
+    ScheduleCategoryClassifier,
     ScheduleRepositoryPort,
     ScheduleRevisionConflictError,
     ScheduleUnitOfWorkFactory,
@@ -43,6 +46,12 @@ from timeflow.business.calendar.recurrence import (
     normalize_recurrence_rule,
     parse_recurrence_rule,
     truncate_rule_before_occurrence,
+)
+
+logger = logging.getLogger(__name__)
+_CATEGORY_EXECUTOR = ThreadPoolExecutor(
+    max_workers=4,
+    thread_name_prefix="timeflow-schedule-category",
 )
 
 
@@ -131,10 +140,16 @@ class ScheduleApplicationService(ScheduleAgentService):
         self,
         unit_of_work_factory: ScheduleUnitOfWorkFactory,
         *,
+        category_classifier: ScheduleCategoryClassifier | None = None,
+        category_task_submitter: Callable[[Callable[[], None]], object] | None = None,
+        category_event_publisher: Callable[[str, str, ScheduleCategory], None] | None = None,
         clock: Callable[[], datetime] | None = None,
         id_factory: Callable[[], str] | None = None,
     ) -> None:
         self._unit_of_work_factory = unit_of_work_factory
+        self._category_classifier = category_classifier
+        self._category_task_submitter = category_task_submitter or _CATEGORY_EXECUTOR.submit
+        self._category_event_publisher = category_event_publisher
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_factory = id_factory or (lambda: uuid4().hex)
 
@@ -176,7 +191,75 @@ class ScheduleApplicationService(ScheduleAgentService):
         with self._unit_of_work_factory() as unit_of_work:
             persisted = unit_of_work.schedules.add_schedule(snapshot)
             unit_of_work.commit()
+        if self._category_classifier is not None:
+            try:
+                self._category_task_submitter(
+                    lambda: self._classify_and_persist_category(
+                        account_id=account_id,
+                        schedule_id=persisted.id,
+                        command=command,
+                    )
+                )
+            except Exception as exc:
+                logger.warning(
+                    "schedule category task could not be submitted; leaving category null",
+                    extra={"error_type": type(exc).__name__},
+                )
         return ScheduleMutationResult(schedules=(persisted,))
+
+    def _classify_and_persist_category(
+        self,
+        *,
+        account_id: str,
+        schedule_id: str,
+        command: CreateScheduleCommand,
+    ) -> None:
+        category = self._classify_category(command)
+        if category is None:
+            return
+        try:
+            with self._unit_of_work_factory() as unit_of_work:
+                persisted = unit_of_work.schedules.set_schedule_category_if_unclassified(
+                    account_id=account_id,
+                    schedule_id=schedule_id,
+                    category=category,
+                    updated_at=_aware_now(self._clock),
+                )
+                if persisted is not None:
+                    unit_of_work.commit()
+                    if self._category_event_publisher is not None:
+                        try:
+                            self._category_event_publisher(account_id, schedule_id, category)
+                        except Exception as exc:
+                            logger.warning(
+                                "schedule category event could not be published",
+                                extra={"error_type": type(exc).__name__},
+                            )
+        except Exception as exc:
+            logger.warning(
+                "schedule category result could not be persisted; leaving category null",
+                extra={"error_type": type(exc).__name__},
+            )
+
+    def _classify_category(self, command: CreateScheduleCommand) -> ScheduleCategory | None:
+        if self._category_classifier is None:
+            return None
+        try:
+            category = self._category_classifier.classify(command)
+        except Exception as exc:
+            logger.warning(
+                "schedule category classifier raised unexpectedly; leaving category null",
+                extra={"error_type": type(exc).__name__},
+            )
+            return None
+        if category is None:
+            return None
+        if not isinstance(category, ScheduleCategory):
+            logger.warning(
+                "schedule category classifier returned an invalid value; leaving category null"
+            )
+            return None
+        return category
 
     def find_schedules(
         self,
@@ -196,11 +279,13 @@ class ScheduleApplicationService(ScheduleAgentService):
                         account_id=account_id,
                         starts_at_or_after=query.starts_at_or_after,
                         starts_before=query.starts_before,
+                        category=query.category,
                         include_deleted=query.include_deleted,
                     )
                 else:
                     candidates = unit_of_work.schedules.list_schedules(
                         account_id=account_id,
+                        category=query.category,
                         include_deleted=query.include_deleted,
                     )
             else:
@@ -471,9 +556,15 @@ class ScheduleApplicationService(ScheduleAgentService):
 def _matches_static_query(schedule: ScheduleSnapshot, query: FindSchedulesQuery) -> bool:
     title = None if query.title is None else query.title.casefold()
     location = None if query.location_name is None else query.location_name.casefold()
-    return (title is None or title in schedule.title.casefold()) and (
-        location is None
-        or (schedule.location_name is not None and location in schedule.location_name.casefold())
+    return (
+        (query.category is None or schedule.category is query.category)
+        and (title is None or title in schedule.title.casefold())
+        and (
+            location is None
+            or (
+                schedule.location_name is not None and location in schedule.location_name.casefold()
+            )
+        )
     )
 
 
@@ -639,6 +730,12 @@ def _validate_query(query: FindSchedulesQuery) -> None:
             ScheduleErrorCode.VALIDATION_FAILED,
             "location_name must be non-empty when supplied.",
             field="location_name",
+        )
+    if query.category is not None and not isinstance(query.category, ScheduleCategory):
+        _raise_business_error(
+            ScheduleErrorCode.VALIDATION_FAILED,
+            "category has an unsupported value.",
+            field="category",
         )
     _validate_optional_datetime(query.starts_at_or_after, "starts_at_or_after")
     _validate_optional_datetime(query.starts_before, "starts_before")

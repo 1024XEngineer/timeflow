@@ -3,11 +3,7 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import Svg, { Path } from 'react-native-svg';
 
 import { colors, spacing } from '../../../shared/ui/theme';
-import type {
-  LocationScheduleView,
-  ScheduleCalendarReadService,
-  ScheduleOccurrenceView,
-} from '../application';
+import type { ScheduleCalendarReadService, ScheduleOccurrenceView } from '../application';
 import { LocationScheduleDetailSheet } from './LocationScheduleDetailSheet';
 import { LocationScheduleRow } from './LocationScheduleRow';
 import { MonthCalendar } from './MonthCalendar';
@@ -53,8 +49,13 @@ export function ScheduleCalendarScreen({
     refreshSignal,
     focusTarget,
   );
-  const [selectedOccurrence, setSelectedOccurrence] = useState<ScheduleOccurrenceView | null>(null);
-  const [selectedLocation, setSelectedLocation] = useState<LocationScheduleView | null>(null);
+  const [selectedOccurrenceKey, setSelectedOccurrenceKey] = useState<string | null>(null);
+  const [selectedLocationId, setSelectedLocationId] = useState<string | null>(null);
+  const selectedOccurrence =
+    calendar.selectedOccurrences.find((item) => occurrenceKey(item) === selectedOccurrenceKey) ??
+    null;
+  const selectedLocation =
+    calendar.locationSchedules.find((item) => item.scheduleId === selectedLocationId) ?? null;
   const selectedLabel = SELECTED_DATE_FORMATTER.format(calendar.selectedDate);
   const agendaTitle = formatAgendaSectionTitle(calendar.selectedDate);
   const emptyAgenda = emptyAgendaMessage(calendar.selectedDate);
@@ -155,7 +156,7 @@ export function ScheduleCalendarScreen({
                     item={item}
                     isLast={index === calendar.selectedOccurrences.length - 1}
                     key={`${item.scheduleId}-${item.occurrenceStart}`}
-                    onPress={() => setSelectedOccurrence(item)}
+                    onPress={() => setSelectedOccurrenceKey(occurrenceKey(item))}
                   />
                 ))
               )}
@@ -170,7 +171,7 @@ export function ScheduleCalendarScreen({
                     <LocationScheduleRow
                       item={item}
                       key={item.scheduleId}
-                      onPress={() => setSelectedLocation(item)}
+                      onPress={() => setSelectedLocationId(item.scheduleId)}
                     />
                   ))}
                 </View>
@@ -182,14 +183,18 @@ export function ScheduleCalendarScreen({
 
       <ScheduleOccurrenceDetailSheet
         occurrence={selectedOccurrence}
-        onClose={() => setSelectedOccurrence(null)}
+        onClose={() => setSelectedOccurrenceKey(null)}
       />
       <LocationScheduleDetailSheet
         schedule={selectedLocation}
-        onClose={() => setSelectedLocation(null)}
+        onClose={() => setSelectedLocationId(null)}
       />
     </View>
   );
+}
+
+function occurrenceKey(item: ScheduleOccurrenceView): string {
+  return `${item.scheduleId}\u0000${item.occurrenceStart ?? ''}`;
 }
 
 function LogoutIcon() {

@@ -1,6 +1,10 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
 import { createAppServices } from '../../../src/app/composition/createAppServices';
+import {
+  SqliteLocalScheduleReader,
+  SqliteReminderStateStore,
+} from '../../../src/features/reminder';
 import { FakeAuthSessionStore } from '../../fakes/FakeAuthSessionStore';
 
 describe('createAppServices', () => {
@@ -12,6 +16,7 @@ describe('createAppServices', () => {
       },
     });
     const stopReminder = jest.spyOn(services.reminder, 'stop');
+    const startTimeListener = jest.spyOn(services.reminderPorts.time, 'start');
     services.scheduleView.replace(
       { accountId: 'acc_001', selectedDate: '2026-08-12', timezone: 'Asia/Shanghai' },
       [],
@@ -22,6 +27,10 @@ describe('createAppServices', () => {
 
     expect(services.protectedClient).toBe(services.auth.protectedClient);
     expect(services.webSocketClient).toBe(services.auth.webSocketClient);
+    expect(services.reminderPorts.schedules).toBe(services.schedules);
+    expect(services.reminderPorts.state).toBe(services.reminderState);
+    expect(services.schedules).toBeInstanceOf(SqliteLocalScheduleReader);
+    expect(services.reminderState).toBeInstanceOf(SqliteReminderStateStore);
     expect(services.scheduleView.getSnapshot()).toEqual({
       accountId: null,
       occurrences: [],
@@ -29,6 +38,10 @@ describe('createAppServices', () => {
       timezone: null,
     });
     expect(stopReminder).toHaveBeenCalledTimes(1);
+    // reminder 是真的 LocalReminderApplication，不是 Mock：start() 应该真的调用
+    // 到 reminderPorts.time.start()，证明组合根接的是会消费这些端口的引擎，
+    // 不是一个 start()/handleTime() 全是空操作的桩。
+    expect(startTimeListener).toHaveBeenCalledTimes(1);
   });
 });
 

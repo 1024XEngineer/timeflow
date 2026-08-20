@@ -8,9 +8,11 @@ from dataclasses import dataclass
 
 from timeflow.intelligence.conversation.llm import ToolDefinition
 from timeflow.intelligence.location.contracts import (
+    ClientLocation,
     LocationCandidate,
     LocationConfigurationError,
     LocationConnectionError,
+    LocationError,
     LocationInputError,
     LocationProtocolError,
     LocationSearchContext,
@@ -134,10 +136,43 @@ def build_unavailable_location_search_tool() -> _UnavailableLocationSearchTool:
     return _UnavailableLocationSearchTool(location_search_definition())
 
 
+@dataclass(frozen=False, slots=True)
+class _LazyLocationSearchTool:
+    """Prepare the hidden search scope on first use and retry a failed prepare.
+
+    Mirroring Realtime Agent's ToolBox._location_search: a provider that was briefly
+    unreachable is retried on the next call rather than remembered, so an outage that
+    opened mid-session does not disable location_search for the rest of the call once
+    the provider recovers. Only a successful LocationSearchContext is cached.
+    """
+
+    definition: ToolDefinition
+    service: LocationSearchService
+    client_location: ClientLocation
+    context: LocationSearchContext | None = None
+
+    async def execute(self, arguments: Mapping[str, object]) -> str:
+        if self.context is None:
+            try:
+                self.context = await self.service.prepare(self.client_location)
+            except LocationError:
+                return PROVIDER_UNAVAILABLE_RESULT
+        return await build_location_search_tool(self.service, self.context).execute(arguments)
+
+
+def build_lazy_location_search_tool(
+    service: LocationSearchService,
+    client_location: ClientLocation,
+) -> _LazyLocationSearchTool:
+    """Return a location_search tool that prepares its scope lazily, retrying failures."""
+    return _LazyLocationSearchTool(location_search_definition(), service, client_location)
+
+
 __all__ = [
     "LOCATION_SEARCH",
     "PROVIDER_UNAVAILABLE_RESULT",
     "LocationSearchTool",
+    "build_lazy_location_search_tool",
     "build_location_search_tool",
     "build_unavailable_location_search_tool",
     "location_search_definition",

@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from itertools import count
 from types import TracebackType
+from typing import cast
 
 import pytest
 
@@ -22,6 +23,8 @@ from timeflow.business.calendar import (
     ReminderType,
     ScheduleApplicationService,
     ScheduleBusinessError,
+    ScheduleCategory,
+    ScheduleCategoryClassifier,
     ScheduleErrorCode,
     ScheduleKind,
     ScheduleOccurrenceOverrideSnapshot,
@@ -69,6 +72,7 @@ class _Repository:
         self,
         *,
         account_id: str,
+        category: ScheduleCategory | None = None,
         include_deleted: bool = False,
     ) -> tuple[ScheduleSnapshot, ...]:
         return tuple(
@@ -78,6 +82,7 @@ class _Repository:
                 key=lambda item: (item.start_time or item.created_at, item.id),
             )
             if snapshot.account_id == account_id
+            and (category is None or snapshot.category is category)
             and (include_deleted or snapshot.status is ScheduleStatus.ACTIVE)
         )
 
@@ -87,10 +92,12 @@ class _Repository:
         account_id: str,
         starts_at_or_after: datetime | None,
         starts_before: datetime | None,
+        category: ScheduleCategory | None = None,
         include_deleted: bool = False,
     ) -> tuple[ScheduleSnapshot, ...]:
         schedules = self.list_schedules(
             account_id=account_id,
+            category=category,
             include_deleted=include_deleted,
         )
         return tuple(
@@ -130,6 +137,26 @@ class _Repository:
             created_at=current.created_at,
         )
         self._store.schedules[persisted.id] = persisted
+        return persisted
+
+    def set_schedule_category_if_unclassified(
+        self,
+        *,
+        account_id: str,
+        schedule_id: str,
+        category: ScheduleCategory,
+        updated_at: datetime,
+    ) -> ScheduleSnapshot | None:
+        current = self._store.schedules.get(schedule_id)
+        if (
+            current is None
+            or current.account_id != account_id
+            or current.status is not ScheduleStatus.ACTIVE
+            or current.category is not None
+        ):
+            return None
+        persisted = replace(current, category=category, updated_at=updated_at)
+        self._store.schedules[schedule_id] = persisted
         return persisted
 
     def add_occurrence_override(
@@ -224,11 +251,17 @@ class _UnitOfWork:
 def _service(
     *,
     now: datetime = NOW,
+    category_classifier: ScheduleCategoryClassifier | None = None,
+    category_task_submitter: Callable[[Callable[[], None]], object] | None = None,
+    category_event_publisher: Callable[[str, str, ScheduleCategory], None] | None = None,
 ) -> tuple[ScheduleApplicationService, _Store]:
     store = _Store({}, {})
     sequence = count(1)
     service = ScheduleApplicationService(
         lambda: _UnitOfWork(store),
+        category_classifier=category_classifier,
+        category_task_submitter=category_task_submitter,
+        category_event_publisher=category_event_publisher,
         clock=lambda: now,
         id_factory=lambda: f"generated-{next(sequence)}",
     )
@@ -341,6 +374,260 @@ def test_create_schedule_returns_the_committed_cloud_snapshot() -> None:
     assert snapshot.updated_at == NOW
     assert snapshot.category is None
     assert store.schedules[snapshot.id] == snapshot
+
+
+class _FakeCategoryClassifier:
+    def __init__(
+        self, result: ScheduleCategory | None = None, error: Exception | None = None
+    ) -> None:
+        self.result = result
+        self.error = error
+        self.calls = 0
+
+    def classify(self, command: CreateScheduleCommand) -> ScheduleCategory | None:
+        self.calls += 1
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+def test_create_schedule_persists_the_classifier_result() -> None:
+    classifier = _FakeCategoryClassifier(ScheduleCategory.WORK)
+    service, store = _service(
+        category_classifier=classifier,
+        category_task_submitter=lambda task: task(),
+    )
+
+    snapshot = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert snapshot.category is None
+    assert store.schedules[snapshot.id].category is ScheduleCategory.WORK
+    assert classifier.calls == 1
+
+
+def test_create_schedule_publishes_category_event_after_background_commit() -> None:
+    events: list[tuple[str, str, ScheduleCategory]] = []
+    service, store = _service(
+        category_classifier=_FakeCategoryClassifier(ScheduleCategory.WORK),
+        category_task_submitter=lambda task: task(),
+        category_event_publisher=lambda account_id, schedule_id, category: events.append(
+            (account_id, schedule_id, category)
+        ),
+    )
+
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert store.schedules[created.id].category is ScheduleCategory.WORK
+    assert events == [("account-a", created.id, ScheduleCategory.WORK)]
+
+
+def test_create_schedule_does_not_publish_category_event_when_classification_fails() -> None:
+    events: list[tuple[str, str, ScheduleCategory]] = []
+    service, store = _service(
+        category_classifier=_FakeCategoryClassifier(),
+        category_task_submitter=lambda task: task(),
+        category_event_publisher=lambda account_id, schedule_id, category: events.append(
+            (account_id, schedule_id, category)
+        ),
+    )
+
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert store.schedules[created.id].category is None
+    assert events == []
+
+
+def test_category_helper_returns_none_without_a_classifier() -> None:
+    service, _ = _service()
+
+    assert service._classify_category(_time_command()) is None
+
+
+def test_invalid_classifier_value_keeps_category_null() -> None:
+    class InvalidCategoryClassifier:
+        def classify(self, _command: CreateScheduleCommand) -> ScheduleCategory | None:
+            return "unsupported"  # type: ignore[return-value]
+
+    service, store = _service(
+        category_classifier=InvalidCategoryClassifier(),
+        category_task_submitter=lambda task: task(),
+    )
+
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert created.category is None
+    assert store.schedules[created.id].category is None
+
+
+def test_category_event_publisher_failure_does_not_escape_background_task() -> None:
+    def publish(_account_id: str, _schedule_id: str, _category: ScheduleCategory) -> None:
+        raise RuntimeError("websocket unavailable")
+
+    service, store = _service(
+        category_classifier=_FakeCategoryClassifier(ScheduleCategory.WORK),
+        category_task_submitter=lambda task: task(),
+        category_event_publisher=publish,
+    )
+
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert store.schedules[created.id].category is ScheduleCategory.WORK
+
+
+def test_create_schedule_classifier_failure_keeps_creation_successful_and_category_null() -> None:
+    classifier = _FakeCategoryClassifier(error=TimeoutError("timed out"))
+    service, store = _service(
+        category_classifier=classifier,
+        category_task_submitter=lambda task: task(),
+    )
+
+    snapshot = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert snapshot.category is None
+    assert store.schedules[snapshot.id] == snapshot
+    assert classifier.calls == 1
+
+
+def test_recurring_schedule_is_classified_once_on_creation() -> None:
+    classifier = _FakeCategoryClassifier(ScheduleCategory.STUDY)
+    service, _ = _service(
+        category_classifier=classifier,
+        category_task_submitter=lambda task: task(),
+    )
+
+    snapshot = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(
+            schedule_kind=ScheduleKind.RECURRING,
+            recurrence_rule="FREQ=WEEKLY;BYDAY=WE",
+        ),
+    ).schedules[0]
+
+    assert snapshot.category is None
+    assert classifier.calls == 1
+
+
+def test_update_does_not_reclassify_an_existing_schedule() -> None:
+    classifier = _FakeCategoryClassifier(ScheduleCategory.WORK)
+    service, _ = _service(
+        category_classifier=classifier,
+        category_task_submitter=lambda task: task(),
+    )
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    updated = service.update_schedule(
+        account_id="account-a",
+        command=UpdateScheduleCommand(
+            schedule_id=created.id,
+            expected_revision=created.revision,
+            changes={"title": "修改后的标题"},
+        ),
+    ).schedules[0]
+
+    assert updated.category is ScheduleCategory.WORK
+    assert classifier.calls == 1
+
+
+def test_create_returns_before_background_classification_finishes() -> None:
+    classifier = _FakeCategoryClassifier(ScheduleCategory.WORK)
+    pending: list[Callable[[], None]] = []
+    service, store = _service(
+        category_classifier=classifier,
+        category_task_submitter=lambda task: pending.append(task),
+    )
+
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert created.category is None
+    assert store.schedules[created.id].category is None
+    assert classifier.calls == 0
+    assert len(pending) == 1
+
+    pending.pop()()
+
+    assert classifier.calls == 1
+    assert store.schedules[created.id].category is ScheduleCategory.WORK
+    assert store.schedules[created.id].revision == created.revision
+
+
+def test_deleted_schedule_ignores_a_late_background_classification() -> None:
+    events: list[tuple[str, str, ScheduleCategory]] = []
+    pending: list[Callable[[], None]] = []
+    service, store = _service(
+        category_classifier=_FakeCategoryClassifier(ScheduleCategory.WORK),
+        category_task_submitter=lambda task: pending.append(task),
+        category_event_publisher=lambda account_id, schedule_id, category: events.append(
+            (account_id, schedule_id, category)
+        ),
+    )
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+    deleted = service.delete_once_schedule(
+        account_id="account-a",
+        command=DeleteOnceScheduleCommand(
+            schedule_id=created.id,
+            expected_revision=created.revision,
+        ),
+    ).schedules[0]
+
+    pending.pop()()
+
+    assert store.schedules[created.id] == deleted
+    assert deleted.status is ScheduleStatus.DELETED
+    assert deleted.category is None
+    assert events == []
+
+
+def test_category_task_submission_failure_does_not_block_creation() -> None:
+    classifier = _FakeCategoryClassifier(ScheduleCategory.WORK)
+
+    def reject_task(_task: Callable[[], None]) -> object:
+        raise RuntimeError("executor unavailable")
+
+    service, store = _service(
+        category_classifier=classifier,
+        category_task_submitter=reject_task,
+    )
+
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert created.category is None
+    assert store.schedules[created.id] == created
+    assert classifier.calls == 0
+
+
+def test_background_category_persistence_failure_does_not_escape_to_creation() -> None:
+    store = _Store({}, {})
+    classifier = _FakeCategoryClassifier(ScheduleCategory.WORK)
+
+    class BrokenCategoryRepository(_Repository):
+        def set_schedule_category_if_unclassified(
+            self,
+            *,
+            account_id: str,
+            schedule_id: str,
+            category: ScheduleCategory,
+            updated_at: datetime,
+        ) -> ScheduleSnapshot | None:
+            raise RuntimeError("database unavailable")
+
+    class BrokenCategoryUnitOfWork(_UnitOfWork):
+        def __init__(self, committed: _Store) -> None:
+            super().__init__(committed)
+            self.schedules = BrokenCategoryRepository(self._working)
+
+    service = ScheduleApplicationService(
+        lambda: BrokenCategoryUnitOfWork(store),
+        category_classifier=classifier,
+        category_task_submitter=lambda task: task(),
+        clock=lambda: NOW,
+        id_factory=lambda: "generated-1",
+    )
+
+    created = service.create_schedule(account_id="account-a", command=_time_command()).schedules[0]
+
+    assert created.category is None
+    assert store.schedules[created.id].category is None
+    assert classifier.calls == 1
 
 
 def test_update_rejects_an_existing_snapshot_with_an_invalid_category() -> None:
@@ -786,12 +1073,83 @@ def test_find_schedules_filters_without_leaking_other_accounts_or_deleted_rows()
     assert with_deleted.schedules[0].status is ScheduleStatus.DELETED
 
 
+def test_find_schedules_filters_category_and_combines_it_with_a_time_window() -> None:
+    service, store = _service()
+    template = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(title="本周工作", start_time=datetime(2026, 8, 12, 7, tzinfo=UTC)),
+    ).schedules[0]
+    work_in_window = replace(template, category=ScheduleCategory.WORK)
+    work_outside_window = replace(
+        template,
+        id="work-outside-window",
+        title="下周工作",
+        start_time=datetime(2026, 8, 19, 7, tzinfo=UTC),
+        category=ScheduleCategory.WORK,
+    )
+    second_work_in_window = replace(
+        template,
+        id="second-work-in-window",
+        title="本周工作复盘",
+        start_time=datetime(2026, 8, 15, 7, tzinfo=UTC),
+        category=ScheduleCategory.WORK,
+    )
+    study_in_window = replace(
+        template,
+        id="study-in-window",
+        title="本周学习",
+        start_time=datetime(2026, 8, 13, 7, tzinfo=UTC),
+        category=ScheduleCategory.STUDY,
+    )
+    unclassified_in_window = replace(
+        template,
+        id="unclassified-in-window",
+        title="待分类",
+        start_time=datetime(2026, 8, 14, 7, tzinfo=UTC),
+        category=None,
+    )
+    store.schedules.update(
+        {
+            work_in_window.id: work_in_window,
+            work_outside_window.id: work_outside_window,
+            second_work_in_window.id: second_work_in_window,
+            study_in_window.id: study_in_window,
+            unclassified_in_window.id: unclassified_in_window,
+        }
+    )
+
+    work_matches = service.find_schedules(
+        account_id="account-a",
+        query=FindSchedulesQuery(
+            category=ScheduleCategory.WORK,
+            starts_at_or_after=datetime(2026, 8, 11, tzinfo=UTC),
+            starts_before=datetime(2026, 8, 18, tzinfo=UTC),
+        ),
+    )
+    all_matches = service.find_schedules(
+        account_id="account-a",
+        query=FindSchedulesQuery(
+            starts_at_or_after=datetime(2026, 8, 11, tzinfo=UTC),
+            starts_before=datetime(2026, 8, 18, tzinfo=UTC),
+        ),
+    )
+
+    assert work_matches.schedules == (work_in_window, second_work_in_window)
+    assert all_matches.schedules == (
+        work_in_window,
+        study_in_window,
+        unclassified_in_window,
+        second_work_in_window,
+    )
+
+
 @pytest.mark.parametrize(
     ("query", "field"),
     [
         (FindSchedulesQuery(schedule_id=" "), "schedule_id"),
         (FindSchedulesQuery(title=" "), "title"),
         (FindSchedulesQuery(location_name=" "), "location_name"),
+        (FindSchedulesQuery(category=cast(ScheduleCategory, "unsupported")), "category"),
         (FindSchedulesQuery(starts_at_or_after=datetime(2026, 8, 12)), "starts_at_or_after"),
         (
             FindSchedulesQuery(

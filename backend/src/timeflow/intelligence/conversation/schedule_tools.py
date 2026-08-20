@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
 from timeflow.business.calendar import (
     CreateScheduleCommand,
@@ -19,6 +20,7 @@ from timeflow.business.calendar import (
     ReminderType,
     ScheduleAgentService,
     ScheduleBusinessError,
+    ScheduleCategory,
     ScheduleKind,
     ScheduleMutationResult,
     ScheduleSearchResult,
@@ -36,17 +38,25 @@ from timeflow.intelligence.conversation.llm import ToolDefinition
 # two functions it actually calls locally, once both packages have finished initializing.
 if TYPE_CHECKING:
     from timeflow.intelligence.location import (
+        ClientLocation,
         LocationSearchContext,
         LocationSearchService,
         LocationSearchTool,
     )
-    from timeflow.intelligence.location.tools import _UnavailableLocationSearchTool
+    from timeflow.intelligence.location.tools import (
+        _LazyLocationSearchTool,
+        _UnavailableLocationSearchTool,
+    )
 
 _EnumT = TypeVar("_EnumT", bound=StrEnum)
 _MISSING = object()
 
 _DATETIME_SCHEMA = {"type": ["string", "null"], "format": "date-time"}
 _NULLABLE_STRING_SCHEMA = {"type": ["string", "null"]}
+_CATEGORY_SCHEMA = {
+    "type": ["string", "null"],
+    "enum": [*(category.value for category in ScheduleCategory), None],
+}
 _REMINDER_TYPE_SCHEMA = {
     "type": ["string", "null"],
     "enum": [
@@ -87,18 +97,57 @@ class ScheduleToolInputError(ValueError):
     """A schedule tool payload cannot be mapped to the business contract."""
 
 
+class ScheduleResultObserver(Protocol):
+    """Observe successful schedule mutations and queries."""
+
+    async def succeeded(
+        self,
+        operation: str,
+        result: ScheduleMutationResult | ScheduleSearchResult,
+    ) -> None:
+        """Report one successful tool result after the business service returns."""
+        ...
+
+
 @dataclass(frozen=True, slots=True)
 class _ScheduleTool:
     definition: ToolDefinition
     service: ScheduleAgentService
     account_id: str
+    observer: ScheduleResultObserver | None = None
 
     async def execute(self, arguments: Mapping[str, object]) -> str:
+        execution = asyncio.create_task(asyncio.to_thread(self._execute, arguments))
+        cancelled = False
         try:
-            result = self._execute(arguments)
+            result = await asyncio.shield(execution)
+        except asyncio.CancelledError:
+            cancelled = True
+            try:
+                result = await execution
+            except ScheduleBusinessError:
+                raise asyncio.CancelledError from None
         except ScheduleBusinessError as exc:
             return _business_error_json(exc)
+        except ScheduleToolInputError as exc:
+            return _refusal_json(str(exc))
+        await self._notify_observer(result)
+        if cancelled:
+            raise asyncio.CancelledError
         return _result_json(result)
+
+    async def _notify_observer(
+        self,
+        result: ScheduleMutationResult | ScheduleSearchResult,
+    ) -> None:
+        if self.observer is None:
+            return
+        observer_task = asyncio.create_task(self.observer.succeeded(self.definition.name, result))
+        try:
+            await asyncio.shield(observer_task)
+        except asyncio.CancelledError:
+            await observer_task
+            raise
 
     def _execute(
         self,
@@ -137,18 +186,28 @@ class _ScheduleTool:
 def build_schedule_tools(
     service: ScheduleAgentService,
     account_id: str,
+    observer: ScheduleResultObserver | None = None,
     *,
     location_service: LocationSearchService | None = None,
     location_context: LocationSearchContext | None = None,
-) -> tuple[_ScheduleTool | LocationSearchTool | _UnavailableLocationSearchTool, ...]:
+    client_location: ClientLocation | None = None,
+) -> tuple[
+    _ScheduleTool | LocationSearchTool | _LazyLocationSearchTool | _UnavailableLocationSearchTool,
+    ...,
+]:
     """Build schedule and location tools for an authenticated account.
 
-    location_service and location_context are either both given -- a real, prepared
-    search -- or both omitted, in which case location_search degrades to
-    provider_unavailable rather than being withheld from the schema. Realtime Agent's
-    ToolBox follows the identical rule; see its docstring for why.
+    location_search resolves in one of three ways, matching the Realtime Agent's
+    ToolBox:
+
+    * service + prepared context -- a real, ready search;
+    * service + client_location -- a search that prepares lazily and retries a
+      failed prepare on the next call;
+    * neither -- the unavailable stand-in, which reports provider_unavailable
+      rather than withholding the tool from the schema.
     """
     from timeflow.intelligence.location import (
+        build_lazy_location_search_tool,
         build_location_search_tool,
         build_unavailable_location_search_tool,
     )
@@ -156,16 +215,18 @@ def build_schedule_tools(
     if not account_id.strip():
         raise ValueError("account_id must be non-empty")
     definitions = schedule_tool_definitions()
-    location_tool = (
-        build_location_search_tool(location_service, location_context)
-        if location_service is not None and location_context is not None
-        else build_unavailable_location_search_tool()
-    )
+    location_tool: LocationSearchTool | _LazyLocationSearchTool | _UnavailableLocationSearchTool
+    if location_service is not None and location_context is not None:
+        location_tool = build_location_search_tool(location_service, location_context)
+    elif location_service is not None and client_location is not None:
+        location_tool = build_lazy_location_search_tool(location_service, client_location)
+    else:
+        location_tool = build_unavailable_location_search_tool()
     return (
-        _ScheduleTool(definitions[0], service, account_id),
-        _ScheduleTool(definitions[1], service, account_id),
-        _ScheduleTool(definitions[2], service, account_id),
-        _ScheduleTool(definitions[3], service, account_id),
+        _ScheduleTool(definitions[0], service, account_id, observer),
+        _ScheduleTool(definitions[1], service, account_id, observer),
+        _ScheduleTool(definitions[2], service, account_id, observer),
+        _ScheduleTool(definitions[3], service, account_id, observer),
         location_tool,
     )
 
@@ -182,10 +243,12 @@ def schedule_tool_definitions() -> tuple[ToolDefinition, ...]:
                     "schedule_type": {
                         "type": "string",
                         "enum": [ScheduleType.TIME.value, ScheduleType.LOCATION.value],
+                        "description": "用户提到具体地点用 location，否则用 time；不要为此反问用户",
                     },
                     "schedule_kind": {
                         "type": "string",
                         "enum": [ScheduleKind.ONCE.value, ScheduleKind.RECURRING.value],
+                        "description": "用户明确说要重复用 recurring，否则用 once；不要为此反问用户",
                     },
                     **_EDITABLE_PROPERTIES,
                 },
@@ -210,6 +273,7 @@ def schedule_tool_definitions() -> tuple[ToolDefinition, ...]:
                     "starts_at_or_after": _DATETIME_SCHEMA,
                     "starts_before": _DATETIME_SCHEMA,
                     "location_name": _NULLABLE_STRING_SCHEMA,
+                    "category": _CATEGORY_SCHEMA,
                     "include_deleted": {"type": "boolean"},
                 },
                 "additionalProperties": False,
@@ -236,7 +300,7 @@ def schedule_tool_definitions() -> tuple[ToolDefinition, ...]:
         ),
         ToolDefinition(
             "schedule_delete",
-            "Delete an identified schedule after confirmation; recurring schedules require scope.",
+            "Delete an identified schedule only after the user explicitly confirms; recurring schedules require scope.",
             {
                 "type": "object",
                 "properties": {
@@ -298,6 +362,7 @@ def map_find_schedules_query(arguments: Mapping[str, object]) -> FindSchedulesQu
         "starts_at_or_after",
         "starts_before",
         "location_name",
+        "category",
         "include_deleted",
     }
     _reject_unknown(arguments, allowed)
@@ -307,6 +372,7 @@ def map_find_schedules_query(arguments: Mapping[str, object]) -> FindSchedulesQu
         starts_at_or_after=_optional_datetime(arguments, "starts_at_or_after"),
         starts_before=_optional_datetime(arguments, "starts_before"),
         location_name=_optional_string(arguments, "location_name"),
+        category=_optional_enum(arguments, "category", ScheduleCategory),
         include_deleted=_optional_bool(arguments, "include_deleted", default=False),
     )
 
@@ -550,6 +616,16 @@ def _business_error_json(error: ScheduleBusinessError) -> str:
     )
 
 
+def _refusal_json(reason: str) -> str:
+    """Tell the model a tool payload was unusable so it can retry with valid input."""
+    return json.dumps(
+        {"status": "failed", "error": {"message": reason}},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def _json_value(value: object) -> object:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -563,6 +639,7 @@ def _json_value(value: object) -> object:
 
 
 __all__ = [
+    "ScheduleResultObserver",
     "ScheduleToolInputError",
     "build_schedule_tools",
     "map_create_schedule_command",

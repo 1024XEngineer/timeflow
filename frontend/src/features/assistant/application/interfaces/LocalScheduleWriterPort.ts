@@ -1,4 +1,5 @@
 import type { AppliedCommand } from '../../domain/ConversationTurn';
+import type { ScheduleCategory } from '../../../../contracts/schedule';
 
 /**
  * 把 voice.command.result 落地的日程写进本地存储，供日历读服务立刻看见。
@@ -7,4 +8,9 @@ import type { AppliedCommand } from '../../domain/ConversationTurn';
  */
 export interface LocalScheduleWriterPort {
   applyCommandResult(accountId: string, command: AppliedCommand): Promise<void>;
+  applyCategoryUpdate?(
+    accountId: string,
+    scheduleId: string,
+    category: ScheduleCategory,
+  ): Promise<boolean>;
 }

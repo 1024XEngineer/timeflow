@@ -84,6 +84,45 @@ def test_schedule_reads_are_account_scoped(session: Session) -> None:
     assert [snapshot.id for snapshot in account_schedules] == ["schedule-a"]
 
 
+def test_schedule_lists_and_time_candidates_filter_by_category(session: Session) -> None:
+    repository = ScheduleRepository(session)
+    lower = datetime(2026, 8, 17, tzinfo=UTC)
+    upper = datetime(2026, 8, 18, tzinfo=UTC)
+    for schedule in (
+        replace(
+            _schedule("work-inside", "account-a"),
+            start_time=lower,
+            category=ScheduleCategory.WORK,
+        ),
+        replace(
+            _schedule("work-outside", "account-a"),
+            start_time=upper,
+            category=ScheduleCategory.WORK,
+        ),
+        replace(
+            _schedule("study-inside", "account-a"),
+            start_time=lower,
+            category=ScheduleCategory.STUDY,
+        ),
+        replace(_schedule("unclassified-inside", "account-a"), start_time=lower),
+    ):
+        repository.add_schedule(schedule)
+
+    work_schedules = repository.list_schedules(
+        account_id="account-a",
+        category=ScheduleCategory.WORK,
+    )
+    work_candidates = repository.list_schedule_candidates(
+        account_id="account-a",
+        starts_at_or_after=lower,
+        starts_before=upper,
+        category=ScheduleCategory.WORK,
+    )
+
+    assert [schedule.id for schedule in work_schedules] == ["work-inside", "work-outside"]
+    assert [schedule.id for schedule in work_candidates] == ["work-inside"]
+
+
 def test_schedule_category_round_trips_through_the_repository(session: Session) -> None:
     repository = ScheduleRepository(session)
     schedule = replace(_schedule("schedule-a", "account-a"), category=ScheduleCategory.STUDY)
@@ -104,6 +143,45 @@ def test_unclassified_schedule_category_round_trips_as_null(session: Session) ->
     assert persisted.category is None
     assert loaded is not None
     assert loaded.category is None
+
+
+def test_background_category_write_does_not_increment_revision(session: Session) -> None:
+    repository = ScheduleRepository(session)
+    created = repository.add_schedule(_schedule("schedule-a", "account-a"))
+    classified_at = datetime.now(UTC)
+
+    classified = repository.set_schedule_category_if_unclassified(
+        account_id="account-a",
+        schedule_id=created.id,
+        category=ScheduleCategory.WORK,
+        updated_at=classified_at,
+    )
+
+    assert classified is not None
+    assert classified.category is ScheduleCategory.WORK
+    assert classified.revision == created.revision
+    assert classified.updated_at.replace(tzinfo=UTC) == classified_at
+
+
+def test_background_category_write_never_overwrites_an_existing_category(
+    session: Session,
+) -> None:
+    repository = ScheduleRepository(session)
+    created = repository.add_schedule(
+        replace(_schedule("schedule-a", "account-a"), category=ScheduleCategory.STUDY)
+    )
+
+    classified = repository.set_schedule_category_if_unclassified(
+        account_id="account-a",
+        schedule_id=created.id,
+        category=ScheduleCategory.WORK,
+        updated_at=datetime.now(UTC),
+    )
+
+    assert classified is None
+    loaded = repository.get_schedule(account_id="account-a", schedule_id=created.id)
+    assert loaded is not None
+    assert loaded.category is ScheduleCategory.STUDY
 
 
 def test_schedule_table_rejects_an_unknown_category(session: Session) -> None:

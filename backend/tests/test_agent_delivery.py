@@ -120,6 +120,30 @@ def test_deliver_session_end_sends_voice_session_end() -> None:
     asyncio.run(scenario())
 
 
+def test_publish_schedule_category_updated_sends_validated_event() -> None:
+    async def scenario() -> None:
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register(SESSION_ID, connection, "account-a")
+
+        WebSocketResultSink(connections).publish_schedule_category_updated(
+            "account-a",
+            "schedule-a",
+            "work",  # type: ignore[arg-type]
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert connection.frames == [
+            {
+                "type": "schedule.category.updated",
+                "payload": {"schedule_id": "schedule-a", "category": "work"},
+            }
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_deliver_result_sends_voice_command_result() -> None:
     """The command result goes out on its own, without needing a transcript first."""
 

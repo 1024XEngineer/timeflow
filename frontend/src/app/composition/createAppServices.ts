@@ -4,14 +4,14 @@ import type {
   ReminderApplicationDependencies,
   ReminderApplicationPort,
 } from '../../features/reminder/application/interfaces';
+import { LocalReminderApplication } from '../../features/reminder/application';
 import {
-  MockLocalScheduleReader,
-  MockReminderApplication,
-  MockReminderDispositionSync,
-  MockReminderStateStore,
+  LocalReminderDispositionSync,
+  SqliteLocalScheduleReader,
+  SqliteReminderStateStore,
 } from '../../features/reminder/data/local';
-import { MockAudioPlayback } from '../../infrastructure/audio';
-import { MockLocationMonitor } from '../../infrastructure/location';
+import { ExpoAudioPlayback } from '../../infrastructure/audio';
+import { ExpoLocationMonitor } from '../../infrastructure/location';
 import {
   MockPopup,
   MockReminderRecovery,
@@ -21,7 +21,7 @@ import {
   NativeAlarmScheduler,
   NativeDeviceCapability,
 } from '../../infrastructure/notifications';
-import { MockTimeListener } from '../../infrastructure/time';
+import { IntervalTimeListener } from '../../infrastructure/time';
 import { MockReminderPresenter } from '../../features/reminder/presentation';
 import { ScheduleViewStore } from '../../features/schedule/presentation';
 
@@ -31,7 +31,9 @@ export type AppServices = {
   runtime: AppRuntime;
   reminder: ReminderApplicationPort;
   reminderPorts: ReminderApplicationDependencies;
+  reminderState: SqliteReminderStateStore;
   scheduleView: ScheduleViewStore;
+  schedules: SqliteLocalScheduleReader;
   webSocketClient: AuthRuntime['webSocketClient'];
 };
 
@@ -42,23 +44,25 @@ export interface CreateAppServicesOptions {
 /** 应用唯一组合根：认证传输、功能服务、生命周期和账号内存清理在此接线。 */
 export function createAppServices(options: CreateAppServicesOptions = {}): AppServices {
   const auth = createAuthRuntime(options.auth);
+  const schedules = new SqliteLocalScheduleReader();
+  const reminderState = new SqliteReminderStateStore();
   const reminderPorts: ReminderApplicationDependencies = {
-    schedules: new MockLocalScheduleReader(),
-    time: new MockTimeListener(),
-    location: new MockLocationMonitor(),
+    schedules,
+    time: new IntervalTimeListener(),
+    location: new ExpoLocationMonitor(),
     alarms: new NativeAlarmScheduler(),
     delivery: new MockReminderDelivery(),
-    audio: new MockAudioPlayback(),
+    audio: new ExpoAudioPlayback(),
     device: new NativeDeviceCapability(),
     presenter: new MockReminderPresenter(),
     systemNotification: new MockSystemNotification(),
     popup: new MockPopup(),
     vibration: new MockVibration(),
     recovery: new MockReminderRecovery(),
-    state: new MockReminderStateStore(),
-    dispositionSync: new MockReminderDispositionSync(),
+    state: reminderState,
+    dispositionSync: new LocalReminderDispositionSync(),
   };
-  const reminder = new MockReminderApplication(reminderPorts);
+  const reminder = new LocalReminderApplication(reminderPorts);
   const scheduleView = new ScheduleViewStore();
   const runtime = new AppRuntime([
     {
@@ -76,7 +80,9 @@ export function createAppServices(options: CreateAppServicesOptions = {}): AppSe
     runtime,
     reminder,
     reminderPorts,
+    reminderState,
     scheduleView,
+    schedules,
     webSocketClient: auth.webSocketClient,
   };
 }

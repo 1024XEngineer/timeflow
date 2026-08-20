@@ -26,6 +26,7 @@ from timeflow.business.calendar import (
     ReminderType,
     ScheduleApplicationService,
     ScheduleBusinessError,
+    ScheduleCategory,
     ScheduleErrorCode,
     ScheduleKind,
     ScheduleOccurrenceOverrideSnapshot,
@@ -110,6 +111,25 @@ def test_postgres_repository_insert_and_update_return_final_revision(
     assert updated.created_at == inserted.created_at
 
 
+def test_postgres_background_category_write_preserves_business_revision(
+    postgres_session: Session,
+) -> None:
+    _seed_account(postgres_session, "account-a")
+    repository = ScheduleRepository(postgres_session)
+    inserted = repository.add_schedule(_schedule("schedule-a", "account-a", revision=5))
+
+    classified = repository.set_schedule_category_if_unclassified(
+        account_id="account-a",
+        schedule_id=inserted.id,
+        category=ScheduleCategory.WORK,
+        updated_at=datetime.now(UTC),
+    )
+
+    assert classified is not None
+    assert classified.category is ScheduleCategory.WORK
+    assert classified.revision == 5
+
+
 def test_postgres_repository_reports_conflict_and_preserves_account_isolation(
     postgres_session: Session,
 ) -> None:
@@ -170,6 +190,54 @@ def test_postgres_schedule_candidates_keep_old_recurring_series_and_bound_once_r
     )
 
     assert [schedule.id for schedule in candidates] == ["recurring-old", "once-inside"]
+
+
+def test_postgres_repository_combines_category_with_candidate_time_bounds(
+    postgres_session: Session,
+) -> None:
+    _seed_account(postgres_session, "account-a")
+    repository = ScheduleRepository(postgres_session)
+    lower = datetime(2026, 8, 17, tzinfo=UTC)
+    upper = datetime(2026, 8, 18, tzinfo=UTC)
+    rows = (
+        replace(
+            _schedule("work-inside", "account-a"),
+            start_time=lower,
+            category=ScheduleCategory.WORK,
+        ),
+        replace(
+            _schedule("work-outside", "account-a"),
+            start_time=upper,
+            category=ScheduleCategory.WORK,
+        ),
+        replace(
+            _schedule("study-inside", "account-a"),
+            start_time=lower,
+            category=ScheduleCategory.STUDY,
+        ),
+        replace(_schedule("unclassified-inside", "account-a"), start_time=lower, category=None),
+    )
+    for row in rows:
+        repository.add_schedule(row)
+
+    candidates = repository.list_schedule_candidates(
+        account_id="account-a",
+        starts_at_or_after=lower,
+        starts_before=upper,
+        category=ScheduleCategory.WORK,
+    )
+    all_categories = repository.list_schedule_candidates(
+        account_id="account-a",
+        starts_at_or_after=lower,
+        starts_before=upper,
+    )
+
+    assert [schedule.id for schedule in candidates] == ["work-inside"]
+    assert {schedule.id for schedule in all_categories} == {
+        "work-inside",
+        "study-inside",
+        "unclassified-inside",
+    }
 
 
 def test_postgres_repository_updates_one_unique_occurrence_override(

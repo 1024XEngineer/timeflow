@@ -10,7 +10,7 @@ import {
   normalizeDetailText,
   ScheduleDetailSheet,
 } from './ScheduleDetailSheet';
-import { dateKeyInTimezone, formatTime } from './scheduleDisplay';
+import { dateKeyInTimezone, formatTime, scheduleCategoryLabel } from './scheduleDisplay';
 
 export function ScheduleOccurrenceDetailSheet({
   occurrence,
@@ -41,6 +41,7 @@ export function ScheduleOccurrenceDetailSheet({
     detailOccurrence.occurrenceEnd,
     detailOccurrence.timezone,
   );
+  const categoryLabel = scheduleCategoryLabel(detailOccurrence.category);
 
   return (
     <ScheduleDetailSheet
@@ -89,6 +90,7 @@ export function ScheduleOccurrenceDetailSheet({
           </View>
         )}
       </View>
+      {categoryLabel ? <DetailSection icon="◈" label="分类" primary={categoryLabel} /> : null}
       {location ? <DetailSection icon="📍" label="地点" primary={location} /> : null}
       {reminder ? (
         <DetailSection
