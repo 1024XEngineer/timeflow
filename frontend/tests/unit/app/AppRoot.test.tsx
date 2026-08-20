@@ -216,7 +216,7 @@ describe('AppRoot', () => {
 
     render(<AppRoot services={services} />);
 
-    expect(await screen.findByText('登录或注册')).toBeTruthy();
+    expect(await screen.findByText('登录')).toBeTruthy();
     expect(screen.queryByText('日程同步失败')).toBeNull();
   });
 
