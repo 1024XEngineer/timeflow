@@ -14,6 +14,7 @@ from timeflow.business.calendar import (
     ReminderDispositionState,
     ReminderStrength,
     ReminderType,
+    ScheduleCategory,
     ScheduleKind,
     ScheduleSnapshotReader,
     ScheduleStatus,
@@ -43,6 +44,7 @@ class ScheduleHttpSnapshot(BaseModel):
     account_id: str = Field(min_length=1)
     schedule_type: ScheduleType
     schedule_kind: ScheduleKind
+    category: ScheduleCategory | None
     title: str = Field(min_length=1, max_length=255)
     is_all_day: bool
     start_time: AwareDatetime | None
