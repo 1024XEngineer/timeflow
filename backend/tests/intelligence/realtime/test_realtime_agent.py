@@ -495,8 +495,8 @@ def test_a_barge_in_after_the_reply_already_finished_sending_still_tells_the_cli
     back, so a reply can finish sending -- turn_completed() already settled it -- while
     the phone is still sounding it out. The session only calls interrupted() this late
     when its own playable-until estimate says that is still plausible, so the client
-    must still be told to stop even though this turn's own bookkeeping has nothing left
-    to name; there is no reply id left here to attach to it, hence the empty audio_id.
+    must still be told to stop even though this turn's current bookkeeping has already
+    been reset. The original audio id must be preserved so a newer reply is not stopped.
     """
 
     async def scenario() -> None:
@@ -515,7 +515,29 @@ def test_a_barge_in_after_the_reply_already_finished_sending_still_tells_the_cli
         )
 
         (canceled,) = [payload for kind, payload in sink.calls if kind == "canceled"]
-        assert canceled.audio_id == ""
+        (audio_reply,) = [payload for kind, payload in sink.calls if kind == "audio_start"]
+        assert canceled.audio_id == audio_reply.audio_id
+
+    asyncio.run(scenario())
+
+
+def test_a_barge_in_before_any_reply_started_sends_no_cancellation() -> None:
+    """interrupted() with nothing ever spoken has no audio id to preserve or send.
+
+    _last_audio_id is only set once audio() queues a first chunk; a barge-in that
+    lands before the model has said anything (or produced any audio) leaves it None,
+    and there is nothing playing on the phone for the client to stop.
+    """
+
+    async def scenario() -> None:
+        sink = RecordingSink()
+        session = ScriptedSession([("interrupted", ())])
+
+        await RealtimeAgent(ScriptedFactory(session), sink).handle_audio(
+            _open_mic(), _Stream(voice_mode="continuous")
+        )
+
+        assert [kind for kind, _ in sink.calls if kind == "canceled"] == []
 
     asyncio.run(scenario())
 

@@ -58,6 +58,8 @@ export class AssistantContinuousConversationService implements AssistantApplicat
   private streamId: string | null = null;
   /** 非 null 表示当前正处于 voice.tts.start 和 voice.tts.end/canceled 之间。 */
   private currentAudioId: string | null = null;
+  /** 最近被打断的音频 id；服务端会在 canceled 后补发同 id 的 tts.end。 */
+  private canceledAudioId: string | null = null;
   private streamStartedWaiter: ((conversationId: string) => void) | null = null;
   /** 跟 streamStartedWaiter 配对；传输层报错/连接掉线时用它让等待方结束，不然会永远卡住。 */
   private streamStartRejecter: ((error: Error) => void) | null = null;
@@ -90,6 +92,8 @@ export class AssistantContinuousConversationService implements AssistantApplicat
    * startStream() 内部有一个没人等的 await（配置原生播放器），如果紧跟着的
    * 第一块音频不排在它后面，可能在原生侧还没配置完时就到达。 */
   private playbackChain: Promise<void> = Promise.resolve();
+  /** 取消时递增，让已经排队但尚未执行的旧流操作失效。 */
+  private playbackGeneration = 0;
   /** Category events can arrive before the command result creates their local row. */
   private readonly pendingCategoryUpdates = new Map<string, ScheduleCategory>();
   private disposed = false;
@@ -258,7 +262,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     this.replyText = null;
     this.currentAudioId = null;
     this.notifyListeners();
-    await this.deps.playback.stop().catch(() => {});
+    await this.stopPlaybackImmediately();
   }
 
   /** 用户点圆圈暂停/恢复。暂停期间空闲计时器照常跑——忘记恢复也会兜底挂断。 */
@@ -402,6 +406,8 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         this.notifyListeners();
         return;
       case 'voice.tts.start':
+        this.playbackGeneration += 1;
+        this.canceledAudioId = null;
         this.currentAudioId = message.audio_id;
         this.setState({ conversationId: message.conversation_id, phase: 'speaking' });
         this.chainPlayback(() =>
@@ -412,7 +418,16 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         );
         return;
       case 'voice.tts.end':
+        // canceled 后服务端仍会补发同 id 的 tts.end；它不能收尾新流，也不能把
+        // interrupted 状态提前改回 listening。
+        if (
+          (this.canceledAudioId !== null && message.audio_id === this.canceledAudioId) ||
+          (this.currentAudioId !== null && message.audio_id !== this.currentAudioId)
+        ) {
+          return;
+        }
         this.currentAudioId = null;
+        this.canceledAudioId = null;
         this.chainPlayback(() => this.deps.playback.endStream());
         this.setState({ conversationId: message.conversation_id, phase: 'listening' });
         // 播报完成后给一个全新的窗口，对应"播报完成后进入短暂等待"——不用单独
@@ -420,10 +435,17 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         this.armIdleTimer();
         return;
       case 'voice.tts.canceled':
-        // 用户开口打断了正在播的回复：立刻丢掉播放端缓冲里还没放出来的音频，
-        // 而不是等 voice.tts.end（后面仍会补发，但语义已经不是"正常说完"）。
+        // 用户开口打断了正在播的回复：stop 必须绕过 playbackChain 立即执行，否则
+        // 已排队的 PCM 会先继续喂给原生播放器；旧队列随后由代次检查丢弃。
+        if (
+          this.currentAudioId !== null &&
+          (message.audio_id === '' || message.audio_id !== this.currentAudioId)
+        ) {
+          return;
+        }
+        this.canceledAudioId = message.audio_id || this.currentAudioId;
         this.currentAudioId = null;
-        this.chainPlayback(() => this.deps.playback.stop());
+        void this.stopPlaybackImmediately();
         this.setState({ conversationId: message.conversation_id, phase: 'interrupted' });
         return;
       case 'voice.session.end':
@@ -515,9 +537,25 @@ export class AssistantContinuousConversationService implements AssistantApplicat
   }
 
   /** 把一次对原生播放模块的调用接到 playbackChain 末尾，保证上一次真正执行完
-   * (不管成功与否)才轮到这一次。 */
+   * (不管成功与否)才轮到这一次；取消后旧代次的操作会被跳过。 */
   private chainPlayback(run: () => Promise<void>): void {
-    this.playbackChain = this.playbackChain.then(run).catch(() => {});
+    const generation = this.playbackGeneration;
+    this.playbackChain = this.playbackChain
+      .then(async () => {
+        if (generation !== this.playbackGeneration) {
+          return;
+        }
+        await run();
+      })
+      .catch(() => {});
+  }
+
+  /** 立即清空原生播放器，并把后续新操作排在 stop 完成之后。 */
+  private async stopPlaybackImmediately(): Promise<void> {
+    this.playbackGeneration += 1;
+    const stop = this.deps.playback.stop().catch(() => {});
+    this.playbackChain = stop;
+    await stop;
   }
 
   private handleClose(event: { code: number; reason: string }): void {

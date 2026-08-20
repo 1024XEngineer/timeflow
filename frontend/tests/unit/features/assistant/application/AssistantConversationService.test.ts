@@ -68,6 +68,9 @@ function createFakeConnection() {
   return {
     closeCalls,
     connection,
+    emitAudioFrame: (chunk: ArrayBuffer) => {
+      for (const handler of audioHandlers) handler(chunk);
+    },
     emitClose: (event: { code: number; reason: string }) => {
       for (const handler of closeHandlers) handler(event);
     },
@@ -168,6 +171,34 @@ describe('AssistantConversationService', () => {
 
     await expect(turn).resolves.toBeUndefined();
     expect(service.getState()).toEqual({ message: '连接已断开（1006）', phase: 'error' });
+  });
+
+  it('unsubscribes the old push-to-talk listeners after a mode-switch disconnect', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    await completeStreamStart(fake, service.startTurn());
+    // AuthenticatedWebSocketClient 切到 continuous 时会关掉当前这条 push_to_talk 连接。
+    fake.emitClose({ code: 1000, reason: '' });
+    expect(fake.unsubscribeCalls).toEqual({ audio: 1, close: 1, message: 1 });
+
+    // 新连接上的 TTS：旧服务不能再收到，否则会和连续对话服务重叠播放。
+    fake.emitMessage({
+      audio_id: 'audio_002',
+      conversation_id: 'conv_002',
+      payload: {
+        format: 'pcm_s16le',
+        purpose: 'reply',
+        sample_rate_hz: 24000,
+        speech_text: '',
+      },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    fake.emitAudioFrame(new ArrayBuffer(4));
+
+    expect(deps.playback.startStream).not.toHaveBeenCalled();
+    expect(deps.playback.pushChunk).not.toHaveBeenCalled();
   });
 
   it('endTurn does not hang waiting on a startTurn that never got voice.stream.started', async () => {
