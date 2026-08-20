@@ -1,3 +1,6 @@
+// 必须在根组件注册前加载，确保 TaskManager.defineTask 进入顶层作用域。
+import './src/infrastructure/location/geofenceTask';
+
 import { registerRootComponent } from 'expo';
 
 import App from './App';
