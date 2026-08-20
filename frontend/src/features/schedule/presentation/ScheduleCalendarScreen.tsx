@@ -9,6 +9,7 @@ import { LocationScheduleRow } from './LocationScheduleRow';
 import { MonthCalendar } from './MonthCalendar';
 import { ScheduleOccurrenceDetailSheet } from './ScheduleOccurrenceDetailSheet';
 import { ScheduleOccurrenceRow } from './ScheduleOccurrenceRow';
+import { emptyAgendaMessage, formatAgendaSectionTitle } from './scheduleDisplay';
 import { useScheduleCalendar } from './useScheduleCalendar';
 import type { CalendarFocusTarget } from './calendarFocus';
 
@@ -56,6 +57,8 @@ export function ScheduleCalendarScreen({
   const selectedLocation =
     calendar.locationSchedules.find((item) => item.scheduleId === selectedLocationId) ?? null;
   const selectedLabel = SELECTED_DATE_FORMATTER.format(calendar.selectedDate);
+  const agendaTitle = formatAgendaSectionTitle(calendar.selectedDate);
+  const emptyAgenda = emptyAgendaMessage(calendar.selectedDate);
   const displayUsername = username.trim() || '用户';
   const avatarInitial = Array.from(displayUsername)[0]?.toLocaleUpperCase() ?? '用';
 
@@ -69,7 +72,9 @@ export function ScheduleCalendarScreen({
         <View style={styles.content}>
           <View style={styles.header}>
             <View style={styles.headerTop}>
-              <Text style={styles.eyebrow}>我的日程</Text>
+              <Text numberOfLines={1} style={styles.title}>
+                {selectedLabel}
+              </Text>
               <View style={styles.accountActions} testID="schedule-account-actions">
                 <View accessibilityLabel={`当前用户 ${displayUsername}`} style={styles.userPill}>
                   <View style={styles.avatar}>
@@ -104,9 +109,6 @@ export function ScheduleCalendarScreen({
                 </Pressable>
               </View>
             </View>
-            <Text numberOfLines={1} style={styles.title}>
-              {selectedLabel}
-            </Text>
           </View>
 
           <MonthCalendar
@@ -137,22 +139,22 @@ export function ScheduleCalendarScreen({
           {!calendar.loading && !calendar.error ? (
             <View style={styles.agenda}>
               <View style={styles.sectionHeader}>
-                <View>
-                  <Text style={styles.sectionEyebrow}>当日安排</Text>
-                  <Text style={styles.sectionTitle}>日程</Text>
-                </View>
+                <Text style={styles.sectionTitle}>{agendaTitle}</Text>
                 <Text style={styles.sectionCount}>{calendar.selectedOccurrences.length} 项</Text>
               </View>
 
               {calendar.selectedOccurrences.length === 0 ? (
                 <View style={styles.empty}>
-                  <Text style={styles.emptyTitle}>这一天暂时没有日程</Text>
-                  <Text style={styles.emptyCopy}>留一点时间给自己，或用语音助手添加安排。</Text>
+                  <Text style={styles.emptyTitle}>{emptyAgenda.title}</Text>
+                  {emptyAgenda.detail ? (
+                    <Text style={styles.emptyCopy}>{emptyAgenda.detail}</Text>
+                  ) : null}
                 </View>
               ) : (
-                calendar.selectedOccurrences.map((item) => (
+                calendar.selectedOccurrences.map((item, index) => (
                   <ScheduleOccurrenceRow
                     item={item}
+                    isLast={index === calendar.selectedOccurrences.length - 1}
                     key={`${item.scheduleId}-${item.occurrenceStart}`}
                     onPress={() => setSelectedOccurrenceKey(occurrenceKey(item))}
                   />
@@ -162,10 +164,7 @@ export function ScheduleCalendarScreen({
               {calendar.locationSchedules.length > 0 ? (
                 <View style={styles.locationSection}>
                   <View style={styles.sectionHeader}>
-                    <View>
-                      <Text style={styles.sectionEyebrow}>位置触发</Text>
-                      <Text style={styles.sectionTitle}>地点提醒</Text>
-                    </View>
+                    <Text style={styles.sectionTitle}>地点提醒</Text>
                     <Text style={styles.sectionCount}>{calendar.locationSchedules.length} 项</Text>
                   </View>
                   {calendar.locationSchedules.map((item) => (
@@ -215,11 +214,11 @@ function LogoutIcon() {
 const styles = StyleSheet.create({
   accountActions: {
     alignItems: 'center',
-    flex: 1,
     flexDirection: 'row',
+    flexShrink: 1,
     gap: spacing.sm,
     justifyContent: 'flex-end',
-    marginLeft: spacing.sm,
+    marginLeft: 'auto',
     maxWidth: 240,
     minWidth: 0,
   },
@@ -265,7 +264,6 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { color: colors.text, fontSize: 15, fontWeight: '700' },
   error: { color: colors.error, fontSize: 15, textAlign: 'center' },
-  eyebrow: { color: colors.mutedText, fontSize: 13, fontWeight: '700' },
   header: {
     paddingBottom: spacing.lg,
     paddingHorizontal: spacing.lg,
@@ -276,6 +274,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     minWidth: 0,
+    width: '100%',
   },
   locationSection: {
     borderTopColor: colors.border,
@@ -293,7 +292,6 @@ const styles = StyleSheet.create({
   screen: { backgroundColor: colors.background, flex: 1 },
   scrollContent: { paddingBottom: spacing.lg },
   sectionCount: { color: colors.mutedText, fontSize: 12, fontWeight: '600' },
-  sectionEyebrow: { color: colors.mutedText, fontSize: 12, fontWeight: '600', marginBottom: 3 },
   sectionHeader: {
     alignItems: 'flex-end',
     flexDirection: 'row',
@@ -314,7 +312,14 @@ const styles = StyleSheet.create({
   },
   signOutButtonPressed: { opacity: 0.62 },
   stateText: { color: colors.mutedText },
-  title: { color: colors.text, fontSize: 28, fontWeight: '800', lineHeight: 34, marginTop: 4 },
+  title: {
+    color: colors.text,
+    flex: 1,
+    fontSize: 28,
+    fontWeight: '800',
+    lineHeight: 34,
+    minWidth: 0,
+  },
   userPill: {
     alignItems: 'center',
     backgroundColor: colors.surface,

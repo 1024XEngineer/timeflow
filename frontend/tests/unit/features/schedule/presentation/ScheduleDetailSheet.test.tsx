@@ -45,8 +45,9 @@ describe('schedule detail sheets', () => {
 
     expect(screen.getByText(timedOccurrence.title)).toBeTruthy();
     expect(screen.getByText('工作')).toBeTruthy();
-    expect(screen.getByText('时间日程')).toBeTruthy();
-    expect(screen.getByText('周期日程')).toBeTruthy();
+    expect(screen.getByText('分类')).toBeTruthy();
+    expect(screen.queryByText('时间日程')).toBeNull();
+    expect(screen.queryByText('周期日程')).toBeNull();
     expect(screen.getByText('2026年8月13日')).toBeTruthy();
     expect(screen.getByText('星期四')).toBeTruthy();
     expect(screen.getByText('09:30')).toBeTruthy();
@@ -63,8 +64,8 @@ describe('schedule detail sheets', () => {
     render(<ScheduleOccurrenceDetailSheet occurrence={allDayOccurrence} onClose={() => {}} />);
 
     expect(screen.getByText('2026年8月17日')).toBeTruthy();
-    expect(screen.getByText('一次性')).toBeTruthy();
-    expect(screen.getAllByText('全天')).toHaveLength(2);
+    expect(screen.queryByText('一次性')).toBeNull();
+    expect(screen.getByText('全天')).toBeTruthy();
     expect(screen.queryByText('地点')).toBeNull();
     expect(screen.queryByText('提醒')).toBeNull();
     expect(screen.queryByText('工作')).toBeNull();
@@ -115,8 +116,10 @@ describe('schedule detail sheets', () => {
     };
     render(<LocationScheduleDetailSheet onClose={onClose} schedule={schedule} />);
 
-    expect(screen.getByText('地点日程')).toBeTruthy();
+    expect(screen.getByText('地点触发日程')).toBeTruthy();
     expect(screen.getByText('学习')).toBeTruthy();
+    expect(screen.getByText('分类')).toBeTruthy();
+    expect(screen.queryByText('地点日程')).toBeNull();
     expect(screen.queryByText('未命名地点')).toBeNull();
     expect(screen.queryByText('未配置')).toBeNull();
     expect(screen.queryByText('地点')).toBeNull();

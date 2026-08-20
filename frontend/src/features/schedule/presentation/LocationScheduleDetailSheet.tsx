@@ -34,12 +34,8 @@ export function LocationScheduleDetailSheet({
   const categoryLabel = scheduleCategoryLabel(detailSchedule.category);
 
   return (
-    <ScheduleDetailSheet
-      badges={[...(categoryLabel ? [categoryLabel] : []), '地点日程']}
-      onClose={onClose}
-      title={detailSchedule.title}
-      visible={schedule !== null}
-    >
+    <ScheduleDetailSheet onClose={onClose} title={detailSchedule.title} visible={schedule !== null}>
+      {categoryLabel ? <DetailSection icon="◈" label="分类" primary={categoryLabel} /> : null}
       {location ? <DetailSection icon="📍" label="地点" primary={location} /> : null}
       {reminder ? (
         <DetailSection

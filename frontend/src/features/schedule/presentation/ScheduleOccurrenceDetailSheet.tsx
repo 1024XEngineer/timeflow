@@ -42,16 +42,9 @@ export function ScheduleOccurrenceDetailSheet({
     detailOccurrence.timezone,
   );
   const categoryLabel = scheduleCategoryLabel(detailOccurrence.category);
-  const badges = [
-    ...(categoryLabel ? [categoryLabel] : []),
-    detailOccurrence.scheduleCategory === 'time' ? '时间日程' : '地点日程',
-    detailOccurrence.recurrenceMode === 'recurring' ? '周期日程' : '一次性',
-    ...(detailOccurrence.isAllDay ? ['全天'] : []),
-  ];
 
   return (
     <ScheduleDetailSheet
-      badges={badges}
       onClose={onClose}
       title={detailOccurrence.title}
       visible={occurrence !== null}
@@ -97,6 +90,7 @@ export function ScheduleOccurrenceDetailSheet({
           </View>
         )}
       </View>
+      {categoryLabel ? <DetailSection icon="◈" label="分类" primary={categoryLabel} /> : null}
       {location ? <DetailSection icon="📍" label="地点" primary={location} /> : null}
       {reminder ? (
         <DetailSection
@@ -190,9 +184,18 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     height: 30,
     justifyContent: 'center',
+    overflow: 'hidden',
     width: 30,
   },
-  timeIconText: { color: colors.text, fontSize: 17, fontWeight: '700' },
+  timeIconText: {
+    color: colors.text,
+    fontSize: 17,
+    height: 17,
+    includeFontPadding: false,
+    lineHeight: 17,
+    textAlign: 'center',
+    textAlignVertical: 'center',
+  },
   timeLabel: { color: colors.mutedText, fontSize: 12, fontWeight: '700' },
   timePoint: { flex: 1, minWidth: 96 },
   timePointDate: { color: colors.mutedText, fontSize: 13, fontWeight: '600', marginTop: 5 },

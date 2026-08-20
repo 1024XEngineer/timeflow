@@ -24,6 +24,29 @@ export function dateKey(date: Date): string {
   ).padStart(2, '0')}`;
 }
 
+export function formatAgendaSectionTitle(selectedDate: Date, today: Date = new Date()): string {
+  if (dateKey(selectedDate) === dateKey(today)) {
+    return '今日安排';
+  }
+  return `${selectedDate.getMonth() + 1}月${selectedDate.getDate()}日的安排`;
+}
+
+export function emptyAgendaMessage(
+  selectedDate: Date,
+  today: Date = new Date(),
+): {
+  title: string;
+  detail: string | null;
+} {
+  if (dateKey(selectedDate) < dateKey(today)) {
+    return { title: '这一天是属于你的', detail: null };
+  }
+  return {
+    title: '这一天暂时没有日程',
+    detail: '留一点时间给自己，或用语音助手添加安排。',
+  };
+}
+
 export function dateKeyInTimezone(instant: string, timezone: string): string | null {
   const date = new Date(instant);
   if (Number.isNaN(date.getTime())) return null;

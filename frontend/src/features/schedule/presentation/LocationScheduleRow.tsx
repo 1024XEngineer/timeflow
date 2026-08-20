@@ -2,8 +2,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 
 import type { LocationScheduleView } from '../application';
-import { colors, spacing } from '../../../shared/ui/theme';
-import { scheduleCategoryLabel } from './scheduleDisplay';
+import { colors } from '../../../shared/ui/theme';
 
 export function LocationScheduleRow({
   item,
@@ -13,7 +12,6 @@ export function LocationScheduleRow({
   onPress?: () => void;
 }) {
   const locationLabel = item.locationName ?? '地点触发';
-  const categoryLabel = scheduleCategoryLabel(item.category);
   return (
     <Pressable
       accessibilityRole={onPress ? 'button' : undefined}
@@ -25,16 +23,6 @@ export function LocationScheduleRow({
         <LocationPinIcon />
       </View>
       <View style={styles.copy}>
-        <View style={styles.badges}>
-          {categoryLabel ? (
-            <View style={[styles.badge, styles.categoryBadge]}>
-              <Text style={styles.categoryBadgeText}>{categoryLabel}</Text>
-            </View>
-          ) : null}
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>位置日程</Text>
-          </View>
-        </View>
         <Text style={styles.title} numberOfLines={2}>
           {item.title}
         </Text>
@@ -62,18 +50,7 @@ function LocationPinIcon() {
 }
 
 const styles = StyleSheet.create({
-  badge: {
-    alignSelf: 'flex-start',
-    backgroundColor: colors.accent,
-    borderRadius: 999,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-  },
-  badgeText: { color: colors.text, fontSize: 11, fontWeight: '700' },
-  badges: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
-  categoryBadge: { backgroundColor: colors.input },
-  categoryBadgeText: { color: colors.mutedText, fontSize: 11, fontWeight: '700' },
-  copy: { flex: 1, gap: 6, minWidth: 0 },
+  copy: { flex: 1, gap: 4, minWidth: 0 },
   iconWrap: {
     alignItems: 'center',
     backgroundColor: colors.accent,
