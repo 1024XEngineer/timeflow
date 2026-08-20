@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 
@@ -447,6 +449,60 @@ async def test_registry_calls_service_with_injected_account_and_serializes_snaps
 
 
 @pytest.mark.asyncio
+async def test_schedule_service_runs_off_the_event_loop() -> None:
+    service = FakeScheduleService()
+    caller_thread = threading.get_ident()
+    service_thread: int | None = None
+    original = service.create_schedule
+
+    def create_schedule(**kwargs: object) -> ScheduleMutationResult:
+        nonlocal service_thread
+        service_thread = threading.get_ident()
+        return original(**kwargs)  # type: ignore[arg-type]
+
+    service.create_schedule = create_schedule  # type: ignore[method-assign]
+    tool = build_agent_tool_registry(service, "account-1").get("schedule_create")
+
+    await tool.execute(create_arguments())
+
+    assert service_thread is not None
+    assert service_thread != caller_thread
+
+
+@pytest.mark.asyncio
+async def test_canceled_schedule_call_still_notifies_committed_result() -> None:
+    started = threading.Event()
+    release = threading.Event()
+    notified = asyncio.Event()
+    service = FakeScheduleService()
+    original = service.create_schedule
+
+    def create_schedule(**kwargs: object) -> ScheduleMutationResult:
+        started.set()
+        release.wait(timeout=2)
+        return original(**kwargs)  # type: ignore[arg-type]
+
+    class Observer:
+        async def succeeded(self, operation: str, result: object) -> None:
+            assert operation == "schedule_create"
+            assert isinstance(result, ScheduleMutationResult)
+            notified.set()
+
+    service.create_schedule = create_schedule  # type: ignore[method-assign]
+    tool = build_agent_tool_registry(service, "account-1", Observer()).get("schedule_create")
+    task = asyncio.create_task(tool.execute(create_arguments()))
+    assert await asyncio.to_thread(started.wait, 2)
+
+    task.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert notified.is_set()
+    assert [call for call, _, _ in service.calls] == ["create"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("tool_name", "arguments", "expected_operation", "command_type"),
     [
@@ -623,7 +679,20 @@ async def test_a_tool_whose_arguments_do_not_map_reports_the_reason() -> None:
     service = FakeScheduleService()
     tool = build_agent_tool_registry(service, "account-1").get("schedule_update")
 
-    with pytest.raises(ScheduleToolInputError):
-        await tool.execute({"schedule_id": "schedule-1", "expected_revision": 1})
+    result = json.loads(await tool.execute({"schedule_id": "schedule-1", "expected_revision": 1}))
 
+    assert result["status"] == "failed"
+    assert "changes" in result["error"]["message"]
+    assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_query_with_unknown_field_returns_refusal_not_error() -> None:
+    service = FakeScheduleService()
+    tool = build_agent_tool_registry(service, "account-1").get("schedule_query")
+
+    result = json.loads(await tool.execute({"recurrence_rule": "FREQ=WEEKLY"}))
+
+    assert result["status"] == "failed"
+    assert "recurrence_rule" in result["error"]["message"]
     assert service.calls == []
