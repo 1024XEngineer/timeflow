@@ -36,6 +36,8 @@ interface ScheduleCalendarScreenProps {
   username: string;
   onSignOut: () => void | Promise<void>;
   isSigningOut?: boolean;
+  /** 打开权限列表页（不带具体权限，用户随时可以回去看全部状态）。 */
+  onOpenPermissions: () => void;
   /** 外部触发刷新用（比如语音写完一条日程）；变化即重取，不用管具体数值。 */
   refreshSignal?: number;
   focusTarget?: CalendarFocusTarget | null;
@@ -48,6 +50,7 @@ export function ScheduleCalendarScreen({
   username,
   onSignOut,
   isSigningOut = false,
+  onOpenPermissions,
   refreshSignal,
   focusTarget,
 }: ScheduleCalendarScreenProps) {
@@ -108,6 +111,18 @@ export function ScheduleCalendarScreen({
                     {displayUsername}
                   </Text>
                 </View>
+                <Pressable
+                  accessibilityLabel="权限设置"
+                  accessibilityRole="button"
+                  hitSlop={6}
+                  onPress={onOpenPermissions}
+                  style={({ pressed }) => [
+                    styles.permissionsButton,
+                    pressed && styles.permissionsButtonPressed,
+                  ]}
+                >
+                  <Text style={styles.permissionsButtonText}>权限</Text>
+                </Pressable>
                 <Pressable
                   accessibilityLabel="退出登录"
                   accessibilityRole="button"
@@ -238,7 +253,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     justifyContent: 'flex-end',
     marginLeft: 'auto',
-    maxWidth: 240,
+    maxWidth: 280,
     minWidth: 0,
   },
   agenda: { paddingHorizontal: spacing.md, paddingTop: spacing.xl },
@@ -301,6 +316,19 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
     paddingTop: spacing.lg,
   },
+  permissionsButton: {
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: 18,
+    borderWidth: 1,
+    flexShrink: 0,
+    height: 36,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  permissionsButtonPressed: { opacity: 0.62 },
+  permissionsButtonText: { color: colors.text, fontSize: 12, fontWeight: '700' },
   retry: {
     backgroundColor: colors.text,
     borderRadius: 12,

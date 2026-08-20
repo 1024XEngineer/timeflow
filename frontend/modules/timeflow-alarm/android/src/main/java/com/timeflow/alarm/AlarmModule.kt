@@ -178,6 +178,21 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
       }
       status.putBoolean("battery", battery)
 
+      val manufacturer = OemPermissionHelper.detectManufacturer()
+      status.putString("manufacturer", manufacturer)
+      status.putBoolean(
+        "oemAutostartGuided",
+        OemPermissionHelper.isGuided(reactContext, OemPermissionHelper.KIND_AUTOSTART),
+      )
+      status.putBoolean(
+        "oemBackgroundPopupGuided",
+        OemPermissionHelper.isGuided(reactContext, OemPermissionHelper.KIND_BACKGROUND_POPUP),
+      )
+      status.putBoolean(
+        "oemLastOverlayFailed",
+        OemPermissionHelper.wasLastOverlayFailure(reactContext),
+      )
+
       promise.resolve(status)
     } catch (error: Exception) {
       promise.reject("PERMISSION_STATUS_FAILED", error.message, error)
@@ -186,6 +201,10 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
 
   @ReactMethod
   fun openPermissionSettings(kind: String?, promise: Promise) {
+    if (kind == OemPermissionHelper.KIND_AUTOSTART || kind == OemPermissionHelper.KIND_BACKGROUND_POPUP) {
+      openOemSettings(kind, promise)
+      return
+    }
     try {
       val pkg = Uri.parse("package:${reactContext.packageName}")
       val intent = when (kind) {
@@ -201,6 +220,37 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
       }
       intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
       reactContext.startActivity(intent)
+      promise.resolve(true)
+    } catch (error: Exception) {
+      promise.reject("OPEN_SETTINGS_FAILED", error.message, error)
+    }
+  }
+
+  /**
+   * 自启动/后台弹出界面没有标准 Settings.ACTION_*，组件名是社区经验值，覆盖不到的
+   * 机型/版本（Intent 拼不出来，或 startActivity 解析不到）一律退回应用详情页——
+   * 但两种情况都算"带用户去看过了"，照样 markGuided，不是真的成功/失败信号。
+   */
+  private fun openOemSettings(kind: String, promise: Promise) {
+    try {
+      val pkg = Uri.parse("package:${reactContext.packageName}")
+      val fallbackIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      val manufacturer = OemPermissionHelper.detectManufacturer()
+      val oemIntent = OemPermissionHelper.buildOemSettingsIntent(reactContext, manufacturer, kind)
+      if (oemIntent != null) {
+        oemIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+          reactContext.startActivity(oemIntent)
+          OemPermissionHelper.markGuided(reactContext, kind)
+          promise.resolve(true)
+          return
+        } catch (error: Exception) {
+          Log.w(NAME, "OEM settings intent failed for kind=$kind manufacturer=$manufacturer, falling back", error)
+        }
+      }
+      reactContext.startActivity(fallbackIntent)
+      OemPermissionHelper.markGuided(reactContext, kind)
       promise.resolve(true)
     } catch (error: Exception) {
       promise.reject("OPEN_SETTINGS_FAILED", error.message, error)

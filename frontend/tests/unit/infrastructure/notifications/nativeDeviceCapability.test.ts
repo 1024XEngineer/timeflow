@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
-import { AppState, Linking, Platform } from 'react-native';
+import { AppState, Linking, PermissionsAndroid, Platform } from 'react-native';
 
 import { NativeDeviceCapability } from '../../../../src/infrastructure/notifications/NativeDeviceCapability';
 import {
@@ -88,6 +88,12 @@ describe('NativeDeviceCapability', () => {
         location_foreground: false,
         location_background: false,
       },
+      oemGuidance: {
+        manufacturer: null,
+        autostartGuided: false,
+        backgroundPopupGuided: false,
+        lastOverlayFailed: false,
+      },
     });
     expect(getStatus).not.toHaveBeenCalled();
   });
@@ -108,6 +114,10 @@ describe('NativeDeviceCapability', () => {
       fullScreen: true,
       notifications: true,
       battery: true,
+      manufacturer: null,
+      oemAutostartGuided: false,
+      oemBackgroundPopupGuided: false,
+      oemLastOverlayFailed: false,
     });
     const device = newDevice();
     await expect(device.getStatus()).resolves.toEqual({
@@ -122,6 +132,13 @@ describe('NativeDeviceCapability', () => {
         battery_optimization: true,
         location_foreground: false,
         location_background: false,
+        microphone: false,
+      },
+      oemGuidance: {
+        manufacturer: null,
+        autostartGuided: false,
+        backgroundPopupGuided: false,
+        lastOverlayFailed: false,
       },
     });
   });
@@ -146,6 +163,10 @@ describe('NativeDeviceCapability', () => {
       fullScreen: true,
       notifications: true,
       battery: true,
+      manufacturer: null,
+      oemAutostartGuided: false,
+      oemBackgroundPopupGuided: false,
+      oemLastOverlayFailed: false,
     });
     const device = newDevice();
     await expect(device.getStatus()).resolves.toMatchObject({
@@ -164,6 +185,10 @@ describe('NativeDeviceCapability', () => {
       fullScreen: true,
       notifications: true,
       battery: true,
+      manufacturer: null,
+      oemAutostartGuided: false,
+      oemBackgroundPopupGuided: false,
+      oemLastOverlayFailed: false,
     });
     const device = newDevice();
     await expect(device.getStatus()).resolves.toMatchObject({
@@ -182,6 +207,10 @@ describe('NativeDeviceCapability', () => {
       fullScreen: true,
       notifications: true,
       battery: true,
+      manufacturer: null,
+      oemAutostartGuided: false,
+      oemBackgroundPopupGuided: false,
+      oemLastOverlayFailed: false,
     });
     await expect(device.getStatus()).resolves.toMatchObject({
       permissions: {
@@ -348,6 +377,150 @@ describe('NativeDeviceCapability', () => {
       getForeground.mockResolvedValue(denied(false));
       const device = newDevice();
       await expect(device.openSettings('location_foreground')).resolves.toBe(false);
+    });
+  });
+
+  describe('microphone permission', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('getStatus reports the microphone flag read from PermissionsAndroid.check', async () => {
+      jest.spyOn(PermissionsAndroid, 'check').mockResolvedValue(true);
+      getStatus.mockResolvedValue({
+        exactAlarm: true,
+        overlay: true,
+        fullScreen: true,
+        notifications: true,
+        battery: true,
+        manufacturer: null,
+        oemAutostartGuided: false,
+        oemBackgroundPopupGuided: false,
+        oemLastOverlayFailed: false,
+      });
+      const device = newDevice();
+      await expect(device.getStatus()).resolves.toMatchObject({
+        permissions: { microphone: true },
+      });
+    });
+
+    it('getStatus fails closed when PermissionsAndroid.check throws', async () => {
+      jest.spyOn(PermissionsAndroid, 'check').mockRejectedValue(new Error('boom'));
+      getStatus.mockResolvedValue({
+        exactAlarm: true,
+        overlay: true,
+        fullScreen: true,
+        notifications: true,
+        battery: true,
+        manufacturer: null,
+        oemAutostartGuided: false,
+        oemBackgroundPopupGuided: false,
+        oemLastOverlayFailed: false,
+      });
+      const device = newDevice();
+      await expect(device.getStatus()).resolves.toMatchObject({
+        permissions: { microphone: false },
+      });
+    });
+
+    it('requestPermission(microphone) returns true when granted', async () => {
+      const request = jest
+        .spyOn(PermissionsAndroid, 'request')
+        .mockResolvedValue(PermissionsAndroid.RESULTS.GRANTED);
+      const device = newDevice();
+      await expect(device.requestPermission('microphone')).resolves.toBe(true);
+      expect(request).toHaveBeenCalledWith(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+    });
+
+    it.each([PermissionsAndroid.RESULTS.DENIED, PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN])(
+      'requestPermission(microphone) returns false for result %s',
+      async (result) => {
+        jest.spyOn(PermissionsAndroid, 'request').mockResolvedValue(result);
+        const device = newDevice();
+        await expect(device.requestPermission('microphone')).resolves.toBe(false);
+      },
+    );
+
+    it('requestPermission(microphone) fails closed when PermissionsAndroid.request throws', async () => {
+      jest.spyOn(PermissionsAndroid, 'request').mockRejectedValue(new Error('boom'));
+      const device = newDevice();
+      await expect(device.requestPermission('microphone')).resolves.toBe(false);
+    });
+
+    it('requestPermission(microphone) is false on non-android platforms without calling PermissionsAndroid', async () => {
+      Platform.OS = 'ios';
+      const request = jest.spyOn(PermissionsAndroid, 'request');
+      const device = newDevice();
+      await expect(device.requestPermission('microphone')).resolves.toBe(false);
+      expect(request).not.toHaveBeenCalled();
+    });
+
+    it('openSettings(microphone) returns true immediately when already granted, without touching Settings', async () => {
+      jest.spyOn(PermissionsAndroid, 'check').mockResolvedValue(true);
+      const request = jest.spyOn(PermissionsAndroid, 'request');
+      // Linking.openSettings' jest spy doesn't reset call history across tests in
+      // this environment (see the "falls back to app settings" tests above, which
+      // never assert 0 after a prior call) -- clear explicitly so this assertion
+      // reflects only this test's behavior.
+      const openLinkingSettings = jest.spyOn(Linking, 'openSettings').mockResolvedValue();
+      openLinkingSettings.mockClear();
+      const device = newDevice();
+      await expect(device.openSettings('microphone')).resolves.toBe(true);
+      expect(request).not.toHaveBeenCalled();
+      expect(openLinkingSettings).not.toHaveBeenCalled();
+    });
+
+    it('openSettings(microphone) falls back to Linking.openSettings without re-requesting', async () => {
+      jest.spyOn(PermissionsAndroid, 'check').mockResolvedValue(false);
+      const request = jest.spyOn(PermissionsAndroid, 'request');
+      const openLinkingSettings = jest.spyOn(Linking, 'openSettings').mockResolvedValue();
+      openLinkingSettings.mockClear();
+      const device = newDevice();
+      await expect(device.openSettings('microphone')).resolves.toBe(true);
+      expect(request).not.toHaveBeenCalled();
+      expect(openLinkingSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it('openSettings(microphone) returns false when the Settings fallback cannot open', async () => {
+      jest.spyOn(PermissionsAndroid, 'check').mockResolvedValue(false);
+      jest.spyOn(Linking, 'openSettings').mockRejectedValue(new Error('cannot open settings'));
+      const device = newDevice();
+      await expect(device.openSettings('microphone')).resolves.toBe(false);
+    });
+  });
+
+  describe('oemGuidance', () => {
+    it('maps manufacturer and guidance flags from the native status', async () => {
+      getStatus.mockResolvedValue({
+        exactAlarm: true,
+        overlay: true,
+        fullScreen: true,
+        notifications: true,
+        battery: true,
+        manufacturer: 'xiaomi',
+        oemAutostartGuided: true,
+        oemBackgroundPopupGuided: false,
+        oemLastOverlayFailed: true,
+      });
+      const device = newDevice();
+
+      await expect(device.getStatus()).resolves.toMatchObject({
+        oemGuidance: {
+          manufacturer: 'xiaomi',
+          autostartGuided: true,
+          backgroundPopupGuided: false,
+          lastOverlayFailed: true,
+        },
+      });
+    });
+
+    it('openOemSettings forwards the kind to the native module', async () => {
+      const device = newDevice();
+      await expect(device.openOemSettings('autostart')).resolves.toBe(true);
+      expect(openSettings).toHaveBeenCalledWith('autostart');
+
+      await expect(device.openOemSettings('backgroundPopup')).resolves.toBe(true);
+      expect(openSettings).toHaveBeenCalledWith('backgroundPopup');
     });
   });
 

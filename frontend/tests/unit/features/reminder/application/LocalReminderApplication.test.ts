@@ -162,10 +162,18 @@ function createDeps(
           battery_optimization: true,
           location_foreground: true,
           location_background: true,
+          microphone: true,
         },
         background_execution: true,
+        oemGuidance: {
+          manufacturer: null,
+          autostartGuided: false,
+          backgroundPopupGuided: false,
+          lastOverlayFailed: false,
+        },
       })),
       onAppActive: jest.fn(() => () => {}),
+      openOemSettings: jest.fn(async () => true),
       openSettings: jest.fn(async () => true),
       requestPermission: jest.fn(async () => true),
     },
@@ -771,6 +779,170 @@ describe('LocalReminderApplication', () => {
 
       await app.stop();
       expect(listenerRef.current).toBeNull();
+    });
+  });
+
+  describe('permission gap reporting', () => {
+    function statusWith(
+      overrides: Partial<
+        Record<'exact_alarm' | 'overlay' | 'location_foreground' | 'location_background', boolean>
+      >,
+    ) {
+      return {
+        platform: 'android' as const,
+        supported: true,
+        permissions: {
+          notifications: true,
+          exact_alarm: true,
+          overlay: true,
+          full_screen: true,
+          battery_optimization: true,
+          location_foreground: true,
+          location_background: true,
+          microphone: true,
+          ...overrides,
+        },
+        background_execution: true,
+        oemGuidance: {
+          manufacturer: null,
+          autostartGuided: false,
+          backgroundPopupGuided: false,
+          lastOverlayFailed: false,
+        },
+      };
+    }
+
+    it('notifies onPermissionBlocked with the permissions a newly-registered time schedule is missing', async () => {
+      const schedule = fixtureSchedule({ id: 's1' });
+      const deps = createDeps({
+        device: {
+          getStatus: jest.fn(async () => statusWith({ exact_alarm: false, overlay: false })),
+          onAppActive: jest.fn(() => () => {}),
+          openOemSettings: jest.fn(async () => true),
+          openSettings: jest.fn(async () => true),
+          requestPermission: jest.fn(async () => true),
+        },
+        schedules: new FakeScheduleReader([schedule]),
+      });
+      const app = new LocalReminderApplication(deps);
+      const listener = jest.fn();
+      app.onPermissionBlocked(listener);
+      await app.start();
+
+      await app.register(schedule);
+      await flushAsync();
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith({
+        schedule_id: 's1',
+        missing: ['exact_alarm', 'overlay'],
+      });
+    });
+
+    it('does not notify when a time schedule has every permission it needs', async () => {
+      const schedule = fixtureSchedule({ id: 's1' });
+      const deps = createDeps({ schedules: new FakeScheduleReader([schedule]) });
+      const app = new LocalReminderApplication(deps);
+      const listener = jest.fn();
+      app.onPermissionBlocked(listener);
+      await app.start();
+
+      await app.register(schedule);
+      await flushAsync();
+
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it('notifies with missing location permissions after registering a location schedule', async () => {
+      const schedule = fixtureSchedule({
+        id: 's1',
+        schedule_type: 'location',
+        latitude: 31.2304,
+        longitude: 121.4737,
+        reminder: {
+          reminder_type: 'arrive_location',
+          reminder_trigger_at: null,
+          reminder_offset_minutes: null,
+          reminder_strength: 'medium',
+        },
+      });
+      const deps = createDeps({
+        device: {
+          getStatus: jest.fn(async () => statusWith({ location_background: false })),
+          onAppActive: jest.fn(() => () => {}),
+          openOemSettings: jest.fn(async () => true),
+          openSettings: jest.fn(async () => true),
+          requestPermission: jest.fn(async () => true),
+        },
+        schedules: new FakeScheduleReader([schedule]),
+      });
+      const app = new LocalReminderApplication(deps);
+      const listener = jest.fn();
+      app.onPermissionBlocked(listener);
+      await app.start();
+
+      await app.register(schedule);
+      await flushAsync();
+
+      expect(listener).toHaveBeenCalledWith({
+        schedule_id: 's1',
+        missing: ['location_background'],
+      });
+    });
+
+    it('does not re-notify for the same schedule during a bulk rebuild', async () => {
+      const schedule = fixtureSchedule({ id: 's1' });
+      const deps = createDeps({
+        device: {
+          getStatus: jest.fn(async () => statusWith({ exact_alarm: false })),
+          onAppActive: jest.fn(() => () => {}),
+          openOemSettings: jest.fn(async () => true),
+          openSettings: jest.fn(async () => true),
+          requestPermission: jest.fn(async () => true),
+        },
+        schedules: new FakeScheduleReader([schedule]),
+      });
+      const app = new LocalReminderApplication(deps);
+      const listener = jest.fn();
+      app.onPermissionBlocked(listener);
+      await app.start();
+
+      await app.register(schedule);
+      await flushAsync();
+      expect(listener).toHaveBeenCalledTimes(1);
+
+      await app.rebuild();
+      await flushAsync();
+
+      // rebuild() re-arms via the batch alarms/location.rebuild() ports, not
+      // scheduleAlarmFor/watchLocationSchedule, so it must not fire again --
+      // otherwise every rebuild (e.g. one triggered by granting some other
+      // permission) would re-prompt for schedules already reported once.
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it('stops notifying once unsubscribed', async () => {
+      const schedule = fixtureSchedule({ id: 's1' });
+      const deps = createDeps({
+        device: {
+          getStatus: jest.fn(async () => statusWith({ exact_alarm: false })),
+          onAppActive: jest.fn(() => () => {}),
+          openOemSettings: jest.fn(async () => true),
+          openSettings: jest.fn(async () => true),
+          requestPermission: jest.fn(async () => true),
+        },
+        schedules: new FakeScheduleReader([schedule]),
+      });
+      const app = new LocalReminderApplication(deps);
+      const listener = jest.fn();
+      const unsubscribe = app.onPermissionBlocked(listener);
+      unsubscribe();
+      await app.start();
+
+      await app.register(schedule);
+      await flushAsync();
+
+      expect(listener).not.toHaveBeenCalled();
     });
   });
 });

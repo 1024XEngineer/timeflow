@@ -36,6 +36,12 @@ export type ReminderApplicationResult = {
   disposition: ReminderDisposition | null;
 };
 
+/** 单条日程刚注册（非批量 rebuild）时，发现缺少的权限。 */
+export type ReminderPermissionBlockedEvent = {
+  schedule_id: string;
+  missing: readonly import('./DeviceCapabilityPort').DevicePermission[];
+};
+
 /** 供应用编排层和展示层调用的用例接口。 */
 export interface ReminderApplicationPort {
   start(): Promise<void>;
@@ -47,4 +53,10 @@ export interface ReminderApplicationPort {
   deliver(trigger: ReminderTrigger): Promise<ReminderDeliveryReceipt>;
   confirm(scheduleId: string, confirmedAt: string): Promise<ReminderApplicationResult>;
   snooze(request: ReminderSnoozeRequest): Promise<ReminderApplicationResult>;
+  /**
+   * 订阅"单条日程刚注册、但缺权限导致挂不上闹钟/围栏"事件；只在 register()
+   * 触发的增量注册时发，rebuild() 的批量重挂不发（否则每次 rebuild 都会给老日程
+   * 重弹一遍，见调用方 registerInternal/rebuildInternal 的路径区分）。
+   */
+  onPermissionBlocked(listener: (event: ReminderPermissionBlockedEvent) => void): () => void;
 }

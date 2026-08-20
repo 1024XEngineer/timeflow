@@ -3,11 +3,13 @@ import type {
   ReminderApplicationPort,
   ReminderApplicationResult,
   ReminderConfirmedDisposition,
+  ReminderPermissionBlockedEvent,
   ReminderSnoozeRequest,
   LocationMonitorEvent,
   LocationWatchHandle,
   AlarmScheduleReceipt,
   AlarmNativeEvent,
+  DevicePermission,
 } from './interfaces';
 import type {
   DeliveryChannel,
@@ -60,6 +62,9 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   /** 原生已响铃、由原生 UI 承接展示的日程；JS 不再叠加弹窗/TTS。 */
   private readonly nativePresented = new Set<string>();
   private readonly inFlight = new Set<Promise<unknown>>();
+  private readonly permissionBlockedListeners = new Set<
+    (event: ReminderPermissionBlockedEvent) => void
+  >();
   private opChain: Promise<void> = Promise.resolve();
   /** 每次 stop / 失败回滚自增；停机前开始的工作持有旧世代，重启后仍视为已取消。 */
   private generation = 0;
@@ -84,6 +89,13 @@ export class LocalReminderApplication implements ReminderApplicationPort {
 
   async rebuild(): Promise<readonly ReminderRegistration[]> {
     return this.enqueueRebuild();
+  }
+
+  onPermissionBlocked(listener: (event: ReminderPermissionBlockedEvent) => void): () => void {
+    this.permissionBlockedListeners.add(listener);
+    return () => {
+      this.permissionBlockedListeners.delete(listener);
+    };
   }
 
   async handleTime(tick: { observed_at: string }): Promise<void> {
@@ -938,7 +950,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     const mode = resolveWatchMode(schedule);
     const center = resolveGeofenceCenter(schedule, mode);
     if (center == null) return null;
-    return this.dependencies.location.watch(
+    const handle = await this.dependencies.location.watch(
       {
         schedule_id: schedule.id,
         center,
@@ -950,6 +962,8 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         void this.handleLocationMonitorEvent(event);
       },
     );
+    void this.reportPermissionGaps(schedule.id, ['location_foreground', 'location_background']);
+    return handle;
   }
 
   private async scheduleAlarmFor(
@@ -957,12 +971,37 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   ): Promise<AlarmScheduleReceipt | null> {
     const triggerAt = resolveEffectiveTriggerAt(schedule);
     if (triggerAt == null) return null;
-    return this.dependencies.alarms.schedule({
+    const receipt = await this.dependencies.alarms.schedule({
       schedule_id: schedule.id,
       trigger_at: triggerAt,
       title: schedule.title,
       exact: true,
     });
+    void this.reportPermissionGaps(schedule.id, [
+      'exact_alarm',
+      'overlay',
+      'full_screen',
+      'battery_optimization',
+    ]);
+    return receipt;
+  }
+
+  /**
+   * 单条日程刚注册完，读一遍当前权限状态，把这条日程依赖、但还没给的权限报给
+   * 展示层。只在增量注册（registerInternal）路径调用，不在批量 rebuild 里调，
+   * 否则每次 rebuild（比如别的权限刚被授予触发的那次）都会给老日程重弹一遍。
+   */
+  private async reportPermissionGaps(
+    scheduleId: string,
+    permissions: readonly DevicePermission[],
+  ): Promise<void> {
+    const status = await this.dependencies.device.getStatus();
+    if (status.platform !== 'android') return;
+    const missing = permissions.filter((permission) => !status.permissions[permission]);
+    if (missing.length === 0) return;
+    for (const listener of this.permissionBlockedListeners) {
+      listener({ schedule_id: scheduleId, missing });
+    }
   }
 
   private buildTrigger(

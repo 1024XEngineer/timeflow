@@ -21,6 +21,13 @@ final class AlarmContract {
     static final String ALARMS_KEY = "pending_alarms";
     static final String DISPOSITIONS_KEY = "native_dispositions";
     static final String ALARM_URI_SCHEME = "timeflow-alarm";
+    /**
+     * 自启动/后台弹出界面没有标准 API 能查真实授权状态，这三个 key 只记录
+     * "带没带用户跳过设置页"和"上一次响铃悬浮窗有没有失败"这种弱信号。
+     */
+    static final String KEY_OEM_AUTOSTART_GUIDED = "oem_autostart_guided";
+    static final String KEY_OEM_BACKGROUND_POPUP_GUIDED = "oem_background_popup_guided";
+    static final String KEY_OEM_LAST_OVERLAY_FAILED = "oem_last_overlay_failed";
 
     private AlarmContract() {
     }

@@ -179,6 +179,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
     render(
       <ScheduleCalendarScreen
         accountId={accountId}
+        onOpenPermissions={() => {}}
         onSignOut={() => {}}
         service={service}
         timezone="Asia/Shanghai"
@@ -198,6 +199,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
     const service = createService();
     const props = {
       accountId: 'account-a',
+      onOpenPermissions: () => {},
       onSignOut: () => {},
       service,
       timezone: 'Asia/Shanghai',
@@ -225,6 +227,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
     render(
       <ScheduleCalendarScreen
         accountId="account-a"
+        onOpenPermissions={() => {}}
         onSignOut={onSignOut}
         service={service}
         timezone="Asia/Shanghai"
@@ -246,7 +249,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
     ).toMatchObject({ flexShrink: 1, minWidth: 0 });
     expect(
       StyleSheet.flatten(screen.getByTestId('schedule-account-actions').props.style),
-    ).toMatchObject({ marginLeft: 'auto', maxWidth: 240, minWidth: 0 });
+    ).toMatchObject({ marginLeft: 'auto', maxWidth: 280, minWidth: 0 });
 
     fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
     expect(onSignOut).toHaveBeenCalledTimes(1);
@@ -257,6 +260,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
     render(
       <ScheduleCalendarScreen
         accountId="account-a"
+        onOpenPermissions={() => {}}
         onSignOut={() => {}}
         service={service}
         timezone="Asia/Shanghai"
@@ -305,6 +309,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
     render(
       <ScheduleCalendarScreen
         accountId="account-a"
+        onOpenPermissions={() => {}}
         onSignOut={() => {}}
         service={service}
         timezone="Asia/Shanghai"
@@ -381,6 +386,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
       .mockResolvedValueOnce([{ ...initialOccurrence, category: 'work' }]);
     const props = {
       accountId: 'account-a',
+      onOpenPermissions: () => {},
       onSignOut: () => {},
       service,
       timezone: 'Asia/Shanghai',
@@ -425,6 +431,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
       .mockResolvedValueOnce([{ ...initialLocation, category: 'study' }]);
     const props = {
       accountId: 'account-a',
+      onOpenPermissions: () => {},
       onSignOut: () => {},
       service,
       timezone: 'Asia/Shanghai',
@@ -453,6 +460,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
     render(
       <ScheduleCalendarScreen
         accountId="account-a"
+        onOpenPermissions={() => {}}
         onSignOut={() => {}}
         service={service}
         timezone="Asia/Shanghai"

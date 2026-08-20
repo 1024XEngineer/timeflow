@@ -14,6 +14,8 @@ export type {
   DeviceCapabilityPort,
   DeviceCapabilityStatus,
   DevicePermission,
+  OemGuidance,
+  OemManufacturer,
 } from './DeviceCapabilityPort';
 export type { LocalScheduleReader } from './LocalScheduleReader';
 export type {
@@ -40,6 +42,7 @@ export type {
   ReminderApplicationDependencies,
   ReminderApplicationPort,
   ReminderApplicationResult,
+  ReminderPermissionBlockedEvent,
   ReminderSnoozeRequest,
 } from './ReminderApplicationPort';
 export type {
