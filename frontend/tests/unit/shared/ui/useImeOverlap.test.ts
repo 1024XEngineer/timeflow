@@ -37,7 +37,11 @@ describe('useImeOverlap', () => {
     const listeners = new Map<string, (event: KeyboardEvent) => void>();
     jest.spyOn(Keyboard, 'addListener').mockImplementation((event, listener) => {
       listeners.set(event, listener as (event: KeyboardEvent) => void);
-      return { remove: () => listeners.delete(event) };
+      return {
+        remove() {
+          listeners.delete(event);
+        },
+      } as ReturnType<typeof Keyboard.addListener>;
     });
     jest.spyOn(Keyboard, 'scheduleLayoutAnimation').mockImplementation(() => {});
 

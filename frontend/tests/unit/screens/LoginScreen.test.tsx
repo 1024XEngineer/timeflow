@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
+import { Image, StyleSheet } from 'react-native';
 
 import { AuthAccessError, type AuthAccess } from '../../../src/contracts/auth';
 import { AuthController } from '../../../src/features/auth/application';
@@ -27,6 +28,68 @@ function fillValidForm() {
 }
 
 describe('LoginScreen', () => {
+  it('shows the left-aligned Timeflow wordmark and login copy without the old marks', () => {
+    renderLogin(async () => ({
+      access_token: 'opaque-token',
+      account_id: 'acc_001',
+      expires_in: 3600,
+    }));
+
+    const brand = screen.getByTestId('brand-region');
+    expect(StyleSheet.flatten(brand.props.style)).toMatchObject({
+      alignSelf: 'flex-start',
+      flexDirection: 'row',
+    });
+    expect(within(brand).getByText('Time')).toBeTruthy();
+    expect(within(brand).getByText('flow')).toBeTruthy();
+    expect(within(brand).queryByText('T')).toBeNull();
+    expect(within(brand).queryByText('Timeflow')).toBeNull();
+    expect(screen.UNSAFE_queryAllByType(Image)).toHaveLength(0);
+
+    expect(screen.getByText('登录')).toBeTruthy();
+    expect(screen.getByText('首次使用会自动创建账号。')).toBeTruthy();
+    expect(screen.getByText('你的日程只属于你')).toBeTruthy();
+    expect(screen.queryByText('登录或注册')).toBeNull();
+    expect(screen.queryByText('首次使用会自动创建账号，已有账号将直接登录。')).toBeNull();
+    expect(screen.queryByText('你的日程只属于你，我们会认真保护账号信息。')).toBeNull();
+  });
+
+  it('masks the password field', () => {
+    renderLogin(async () => ({
+      access_token: 'opaque-token',
+      account_id: 'acc_001',
+      expires_in: 3600,
+    }));
+
+    expect(screen.getByLabelText('密码').props.secureTextEntry).toBe(true);
+  });
+
+  it('disables fields and the submit control while authenticating', async () => {
+    let release!: (value: { access_token: string; account_id: string; expires_in: number }) => void;
+    renderLogin(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    fillValidForm();
+
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: '继续' }));
+    });
+
+    await waitFor(() => expect(screen.getByText('提交中…')).toBeTruthy());
+    expect(screen.getByLabelText('用户名').props.editable).toBe(false);
+    expect(screen.getByLabelText('密码').props.editable).toBe(false);
+    expect(screen.getByRole('button', { name: '提交中…' }).props.accessibilityState).toMatchObject({
+      disabled: true,
+    });
+
+    await act(async () => {
+      release({ access_token: 'opaque-token', account_id: 'acc_001', expires_in: 3600 });
+    });
+  });
+
   it('keeps the login sheet unshifted until the IME covers the window', () => {
     renderLogin(async () => ({
       access_token: 'opaque-token',
