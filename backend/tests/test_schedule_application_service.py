@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from itertools import count
 from types import TracebackType
+from typing import cast
 
 import pytest
 
@@ -1148,6 +1149,7 @@ def test_find_schedules_filters_category_and_combines_it_with_a_time_window() ->
         (FindSchedulesQuery(schedule_id=" "), "schedule_id"),
         (FindSchedulesQuery(title=" "), "title"),
         (FindSchedulesQuery(location_name=" "), "location_name"),
+        (FindSchedulesQuery(category=cast(ScheduleCategory, "unsupported")), "category"),
         (FindSchedulesQuery(starts_at_or_after=datetime(2026, 8, 12)), "starts_at_or_after"),
         (
             FindSchedulesQuery(
