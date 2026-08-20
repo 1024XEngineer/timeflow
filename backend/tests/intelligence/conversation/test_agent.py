@@ -6,6 +6,8 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import cast
 
 import pytest
 
@@ -19,6 +21,7 @@ from timeflow.intelligence.conversation.agent import (
     AgentTextDelta,
     AgentToolError,
     AgentToolRoundLimitError,
+    AgentTurnContext,
     AgentTurnTiming,
 )
 from timeflow.intelligence.conversation.llm import (
@@ -681,3 +684,116 @@ async def test_cancellation_propagates_without_fake_messages() -> None:
         ]
 
     assert len(conversation.messages) == 2
+
+
+def test_agent_turn_context_system_message_includes_utc_and_local_times() -> None:
+    context = AgentTurnContext(datetime(2026, 8, 20, 12, 0, tzinfo=UTC), "Asia/Shanghai")
+
+    message = context.system_message()
+
+    assert "当前 UTC 时间：" in message
+    assert "当前本地时间：" in message
+    assert "当前 IANA 时区：Asia/Shanghai" in message
+
+
+def test_agent_rejects_non_positive_max_tool_rounds() -> None:
+    with pytest.raises(ValueError, match="max_tool_rounds must be positive"):
+        Agent(FakeLlm([]), ToolRegistry([]), max_tool_rounds=0)
+
+
+@pytest.mark.asyncio
+async def test_duplicate_completion_raises_protocol_error() -> None:
+    llm = FakeLlm([[TextDelta("你好"), completed(), completed()]])
+
+    with pytest.raises(AgentProtocolError, match="completed more than once"):
+        _ = [
+            event
+            async for event in Agent(llm, ToolRegistry([])).run_turn(AgentConversation(), "你好")
+        ]
+
+
+@pytest.mark.asyncio
+async def test_unsupported_llm_event_raises_protocol_error() -> None:
+    llm = FakeLlm([[cast(LlmEvent, object())]])
+
+    with pytest.raises(AgentProtocolError, match="Unsupported LLM stream event"):
+        _ = [
+            event
+            async for event in Agent(llm, ToolRegistry([])).run_turn(AgentConversation(), "你好")
+        ]
+
+
+@pytest.mark.asyncio
+async def test_end_conversation_after_tool_round_streams_without_flush() -> None:
+    tool = RecordingTool(
+        ToolDefinition("schedule_create", "创建日程", {"type": "object"}),
+        result='{"status":"ok"}',
+    )
+    llm = FakeLlm(
+        [
+            tool_events("schedule_create", '{"title":"开会"}', "call_1"),
+            [TextDelta("已创建，再见。"), *tool_events("end_conversation", "{}", "end_1")],
+        ]
+    )
+
+    delivered = [
+        event
+        async for event in Agent(llm, ToolRegistry([tool])).run_turn(
+            AgentConversation(), "创建日程"
+        )
+    ]
+
+    assert delivered == [
+        AgentTextDelta("已创建，再见。"),
+        AgentSessionEnd(),
+        AgentCompleted(LlmUsage(6, 2, 8)),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_first_turn_appends_turn_context_to_system_prompt() -> None:
+    llm = FakeLlm([[TextDelta("你好"), completed()]])
+    conversation = AgentConversation()
+    context = AgentTurnContext(datetime(2026, 8, 20, 12, 0, tzinfo=UTC), "Asia/Shanghai")
+
+    _ = [
+        event
+        async for event in Agent(llm, ToolRegistry([])).run_turn(
+            conversation, "你好", turn_context=context
+        )
+    ]
+
+    system = conversation.messages[0]
+    assert isinstance(system, ChatMessage)
+    assert "当前本地时间：" in system.content
+
+
+@pytest.mark.asyncio
+async def test_turn_rejects_conversation_not_starting_with_system_message() -> None:
+    conversation = AgentConversation()
+    conversation.messages.append(ChatMessage(role="user", content="你好"))
+
+    with pytest.raises(AgentProtocolError, match="must begin with a system message"):
+        _ = [
+            event
+            async for event in Agent(FakeLlm([]), ToolRegistry([])).run_turn(conversation, "继续")
+        ]
+
+
+@pytest.mark.asyncio
+async def test_subsequent_turn_refreshes_system_message_with_turn_context() -> None:
+    llm = FakeLlm([[TextDelta("第一轮"), completed()], [TextDelta("第二轮"), completed()]])
+    conversation = AgentConversation()
+    agent = Agent(llm, ToolRegistry([]))
+
+    _ = [event async for event in agent.run_turn(conversation, "第一轮问题")]
+    first_system = conversation.messages[0]
+    assert isinstance(first_system, ChatMessage)
+    assert "当前本地时间：" not in first_system.content
+
+    context = AgentTurnContext(datetime(2026, 8, 20, 12, 0, tzinfo=UTC), "Asia/Shanghai")
+    _ = [event async for event in agent.run_turn(conversation, "继续", turn_context=context)]
+
+    updated_system = conversation.messages[0]
+    assert isinstance(updated_system, ChatMessage)
+    assert "当前本地时间：" in updated_system.content

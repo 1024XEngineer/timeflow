@@ -39,6 +39,7 @@ from timeflow.intelligence.conversation.schedule_tools import (
 )
 from timeflow.intelligence.conversation.tools import build_agent_tool_registry
 from timeflow.intelligence.location import (
+    ClientLocation,
     Coordinate,
     CurrentArea,
     LocationSearchContext,
@@ -696,3 +697,137 @@ async def test_query_with_unknown_field_returns_refusal_not_error() -> None:
     assert result["status"] == "failed"
     assert "recurrence_rule" in result["error"]["message"]
     assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_canceled_call_whose_service_raises_business_error_still_cancels() -> None:
+    started = threading.Event()
+    release = threading.Event()
+    service = FakeScheduleService()
+    error = ScheduleBusinessError(
+        code=ScheduleErrorCode.REVISION_CONFLICT,
+        message="stale",
+        schedule_id="schedule-1",
+        field="expected_revision",
+    )
+
+    def create_schedule(**kwargs: object) -> ScheduleMutationResult:
+        del kwargs
+        started.set()
+        release.wait(timeout=2)
+        raise error
+
+    service.create_schedule = create_schedule  # type: ignore[method-assign]
+    tool = build_agent_tool_registry(service, "account-1").get("schedule_create")
+    task = asyncio.create_task(tool.execute(create_arguments()))
+    assert await asyncio.to_thread(started.wait, 2)
+
+    task.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_canceled_notification_waits_for_the_observer() -> None:
+    observer_started = asyncio.Event()
+    observer_released = asyncio.Event()
+    observer_finished = asyncio.Event()
+    service = FakeScheduleService()
+
+    class BlockingObserver:
+        async def succeeded(self, operation: str, result: object) -> None:
+            observer_started.set()
+            await observer_released.wait()
+            observer_finished.set()
+
+    tool = build_agent_tool_registry(service, "account-1", BlockingObserver()).get(
+        "schedule_create"
+    )
+    task = asyncio.create_task(tool.execute(create_arguments()))
+    await asyncio.wait_for(observer_started.wait(), 2)
+
+    task.cancel()
+    await asyncio.sleep(0.01)
+    assert not task.done()
+
+    observer_released.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert observer_finished.is_set()
+
+
+@pytest.mark.asyncio
+async def test_location_search_prepares_lazily_from_client_location() -> None:
+    candidate = ProviderLocationCandidate(
+        "poi-1",
+        "万达广场",
+        "银川路 100 号",
+        "商场",
+        Coordinate(31.23, 121.48, "gcj02"),
+        "上海市",
+        "上海市",
+        "闵行区",
+    )
+    location_service = LocationSearchService(_FakeLocationPort((candidate,)))
+    client_location = ClientLocation(Coordinate(31.23, 121.48, "gcj02"))
+    tool = build_agent_tool_registry(
+        FakeScheduleService(),
+        "account-1",
+        location_service=location_service,
+        client_location=client_location,
+    ).get("location_search")
+
+    result = json.loads(await tool.execute({"query": "万达广场"}))
+
+    assert result["status"] == "ok"
+    assert [item["name"] for item in result["candidates"]] == ["万达广场"]
+
+
+def test_update_without_title_still_maps_other_fields() -> None:
+    command = map_update_schedule_command(
+        {
+            "schedule_id": "schedule-1",
+            "expected_revision": 1,
+            "changes": {"location_name": "新地点"},
+        }
+    )
+
+    assert command.changes == {"location_name": "新地点"}
+
+
+def test_mapping_rejects_negative_expected_revision() -> None:
+    with pytest.raises(ScheduleToolInputError, match="expected_revision"):
+        map_delete_schedule_command(
+            {"schedule_id": "schedule-1", "expected_revision": -1, "schedule_kind": "once"}
+        )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {**create_arguments(), "reminder_offset_minutes": "not-an-int"},
+        {**create_arguments(), "reminder_offset_minutes": 1.5},
+        {**create_arguments(), "latitude": "not-a-number"},
+        {**create_arguments(), "latitude": []},
+    ],
+)
+def test_mapping_rejects_non_numeric_or_non_integer_values(arguments: dict[str, object]) -> None:
+    with pytest.raises(ScheduleToolInputError):
+        map_create_schedule_command(arguments)
+
+
+@pytest.mark.asyncio
+async def test_unknown_schedule_tool_name_is_rejected() -> None:
+    from timeflow.intelligence.conversation.llm import ToolDefinition
+    from timeflow.intelligence.conversation.schedule_tools import _ScheduleTool
+
+    tool = _ScheduleTool(
+        ToolDefinition("bogus_tool", "bogus", {"type": "object"}),
+        FakeScheduleService(),
+        "account-1",
+    )
+
+    with pytest.raises(RuntimeError, match="Unsupported schedule tool"):
+        await tool.execute({})
