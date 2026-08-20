@@ -15,10 +15,17 @@ jest.mock('../../../src/features/assistant/presentation/AssistantVoiceOverlay', 
 
 class FakeAssistantApplication implements AssistantApplicationPort {
   private command: AppliedCommand | null = null;
+  private scheduleDataRevision = 0;
   private readonly listeners = new Set<(state: ConversationTurnState) => void>();
 
   apply(command: AppliedCommand) {
     this.command = command;
+    this.scheduleDataRevision += 1;
+    for (const listener of this.listeners) listener({ phase: 'idle' });
+  }
+
+  applyCategoryUpdate() {
+    this.scheduleDataRevision += 1;
     for (const listener of this.listeners) listener({ phase: 'idle' });
   }
 
@@ -26,6 +33,7 @@ class FakeAssistantApplication implements AssistantApplicationPort {
   dispose = () => {};
   endTurn = async () => {};
   getLastAppliedCommand = () => this.command;
+  getScheduleDataRevision = () => this.scheduleDataRevision;
   getReplyText = () => null;
   getSoundLevel = () => null;
   getState = (): ConversationTurnState => ({ phase: 'idle' });
@@ -80,6 +88,13 @@ describe('HomeScreen calendar refresh', () => {
 
     await waitFor(() => expect(scheduleService.getSchedulesByRange).toHaveBeenCalledTimes(3));
     await waitFor(() => expect(scheduleService.getLocationSchedules).toHaveBeenCalledTimes(3));
+
+    act(() => {
+      pushToTalkApplication.applyCategoryUpdate();
+    });
+
+    await waitFor(() => expect(scheduleService.getSchedulesByRange).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(scheduleService.getLocationSchedules).toHaveBeenCalledTimes(4));
     expect(scheduleService.getSchedulesByRange).toHaveBeenLastCalledWith(
       expect.objectContaining({ accountId: 'account-a' }),
     );

@@ -2,7 +2,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { ScheduleOccurrenceView } from '../application';
 import { colors, spacing } from '../../../shared/ui/theme';
-import { formatRange, formatTime } from './scheduleDisplay';
+import { formatRange, formatTime, scheduleCategoryLabel } from './scheduleDisplay';
 
 export function ScheduleOccurrenceRow({
   item,
@@ -13,6 +13,7 @@ export function ScheduleOccurrenceRow({
 }) {
   const startLabel = item.isAllDay ? '全天' : formatTime(item.occurrenceStart, item.timezone);
   const isRecurring = item.recurrenceMode !== 'once';
+  const categoryLabel = scheduleCategoryLabel(item.category);
 
   return (
     <Pressable
@@ -36,9 +37,18 @@ export function ScheduleOccurrenceRow({
         <Text style={styles.title} numberOfLines={2}>
           {item.title}
         </Text>
-        {isRecurring ? (
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>重复</Text>
+        {categoryLabel || isRecurring ? (
+          <View style={styles.badges}>
+            {categoryLabel ? (
+              <View style={[styles.badge, styles.categoryBadge]}>
+                <Text style={styles.categoryBadgeText}>{categoryLabel}</Text>
+              </View>
+            ) : null}
+            {isRecurring ? (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>重复</Text>
+              </View>
+            ) : null}
           </View>
         ) : null}
         {item.locationName ? (
@@ -61,6 +71,9 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   badgeText: { color: colors.text, fontSize: 11, fontWeight: '700' },
+  badges: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
+  categoryBadge: { backgroundColor: colors.input },
+  categoryBadgeText: { color: colors.mutedText, fontSize: 11, fontWeight: '700' },
   copy: { flex: 1, gap: 6, minWidth: 0 },
   endTime: { color: colors.mutedText, fontSize: 11, marginTop: 3 },
   indicator: {

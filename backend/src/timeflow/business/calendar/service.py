@@ -279,11 +279,13 @@ class ScheduleApplicationService(ScheduleAgentService):
                         account_id=account_id,
                         starts_at_or_after=query.starts_at_or_after,
                         starts_before=query.starts_before,
+                        category=query.category,
                         include_deleted=query.include_deleted,
                     )
                 else:
                     candidates = unit_of_work.schedules.list_schedules(
                         account_id=account_id,
+                        category=query.category,
                         include_deleted=query.include_deleted,
                     )
             else:
@@ -554,9 +556,15 @@ class ScheduleApplicationService(ScheduleAgentService):
 def _matches_static_query(schedule: ScheduleSnapshot, query: FindSchedulesQuery) -> bool:
     title = None if query.title is None else query.title.casefold()
     location = None if query.location_name is None else query.location_name.casefold()
-    return (title is None or title in schedule.title.casefold()) and (
-        location is None
-        or (schedule.location_name is not None and location in schedule.location_name.casefold())
+    return (
+        (query.category is None or schedule.category is query.category)
+        and (title is None or title in schedule.title.casefold())
+        and (
+            location is None
+            or (
+                schedule.location_name is not None and location in schedule.location_name.casefold()
+            )
+        )
     )
 
 
@@ -722,6 +730,12 @@ def _validate_query(query: FindSchedulesQuery) -> None:
             ScheduleErrorCode.VALIDATION_FAILED,
             "location_name must be non-empty when supplied.",
             field="location_name",
+        )
+    if query.category is not None and not isinstance(query.category, ScheduleCategory):
+        _raise_business_error(
+            ScheduleErrorCode.VALIDATION_FAILED,
+            "category has an unsupported value.",
+            field="category",
         )
     _validate_optional_datetime(query.starts_at_or_after, "starts_at_or_after")
     _validate_optional_datetime(query.starts_before, "starts_before")

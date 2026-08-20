@@ -12,6 +12,7 @@ function occurrence(overrides: Partial<ScheduleOccurrenceView> = {}): ScheduleOc
   return {
     scheduleId: 'schedule-a',
     scheduleCategory: 'time',
+    category: 'work',
     recurrenceMode: 'once',
     title: '团队周会',
     isAllDay: false,
@@ -39,6 +40,31 @@ describe('ScheduleOccurrenceRow', () => {
     expect(screen.getByText('重复')).toBeTruthy();
   });
 
+  it('shows localized work and study category badges', () => {
+    const view = render(<ScheduleOccurrenceRow item={occurrence({ category: 'work' })} />);
+
+    expect(screen.getByText('工作')).toBeTruthy();
+    view.rerender(<ScheduleOccurrenceRow item={occurrence({ category: 'study' })} />);
+    expect(screen.getByText('学习')).toBeTruthy();
+  });
+
+  it('does not show a category badge while category is null', () => {
+    render(<ScheduleOccurrenceRow item={occurrence({ category: null })} />);
+
+    expect(screen.queryByText('工作')).toBeNull();
+    expect(screen.queryByText('其他')).toBeNull();
+    expect(screen.queryByText('未分类')).toBeNull();
+  });
+
+  it('shows only the recurring badge for an unclassified recurring schedule', () => {
+    render(
+      <ScheduleOccurrenceRow item={occurrence({ category: null, recurrenceMode: 'recurring' })} />,
+    );
+
+    expect(screen.getByText('重复')).toBeTruthy();
+    expect(screen.queryByText('工作')).toBeNull();
+  });
+
   it('shows an explicit all-day label for an all-day schedule', () => {
     render(
       <ScheduleOccurrenceRow
@@ -60,6 +86,7 @@ describe('LocationScheduleRow', () => {
     const item: LocationScheduleView = {
       scheduleId: 'location-a',
       scheduleCategory: 'location',
+      category: 'work',
       title: '到公司提醒我打卡',
       timezone: 'Asia/Shanghai',
       locationName: '公司',
@@ -70,11 +97,32 @@ describe('LocationScheduleRow', () => {
     render(<LocationScheduleRow item={item} />);
 
     expect(screen.getByText('位置日程')).toBeTruthy();
+    expect(screen.getByText('工作')).toBeTruthy();
     expect(screen.getByText('到公司提醒我打卡')).toBeTruthy();
     expect(screen.getByText('公司')).toBeTruthy();
     expect(screen.queryByText('location')).toBeNull();
     expect(screen.queryByText('arrive_location')).toBeNull();
     expect(screen.queryByText('high')).toBeNull();
     expect(screen.queryByText('strong')).toBeNull();
+  });
+
+  it('does not show a category badge for an unclassified location schedule', () => {
+    const item: LocationScheduleView = {
+      scheduleId: 'location-a',
+      scheduleCategory: 'location',
+      category: null,
+      title: '地点触发日程',
+      timezone: 'Asia/Shanghai',
+      locationName: null,
+      reminderType: null,
+      reminderStrength: null,
+    };
+
+    render(<LocationScheduleRow item={item} />);
+
+    expect(screen.getByText('位置日程')).toBeTruthy();
+    expect(screen.queryByText('工作')).toBeNull();
+    expect(screen.queryByText('其他')).toBeNull();
+    expect(screen.queryByText('未分类')).toBeNull();
   });
 });

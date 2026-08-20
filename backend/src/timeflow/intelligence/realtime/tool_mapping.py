@@ -16,6 +16,7 @@ from timeflow.business.calendar import (
     RecurringDeleteScope,
     ReminderStrength,
     ReminderType,
+    ScheduleCategory,
     ScheduleKind,
     ScheduleType,
     ScheduleUpdatePatch,
@@ -85,6 +86,7 @@ def map_find_schedules_query(arguments: Mapping[str, object]) -> FindSchedulesQu
         "starts_at_or_after",
         "starts_before",
         "location_name",
+        "category",
         "include_deleted",
     }
     _reject_unknown(arguments, allowed)
@@ -94,6 +96,7 @@ def map_find_schedules_query(arguments: Mapping[str, object]) -> FindSchedulesQu
         starts_at_or_after=_optional_datetime(arguments, "starts_at_or_after"),
         starts_before=_optional_datetime(arguments, "starts_before"),
         location_name=_optional_string(arguments, "location_name"),
+        category=_optional_enum(arguments, "category", ScheduleCategory),
         include_deleted=_optional_bool(arguments, "include_deleted", default=False),
     )
 

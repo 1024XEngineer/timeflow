@@ -97,10 +97,13 @@ class ScheduleRepository:
         self,
         *,
         account_id: str,
+        category: ScheduleCategory | None = None,
         include_deleted: bool = False,
     ) -> tuple[ScheduleSnapshot, ...]:
         """List schedules for exactly one account in deterministic order."""
         statement = select(Schedule).where(Schedule.account_id == account_id)
+        if category is not None:
+            statement = statement.where(Schedule.category == category.value)
         if not include_deleted:
             statement = statement.where(Schedule.status == ScheduleStatus.ACTIVE.value)
         statement = statement.order_by(Schedule.start_time, Schedule.created_at, Schedule.id)
@@ -113,6 +116,7 @@ class ScheduleRepository:
         account_id: str,
         starts_at_or_after: datetime | None,
         starts_before: datetime | None,
+        category: ScheduleCategory | None = None,
         include_deleted: bool = False,
     ) -> tuple[ScheduleSnapshot, ...]:
         """Coarsely filter one-time rows and possible recurring matches.
@@ -134,6 +138,8 @@ class ScheduleRepository:
             Schedule.account_id == account_id,
             or_(and_(*once_filters), and_(*recurring_filters)),
         )
+        if category is not None:
+            statement = statement.where(Schedule.category == category.value)
         if not include_deleted:
             statement = statement.where(Schedule.status == ScheduleStatus.ACTIVE.value)
         statement = statement.order_by(Schedule.start_time, Schedule.created_at, Schedule.id)
