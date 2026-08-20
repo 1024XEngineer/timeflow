@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Animated,
   Easing,
@@ -15,6 +15,7 @@ import type { ConversationTurnRecord } from '../domain/ConversationTurn';
 
 import type { CallStatus } from './AssistantVoiceOverlay';
 import { PhoneCallIcon } from './PhoneCallIcon';
+import { usePinnedTranscriptScroll } from './usePinnedTranscriptScroll';
 
 interface VoiceCallScreenProps {
   status: CallStatus;
@@ -45,7 +46,8 @@ export function VoiceCallScreen({
   onTogglePause,
 }: VoiceCallScreenProps) {
   const [scale] = useState(() => new Animated.Value(1));
-  const historyRef = useRef<ScrollView>(null);
+  const { fitsViewport, onContentSizeChange, onLayout, onScroll, transcriptRef } =
+    usePinnedTranscriptScroll();
 
   useEffect(() => {
     scale.stopAnimation();
@@ -87,13 +89,18 @@ export function VoiceCallScreen({
       </Pressable>
 
       <ScrollView
-        ref={historyRef}
+        ref={transcriptRef}
         contentContainerStyle={[
           styles.historyContent,
           turns.length === 0 && styles.historyContentEmpty,
+          turns.length > 0 && !fitsViewport && styles.historyContentOverflow,
         ]}
-        onContentSizeChange={() => historyRef.current?.scrollToEnd({ animated: true })}
+        onContentSizeChange={onContentSizeChange}
+        onLayout={onLayout}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
         style={styles.history}
+        testID="voice-call-history"
       >
         {turns.length > 0 ? (
           turns.map((turn) => (
@@ -205,6 +212,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexGrow: 1,
     justifyContent: 'center',
+  },
+  historyContentOverflow: {
+    flexGrow: 0,
+    justifyContent: 'flex-start',
   },
   historyEmptyText: {
     color: 'rgba(255,255,255,0.4)',

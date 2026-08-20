@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { fireEvent, render, screen } from '@testing-library/react-native';
-import { ScrollView } from 'react-native';
+import { Platform, StyleSheet } from 'react-native';
 
 import { VoiceCallScreen } from '../../../../../src/features/assistant/presentation/VoiceCallScreen';
 
@@ -74,9 +74,62 @@ describe('VoiceCallScreen', () => {
 
   it('scrolls the history area when its content grows', () => {
     renderScreen({ turns: [{ id: 't1', replyText: null, transcript: '明天几点开会' }] });
-    const history = screen.UNSAFE_getByType(ScrollView);
+    const history = screen.getByTestId('voice-call-history');
 
     expect(history.props.onContentSizeChange).toEqual(expect.any(Function));
-    history.props.onContentSizeChange();
+    fireEvent(history, 'layout', {
+      nativeEvent: { layout: { height: 400, width: 390, x: 0, y: 0 } },
+    });
+    fireEvent(history, 'contentSizeChange', 390, 240);
+  });
+
+  it.each(['ios', 'android', 'web'] as const)(
+    'lets a tall history list scroll on %s instead of staying stretched',
+    (os) => {
+      const original = Platform.OS;
+      Platform.OS = os;
+      try {
+        renderScreen({
+          turns: [
+            { id: 't1', replyText: '明天下午三点', transcript: '明天几点开会' },
+            { id: 't2', replyText: '改到四点', transcript: '改时间' },
+            { id: 't3', replyText: null, transcript: '谁参加' },
+          ],
+        });
+        const history = screen.getByTestId('voice-call-history');
+        fireEvent(history, 'layout', {
+          nativeEvent: { layout: { height: 400, width: 390, x: 0, y: 0 } },
+        });
+        fireEvent(history, 'contentSizeChange', 390, 2000);
+        expect(StyleSheet.flatten(history.props.contentContainerStyle)).toMatchObject({
+          flexGrow: 0,
+          justifyContent: 'flex-start',
+        });
+        fireEvent.scroll(history, {
+          nativeEvent: {
+            contentOffset: { x: 0, y: 0 },
+            contentSize: { height: 2000, width: 390 },
+            layoutMeasurement: { height: 400, width: 390 },
+          },
+        });
+        fireEvent(history, 'contentSizeChange', 390, 2200);
+        expect(screen.getByText('明天几点开会')).toBeTruthy();
+        expect(screen.getByText('谁参加')).toBeTruthy();
+      } finally {
+        Platform.OS = original;
+      }
+    },
+  );
+
+  it('keeps a short history list from using the overflow layout', () => {
+    renderScreen({ turns: [{ id: 't1', replyText: null, transcript: '明天几点开会' }] });
+    const history = screen.getByTestId('voice-call-history');
+    fireEvent(history, 'layout', {
+      nativeEvent: { layout: { height: 400, width: 390, x: 0, y: 0 } },
+    });
+    fireEvent(history, 'contentSizeChange', 390, 120);
+    expect(StyleSheet.flatten(history.props.contentContainerStyle).justifyContent).not.toBe(
+      'flex-start',
+    );
   });
 });
