@@ -258,3 +258,11 @@ def test_tts_public_contract_is_provider_neutral() -> None:
         "finish-task",
     }
     assert not any(term in source for term in provider_specific_terms)
+
+
+def test_conversation_package_exports_agent_session_end() -> None:
+    """AgentSessionEnd is yielded by the serial Agent and must be importable publicly."""
+    import timeflow.intelligence.conversation as conversation
+
+    assert conversation.AgentSessionEnd in get_args(conversation.AgentEvent)
+    assert "AgentSessionEnd" in conversation.__all__
