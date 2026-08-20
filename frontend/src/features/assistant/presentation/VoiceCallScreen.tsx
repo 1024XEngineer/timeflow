@@ -56,17 +56,8 @@ export function VoiceCallScreen({
   onTogglePause,
 }: VoiceCallScreenProps) {
   const insets = useSafeAreaInsets();
-  const {
-    fitsViewport,
-    onContentSizeChange,
-    onLayout,
-    onMomentumScrollBegin,
-    onMomentumScrollEnd,
-    onScroll,
-    onScrollBeginDrag,
-    onScrollEndDrag,
-    transcriptRef,
-  } = usePinnedTranscriptScroll();
+  const { fitsViewport, onContentSizeChange, onLayout, transcriptRef } =
+    usePinnedTranscriptScroll();
   const [scale] = useState(() => new Animated.Value(1));
 
   useEffect(() => {
@@ -121,12 +112,6 @@ export function VoiceCallScreen({
         ]}
         onContentSizeChange={onContentSizeChange}
         onLayout={onLayout}
-        onMomentumScrollBegin={onMomentumScrollBegin}
-        onMomentumScrollEnd={onMomentumScrollEnd}
-        onScroll={onScroll}
-        onScrollBeginDrag={onScrollBeginDrag}
-        onScrollEndDrag={onScrollEndDrag}
-        scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
         style={styles.transcript}
         testID="voice-call-transcript"
