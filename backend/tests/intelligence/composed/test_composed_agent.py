@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+import pytest
+
 from timeflow.business.calendar import (
     ScheduleKind,
     ScheduleMutationResult,
@@ -1036,5 +1038,191 @@ def test_close_session_discards_retained_conversation() -> None:
 
         assert len(llm.messages[0]) == 2
         assert len(llm.messages[1]) == 2
+
+    asyncio.run(scenario())
+
+
+def test_continuous_asr_failure_is_propagated() -> None:
+    """An ASR iterator exception must surface, not silently end the voice session."""
+
+    class FailingAsr:
+        def stream(self, audio: AsyncIterable[bytes]) -> AsyncIterator[Any]:
+            async def events() -> AsyncIterator[Any]:
+                async for _ in audio:
+                    pass
+                raise RuntimeError("asr provider disconnected")
+                yield  # pragma: no cover
+
+            return events()
+
+    async def scenario() -> None:
+        agent = ComposedVoiceAgent(
+            FailingAsr(),
+            lambda account_id, observer, client_location: Agent(
+                FakeLlm([[TextDelta("好的。"), completed()]]), ToolRegistry([])
+            ),
+            FakeTts(),
+            RecordingSink(),
+        )
+
+        with pytest.raises(RuntimeError, match="asr provider disconnected"):
+            await agent.handle_audio(chunks(), Stream(voice_mode="continuous"))
+
+    asyncio.run(scenario())
+
+
+def test_command_result_rejects_mismatched_result_types() -> None:
+    from timeflow.intelligence.composed.delivery import _command_result
+
+    mutation = ScheduleMutationResult(schedules=())
+    search = ScheduleSearchResult(schedules=())
+
+    with pytest.raises(ValueError, match="schedule_query must return ScheduleSearchResult"):
+        _command_result("msg", "schedule_query", mutation)
+    with pytest.raises(ValueError, match="must return ScheduleMutationResult"):
+        _command_result("msg", "schedule_create", search)
+    with pytest.raises(ValueError, match="Unsupported successful schedule operation"):
+        _command_result("msg", "bogus_op", mutation)
+
+
+def test_json_value_serializes_nested_structures() -> None:
+    from timeflow.intelligence.composed.delivery import _json_value
+
+    assert _json_value({"a": 1}) == {"a": 1}
+    assert _json_value([1, 2]) == [1, 2]
+
+
+def test_delivery_without_bound_stream_is_a_noop() -> None:
+    from timeflow.intelligence.composed.delivery import ScheduleResultDelivery
+
+    sink = RecordingSink()
+    delivery = ScheduleResultDelivery(sink)
+
+    async def scenario() -> None:
+        await delivery.succeeded("schedule_create", ScheduleMutationResult(schedules=()))
+
+    asyncio.run(scenario())
+
+    assert sink.calls == []
+
+
+def test_session_rejects_changed_account() -> None:
+    async def scenario() -> None:
+        agent = ComposedVoiceAgent(
+            FakeAsr(["你好"]),
+            lambda account_id, observer, client_location: Agent(
+                FakeLlm([[TextDelta("好。"), completed()]]), ToolRegistry([])
+            ),
+            FakeTts(),
+            RecordingSink(),
+        )
+        await agent.handle_audio(chunks(), Stream())
+
+        with pytest.raises(ValueError, match="cannot change authenticated account"):
+            await agent.handle_audio(chunks(), Stream(account_id="other"))
+
+    asyncio.run(scenario())
+
+
+def test_session_rejects_changed_voice_mode() -> None:
+    async def scenario() -> None:
+        agent = ComposedVoiceAgent(
+            FakeAsr(["你好"]),
+            lambda account_id, observer, client_location: Agent(
+                FakeLlm([[TextDelta("好。"), completed()]]), ToolRegistry([])
+            ),
+            FakeTts(),
+            RecordingSink(),
+        )
+        await agent.handle_audio(chunks(), Stream())
+
+        with pytest.raises(ValueError, match="cannot change voice mode"):
+            await agent.handle_audio(chunks(), Stream(voice_mode="continuous"))
+
+    asyncio.run(scenario())
+
+
+def test_interrupt_or_close_unknown_session_is_a_noop() -> None:
+    async def scenario() -> None:
+        agent = ComposedVoiceAgent(
+            FakeAsr(["你好"]),
+            lambda account_id, observer, client_location: Agent(FakeLlm([]), ToolRegistry([])),
+            FakeTts(),
+            RecordingSink(),
+        )
+        await agent.interrupt("unknown_session", "reason")
+        await agent.close_session("unknown_session")
+
+    asyncio.run(scenario())
+
+
+def test_empty_transcript_is_a_noop() -> None:
+    async def scenario() -> None:
+        sink = RecordingSink()
+        agent = ComposedVoiceAgent(
+            FakeAsr([""]),
+            lambda account_id, observer, client_location: Agent(FakeLlm([]), ToolRegistry([])),
+            FakeTts(),
+            sink,
+        )
+
+        await agent.handle_audio(chunks(), Stream())
+
+        assert sink.calls == []
+
+    asyncio.run(scenario())
+
+
+def test_unsupported_asr_event_is_logged_and_swallowed(caplog: Any) -> None:
+    class BogusAsr:
+        def stream(self, audio: AsyncIterable[bytes]) -> AsyncIterator[Any]:
+            async def events() -> AsyncIterator[Any]:
+                async for _ in audio:
+                    pass
+                yield object()
+
+            return events()
+
+    async def scenario() -> None:
+        agent = ComposedVoiceAgent(
+            BogusAsr(),
+            lambda account_id, observer, client_location: Agent(FakeLlm([]), ToolRegistry([])),
+            FakeTts(),
+            RecordingSink(),
+        )
+        with caplog.at_level(logging.ERROR):
+            await agent.handle_audio(chunks(), Stream())
+
+    asyncio.run(scenario())
+
+    assert "composed voice turn failed" in caplog.text
+
+
+def test_continuous_skips_empty_finals() -> None:
+    class EmptyThenFinalAsr:
+        def stream(self, audio: AsyncIterable[bytes]) -> AsyncIterator[Any]:
+            async def events() -> AsyncIterator[Any]:
+                async for _ in audio:
+                    pass
+                yield TranscriptCompleted("   ")
+                yield TranscriptCompleted("你好")
+
+            return events()
+
+    async def scenario() -> None:
+        sink = RecordingSink()
+        agent = ComposedVoiceAgent(
+            EmptyThenFinalAsr(),
+            lambda account_id, observer, client_location: Agent(
+                FakeLlm([[TextDelta("好。"), completed()]]), ToolRegistry([])
+            ),
+            FakeTts(),
+            sink,
+        )
+
+        await agent.handle_audio(chunks(), Stream(voice_mode="continuous"))
+
+        transcripts = [value.text for kind, value in sink.calls if kind == "transcript"]
+        assert transcripts == ["你好"]
 
     asyncio.run(scenario())
