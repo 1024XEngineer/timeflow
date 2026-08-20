@@ -23,6 +23,8 @@ from timeflow.intelligence.conversation.asr import (
     AsrConnectionError,
     AsrProtocolError,
     AsrTranscriptionError,
+    SpeechStarted,
+    SpeechStopped,
     TranscriptCompleted,
     TranscriptPreview,
 )
@@ -152,6 +154,14 @@ def test_parse_transcript_events() -> None:
     ) == TranscriptCompleted(text="今天天气怎么样")
 
 
+def test_parse_speech_started() -> None:
+    assert parse_server_event({"type": "input_audio_buffer.speech_started"}) == SpeechStarted()
+
+
+def test_parse_speech_stopped() -> None:
+    assert parse_server_event({"type": "input_audio_buffer.speech_stopped"}) == SpeechStopped()
+
+
 def test_parse_provider_errors() -> None:
     with pytest.raises(AsrProtocolError, match="invalid"):
         parse_server_event(
@@ -216,11 +226,13 @@ async def test_stream_sends_audio_yields_events_and_closes(settings: Settings) -
         [
             server_event("session.created", session={"id": "sess_1"}),
             server_event("session.updated", session={"id": "sess_1"}),
+            server_event("input_audio_buffer.speech_started"),
             server_event(
                 "conversation.item.input_audio_transcription.text",
                 text="明天",
                 stash="上午",
             ),
+            server_event("input_audio_buffer.speech_stopped"),
             server_event(
                 "conversation.item.input_audio_transcription.completed",
                 transcript="明天上午开会",
@@ -234,7 +246,9 @@ async def test_stream_sends_audio_yields_events_and_closes(settings: Settings) -
     events = [event async for event in provider.stream(audio_chunks(b"audio", b""))]
 
     assert events == [
+        SpeechStarted(),
         TranscriptPreview(text="明天上午"),
+        SpeechStopped(),
         TranscriptCompleted(text="明天上午开会"),
     ]
     sent = [json.loads(message) for message in websocket.sent_text]
@@ -249,7 +263,11 @@ async def test_stream_sends_audio_yields_events_and_closes(settings: Settings) -
 
 
 @pytest.mark.asyncio
-async def test_completed_is_yielded_before_session_finished(settings: Settings) -> None:
+async def test_final_completed_ends_stream_without_waiting_for_session_finished(
+    settings: Settings,
+) -> None:
+    """A completed transcript after the audio source is exhausted ends the stream
+    immediately, without waiting for the server-VAD session.finished idle timeout."""
     websocket = FakeWebSocket(
         [
             server_event("session.created", session={"id": "sess_1"}),
@@ -263,14 +281,12 @@ async def test_completed_is_yielded_before_session_finished(settings: Settings) 
     provider = QwenRealtimeAsr(settings, connector=FakeConnector(websocket))
     stream = provider.stream(audio_chunks(b"audio"))
 
-    event = await asyncio.wait_for(anext(stream), timeout=1)
+    events = [event async for event in stream]
 
-    assert event == TranscriptCompleted(text="低延迟结果")
-    assert websocket.closed is False
-    websocket.feed(server_event("session.finished"))
-    with pytest.raises(StopAsyncIteration):
-        await asyncio.wait_for(anext(stream), timeout=1)
+    assert events == [TranscriptCompleted(text="低延迟结果")]
     assert websocket.closed is True
+    sent_types = [json.loads(message)["type"] for message in websocket.sent_text]
+    assert sent_types == ["session.update", "input_audio_buffer.append", "session.finish"]
 
 
 @pytest.mark.asyncio
