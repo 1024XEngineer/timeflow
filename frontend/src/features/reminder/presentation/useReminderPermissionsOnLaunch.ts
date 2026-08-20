@@ -101,6 +101,9 @@ export function useReminderPermissionsOnLaunch(
         if (missing == null) return;
 
         const prompt = PERMISSION_PROMPTS[missing];
+        /* istanbul ignore next -- PERMISSION_PROMPTS has an entry for every current
+         * DevicePermission; this only guards a future permission added to the union
+         * without a matching prompt, which can't happen with today's types. */
         if (prompt == null) {
           skippedRef.current.add(missing);
           queueNext = true;

@@ -27,6 +27,9 @@ export class AlertReminderPresenter implements ReminderPresenterPort {
   async show(request: ReminderDeliveryRequest): Promise<ReminderPresentationReceipt> {
     this.suppressed.delete(request.schedule_id);
     this.visibleScheduleId = request.schedule_id;
+    /* istanbul ignore next -- MESSAGE_BY_REASON has an entry for every current
+     * ReminderTriggerReason; this only guards a future reason added to the union
+     * without a matching message, which can't happen with today's types. */
     const message = MESSAGE_BY_REASON[request.trigger.reason] ?? '日程提醒已触发，请及时处理。';
 
     await this.dialog.show({

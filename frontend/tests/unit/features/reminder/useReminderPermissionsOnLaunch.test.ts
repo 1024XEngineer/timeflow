@@ -240,4 +240,151 @@ describe('useReminderPermissionsOnLaunch', () => {
       expect.objectContaining({ title: '需要全屏通知权限' }),
     );
   });
+
+  it('treats a dismissed dialog the same as declining', async () => {
+    jest.useFakeTimers();
+    const device = createDevice({
+      platform: 'android',
+      supported: true,
+      permissions: { ...grantedPermissions(), overlay: false, full_screen: false },
+    });
+    const dialog = createDialog();
+    renderHook(() => useReminderPermissionsOnLaunch(device, dialog));
+    await flush(600);
+    expect(dialog.show).toHaveBeenCalledWith(expect.objectContaining({ title: '需要悬浮窗权限' }));
+
+    await act(async () => {
+      dialogRequest?.onDismiss?.();
+      await Promise.resolve();
+    });
+    await flush(250);
+    expect(device.openSettings).not.toHaveBeenCalledWith('overlay');
+    expect(dialog.show).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '需要全屏通知权限' }),
+    );
+  });
+
+  it('recovers cleanly when a status check rejects', async () => {
+    jest.useFakeTimers();
+    const device = createDevice({
+      platform: 'android',
+      supported: true,
+      permissions: deniedPermissions(),
+    });
+    device.getStatus = jest.fn(async () => {
+      throw new Error('boom');
+    });
+    const dialog = createDialog();
+    renderHook(() => useReminderPermissionsOnLaunch(device, dialog));
+    await flush(600);
+
+    expect(dialog.show).not.toHaveBeenCalled();
+  });
+
+  it('skips notifications when the request is denied, then moves on to the next permission', async () => {
+    jest.useFakeTimers();
+    const device = createDevice({
+      platform: 'android',
+      supported: true,
+      permissions: { ...grantedPermissions(), notifications: false, exact_alarm: false },
+    });
+    device.requestPermission = jest.fn(async () => false);
+    const dialog = createDialog();
+    const onPermissionsUpdated = jest.fn();
+    renderHook(() => useReminderPermissionsOnLaunch(device, dialog, onPermissionsUpdated));
+    await flush(600);
+    expect(device.requestPermission).toHaveBeenCalledWith('notifications');
+    expect(onPermissionsUpdated).not.toHaveBeenCalled();
+
+    await flush(250);
+    expect(device.openSettings).toHaveBeenCalledWith('exact_alarm');
+  });
+
+  it('skips exact alarm and moves on when opening settings fails', async () => {
+    jest.useFakeTimers();
+    const device = createDevice({
+      platform: 'android',
+      supported: true,
+      permissions: { ...grantedPermissions(), exact_alarm: false, overlay: false },
+    });
+    device.openSettings = jest.fn(
+      async (permission: DevicePermission) => permission !== 'exact_alarm',
+    );
+    const dialog = createDialog();
+    renderHook(() => useReminderPermissionsOnLaunch(device, dialog));
+    await flush(600);
+    expect(device.openSettings).toHaveBeenCalledWith('exact_alarm');
+
+    await flush(250);
+    expect(dialog.show).toHaveBeenCalledWith(expect.objectContaining({ title: '需要悬浮窗权限' }));
+  });
+
+  it('reports the update once the user grants location permission directly', async () => {
+    jest.useFakeTimers();
+    const device = createDevice({
+      platform: 'android',
+      supported: true,
+      permissions: { ...grantedPermissions(), location_foreground: false },
+    });
+    const dialog = createDialog();
+    const onPermissionsUpdated = jest.fn();
+    renderHook(() => useReminderPermissionsOnLaunch(device, dialog, onPermissionsUpdated));
+    await flush(600);
+    expect(dialog.show).toHaveBeenCalledWith(expect.objectContaining({ title: '需要定位权限' }));
+
+    await press('去授权');
+    await flush(350);
+    expect(device.requestPermission).toHaveBeenCalledWith('location_foreground');
+    expect(device.openSettings).not.toHaveBeenCalledWith('location_foreground');
+    expect(onPermissionsUpdated).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips a location permission and moves to the next one when settings also fails', async () => {
+    jest.useFakeTimers();
+    const device = createDevice({
+      platform: 'android',
+      supported: true,
+      permissions: {
+        ...grantedPermissions(),
+        location_foreground: false,
+        location_background: false,
+      },
+    });
+    device.requestPermission = jest.fn(async () => false);
+    device.openSettings = jest.fn(async () => false);
+    const dialog = createDialog();
+    renderHook(() => useReminderPermissionsOnLaunch(device, dialog));
+    await flush(600);
+    expect(dialog.show).toHaveBeenCalledWith(expect.objectContaining({ title: '需要定位权限' }));
+
+    await press('去授权');
+    await flush(350);
+    expect(device.openSettings).toHaveBeenCalledWith('location_foreground');
+
+    await flush(250);
+    expect(dialog.show).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '需要后台定位权限' }),
+    );
+  });
+
+  it('skips overlay and moves on when opening settings fails after the dialog is confirmed', async () => {
+    jest.useFakeTimers();
+    const device = createDevice({
+      platform: 'android',
+      supported: true,
+      permissions: { ...grantedPermissions(), overlay: false, full_screen: false },
+    });
+    device.openSettings = jest.fn(async (permission: DevicePermission) => permission !== 'overlay');
+    const dialog = createDialog();
+    renderHook(() => useReminderPermissionsOnLaunch(device, dialog));
+    await flush(600);
+    expect(dialog.show).toHaveBeenCalledWith(expect.objectContaining({ title: '需要悬浮窗权限' }));
+
+    await press('去授权');
+    await flush(250);
+    expect(device.openSettings).toHaveBeenCalledWith('overlay');
+    expect(dialog.show).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '需要全屏通知权限' }),
+    );
+  });
 });

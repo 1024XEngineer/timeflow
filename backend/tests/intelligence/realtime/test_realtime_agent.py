@@ -521,6 +521,27 @@ def test_a_barge_in_after_the_reply_already_finished_sending_still_tells_the_cli
     asyncio.run(scenario())
 
 
+def test_a_barge_in_before_any_reply_started_sends_no_cancellation() -> None:
+    """interrupted() with nothing ever spoken has no audio id to preserve or send.
+
+    _last_audio_id is only set once audio() queues a first chunk; a barge-in that
+    lands before the model has said anything (or produced any audio) leaves it None,
+    and there is nothing playing on the phone for the client to stop.
+    """
+
+    async def scenario() -> None:
+        sink = RecordingSink()
+        session = ScriptedSession([("interrupted", ())])
+
+        await RealtimeAgent(ScriptedFactory(session), sink).handle_audio(
+            _open_mic(), _Stream(voice_mode="continuous")
+        )
+
+        assert [kind for kind, _ in sink.calls if kind == "canceled"] == []
+
+    asyncio.run(scenario())
+
+
 def test_a_continuous_pump_that_fails_does_not_wait_on_a_microphone_nobody_reads() -> None:
     """A vendor failure ends the turn even though the client's microphone stays open.
 

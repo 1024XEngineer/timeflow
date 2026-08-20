@@ -830,6 +830,39 @@ describe('AssistantContinuousConversationService', () => {
     disposeService(service);
   });
 
+  it('dismissReply() clears the reply bubble and stops playback immediately', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      payload: {
+        format: 'pcm_s16le',
+        purpose: 'reply',
+        sample_rate_hz: 24000,
+        speech_text: '回复内容',
+      },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '回复内容' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getReplyText()).toBe('回复内容');
+
+    await service.dismissReply();
+
+    expect(service.getReplyText()).toBeNull();
+    expect(deps.playback.stop).toHaveBeenCalledTimes(1);
+    disposeService(service);
+  });
+
   it('handleClose() unsubscribes from the shared connection before nulling it, even when a real disconnect races endTurn()', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
