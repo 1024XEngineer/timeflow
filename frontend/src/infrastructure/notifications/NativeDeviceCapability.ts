@@ -1,4 +1,5 @@
 import { AppState, Linking, Platform, type AppStateStatus } from 'react-native';
+import * as ExpoLocation from 'expo-location';
 
 import type {
   DeviceCapabilityPort,
@@ -15,11 +16,11 @@ import {
 type LocationModule = typeof import('expo-location');
 
 async function loadExpoLocation(): Promise<LocationModule | null> {
-  try {
-    return await import('expo-location');
-  } catch {
-    return null;
-  }
+  // Keep this as a static module dependency. The Metro development build
+  // reliably bundles expo-location statically, while the previous dynamic
+  // import could reject at runtime and make already-granted permissions look
+  // denied on the device.
+  return ExpoLocation;
 }
 
 const SETTINGS_KIND: Partial<
@@ -99,6 +100,28 @@ export class NativeDeviceCapability implements DeviceCapabilityPort {
   async openSettings(permission: DevicePermission): Promise<boolean> {
     if (permission === 'location_foreground' || permission === 'location_background') {
       try {
+        const Location = await this.loadLocationModule();
+        if (Location != null) {
+          // Expo uses the foreground request for the normal runtime dialog. On
+          // Android 11+, the background request opens the system's "all the time"
+          // location flow instead of the generic app settings page.
+          const response =
+            permission === 'location_foreground'
+              ? await Location.requestForegroundPermissionsAsync()
+              : await Location.requestBackgroundPermissionsAsync();
+          if (response.status === Location.PermissionStatus.GRANTED) {
+            return true;
+          }
+          // A denied request that can still be asked again did not navigate to
+          // settings. Let the caller mark this prompt as skipped for this session.
+          if (response.canAskAgain) {
+            return false;
+          }
+        }
+
+        // Once Android has suppressed the runtime prompt, only the app's detail
+        // page can get the user back to Permissions. This is the honest fallback;
+        // the foreground/background copy tells the user which row to select.
         await Linking.openSettings();
         return true;
       } catch {
@@ -126,7 +149,10 @@ export class NativeDeviceCapability implements DeviceCapabilityPort {
         foreground: foreground.status === Location.PermissionStatus.GRANTED,
         background: background.status === Location.PermissionStatus.GRANTED,
       };
-    } catch {
+    } catch (error) {
+      console.warn('[permissions] failed to read location permission status', {
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
       return { foreground: false, background: false };
     }
   }
@@ -171,7 +197,11 @@ export class NativeDeviceCapability implements DeviceCapabilityPort {
 
       const background = await Location.requestBackgroundPermissionsAsync();
       return background.status === Location.PermissionStatus.GRANTED;
-    } catch {
+    } catch (error) {
+      console.warn('[permissions] failed to request location permission', {
+        permission,
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
       return false;
     }
   }

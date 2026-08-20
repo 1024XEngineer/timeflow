@@ -16,7 +16,10 @@ export class ExpoLocationProvider implements LocationProvider {
   private freshSampleInFlight: Promise<LocationSample | null> | null = null;
 
   async getCurrentSample(): Promise<LocationSample | null> {
-    const { status } = await Location.requestForegroundPermissionsAsync();
+    // Permission prompting is centralized in the authenticated startup flow.
+    // A voice handshake must never open a system dialog or hang on a permission
+    // request; it can simply omit the optional location field.
+    const { status } = await Location.getForegroundPermissionsAsync();
     if (status !== 'granted') {
       console.warn('[location-search] foreground location permission is unavailable', { status });
       return null;

@@ -74,6 +74,7 @@ export function useReminderPermissionsOnLaunch(
 ): void {
   const busyRef = useRef(false);
   const awaitingReturnRef = useRef(false);
+  const awaitingPermissionRef = useRef<DevicePermission | null>(null);
   const skippedRef = useRef(new Set<DevicePermission>());
 
   useEffect(() => {
@@ -125,9 +126,11 @@ export function useReminderPermissionsOnLaunch(
         // 精确闹钟没有系统授权框，只能跳设置页，先弹说明框只会多一次点击，直接跳过去。
         if (DIRECT_SETTINGS.has(missing)) {
           awaitingReturnRef.current = true;
+          awaitingPermissionRef.current = missing;
           const opened = await device.openSettings(missing);
           if (!opened) {
             awaitingReturnRef.current = false;
+            awaitingPermissionRef.current = null;
             skippedRef.current.add(missing);
             queueNext = true;
           }
@@ -151,9 +154,11 @@ export function useReminderPermissionsOnLaunch(
             return;
           }
           awaitingReturnRef.current = true;
+          awaitingPermissionRef.current = missing;
           const opened = await device.openSettings(missing);
           if (!opened) {
             awaitingReturnRef.current = false;
+            awaitingPermissionRef.current = null;
             skippedRef.current.add(missing);
             queueNext = true;
           }
@@ -162,9 +167,11 @@ export function useReminderPermissionsOnLaunch(
 
         // 精确闹钟 / 悬浮窗等：跳转系统设置，回来后再继续。
         awaitingReturnRef.current = true;
+        awaitingPermissionRef.current = missing;
         const opened = await device.openSettings(missing);
         if (!opened) {
           awaitingReturnRef.current = false;
+          awaitingPermissionRef.current = null;
           skippedRef.current.add(missing);
           queueNext = true;
         }
@@ -202,8 +209,25 @@ export function useReminderPermissionsOnLaunch(
     const unsubscribe = device.onAppActive(() => {
       if (!awaitingReturnRef.current) return;
       awaitingReturnRef.current = false;
-      onPermissionsUpdated?.();
-      setTimeout(runPrompt, 300);
+      const pending = awaitingPermissionRef.current;
+      awaitingPermissionRef.current = null;
+      void device
+        .getStatus()
+        .then((status) => {
+          if (pending != null && !status.permissions[pending]) {
+            // Returning from settings without changing the permission must not
+            // reopen the same dialog in a loop. The next explicit permission
+            // action can start a fresh attempt.
+            skippedRef.current.add(pending);
+          } else if (pending != null) {
+            onPermissionsUpdated?.();
+          }
+          setTimeout(runPrompt, 300);
+        })
+        .catch(() => {
+          if (pending != null) skippedRef.current.add(pending);
+          setTimeout(runPrompt, 300);
+        });
     });
 
     const timer = setTimeout(runPrompt, 600);
@@ -216,6 +240,7 @@ export function useReminderPermissionsOnLaunch(
       // 一直读到陈旧的 true 直接返回——不会再有新的 onAppActive 事件来清掉它
       // （应用早就是 active 的），所有权限提示永久失效，直到进程重启。
       awaitingReturnRef.current = false;
+      awaitingPermissionRef.current = null;
       skippedRef.current = new Set();
     };
   }, [device, dialog, onPermissionsUpdated]);

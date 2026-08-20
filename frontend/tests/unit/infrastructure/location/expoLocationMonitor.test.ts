@@ -425,20 +425,19 @@ describe('ExpoLocationMonitor', () => {
     });
   });
 
-  describe('syncRegions() permission requesting', () => {
-    it('requests foreground permission when not already granted, then proceeds', async () => {
+  describe('syncRegions() permission checks', () => {
+    it('skips registration when foreground permission is not granted', async () => {
       getForeground.mockResolvedValue(denied());
-      requestForeground.mockResolvedValue(granted());
       const monitor = new ExpoLocationMonitor();
       await monitor.watch(request(), jest.fn());
 
-      expect(requestForeground).toHaveBeenCalledTimes(1);
-      expect(startGeofencing).toHaveBeenCalled();
+      expect(requestForeground).not.toHaveBeenCalled();
+      expect(requestBackground).not.toHaveBeenCalled();
+      expect(startGeofencing).not.toHaveBeenCalled();
     });
 
-    it('skips registration when foreground permission is still denied after requesting', async () => {
+    it('does not request background permission when foreground permission is missing', async () => {
       getForeground.mockResolvedValue(denied(false));
-      requestForeground.mockResolvedValue(denied(false));
       const monitor = new ExpoLocationMonitor();
       await monitor.watch(request(), jest.fn());
 
@@ -446,20 +445,18 @@ describe('ExpoLocationMonitor', () => {
       expect(startGeofencing).not.toHaveBeenCalled();
     });
 
-    it('requests background permission only after foreground is already granted', async () => {
+    it('skips registration when background permission is not granted', async () => {
       getBackground.mockResolvedValue(denied());
-      requestBackground.mockResolvedValue(granted());
       const monitor = new ExpoLocationMonitor();
       await monitor.watch(request(), jest.fn());
 
       expect(requestForeground).not.toHaveBeenCalled();
-      expect(requestBackground).toHaveBeenCalledTimes(1);
-      expect(startGeofencing).toHaveBeenCalled();
+      expect(requestBackground).not.toHaveBeenCalled();
+      expect(startGeofencing).not.toHaveBeenCalled();
     });
 
-    it('skips registration when background permission is still denied after requesting', async () => {
+    it('does not request or register when background permission remains denied', async () => {
       getBackground.mockResolvedValue(denied(false));
-      requestBackground.mockResolvedValue(denied(false));
       const monitor = new ExpoLocationMonitor();
       await monitor.watch(request(), jest.fn());
 
