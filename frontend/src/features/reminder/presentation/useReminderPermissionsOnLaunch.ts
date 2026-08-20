@@ -208,6 +208,12 @@ export function useReminderPermissionsOnLaunch(
       cancelled = true;
       clearTimeout(timer);
       unsubscribe();
+      // device 变 null（登出）时这个 effect 会重跑清理：不重置的话，刚好卡在
+      // "等用户从设置页返回"这一步登出的账号，会让下次登录后的新一轮 promptNext()
+      // 一直读到陈旧的 true 直接返回——不会再有新的 onAppActive 事件来清掉它
+      // （应用早就是 active 的），所有权限提示永久失效，直到进程重启。
+      awaitingReturnRef.current = false;
+      skippedRef.current = new Set();
     };
   }, [device, dialog, onPermissionsUpdated]);
 }

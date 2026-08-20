@@ -164,6 +164,37 @@ describe('useReminderPermissionsOnLaunch', () => {
     expect(dialog.show).toHaveBeenCalledWith(expect.objectContaining({ title: '需要悬浮窗权限' }));
   });
 
+  it('resumes prompting after a logout that happens while waiting to return from settings', async () => {
+    jest.useFakeTimers();
+    const firstDevice = createDevice({
+      platform: 'android',
+      supported: true,
+      permissions: { ...deniedPermissions(), notifications: true },
+    });
+    const dialog = createDialog();
+    const { rerender } = renderHook(
+      ({ device }: { device: DeviceCapabilityPort | null }) =>
+        useReminderPermissionsOnLaunch(device, dialog),
+      { initialProps: { device: firstDevice as DeviceCapabilityPort | null } },
+    );
+    await flush(600);
+    expect(firstDevice.openSettings).toHaveBeenCalledWith('exact_alarm');
+
+    // 用户登出，还没从设置页返回——effect 清理时必须把 awaitingReturnRef 也重置掉，
+    // 不然下一个账号登录后永远读到陈旧的 true，所有权限提示直接失效。
+    rerender({ device: null });
+
+    const secondDevice = createDevice({
+      platform: 'android',
+      supported: true,
+      permissions: { ...deniedPermissions(), notifications: true },
+    });
+    rerender({ device: secondDevice as DeviceCapabilityPort | null });
+    await flush(600);
+
+    expect(secondDevice.openSettings).toHaveBeenCalledWith('exact_alarm');
+  });
+
   it('shows a dialog before requesting location permission, and falls back to settings when denied', async () => {
     jest.useFakeTimers();
     const device = createDevice({
