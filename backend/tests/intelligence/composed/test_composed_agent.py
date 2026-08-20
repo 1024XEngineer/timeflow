@@ -1226,3 +1226,118 @@ def test_continuous_skips_empty_finals() -> None:
         assert transcripts == ["你好"]
 
     asyncio.run(scenario())
+
+
+def test_continuous_repeated_speech_markers_keep_first_timestamp() -> None:
+    """A second VAD speech_started/stopped before a final keeps the first timestamp."""
+
+    class RepeatedMarkerAsr:
+        def stream(self, audio: AsyncIterable[bytes]) -> AsyncIterator[Any]:
+            async def events() -> AsyncIterator[Any]:
+                async for _ in audio:
+                    pass
+                yield SpeechStarted()
+                yield SpeechStarted()
+                yield SpeechStopped()
+                yield SpeechStopped()
+                yield TranscriptCompleted("你好")
+
+            return events()
+
+    async def scenario() -> None:
+        agent = ComposedVoiceAgent(
+            RepeatedMarkerAsr(),
+            lambda account_id, observer, client_location: Agent(
+                FakeLlm([[TextDelta("好。"), completed()]]), ToolRegistry([])
+            ),
+            FakeTts(),
+            RecordingSink(),
+        )
+
+        await agent.handle_audio(chunks(), Stream(voice_mode="continuous"))
+
+    asyncio.run(scenario())
+
+
+def test_continuous_speech_started_before_tts_is_ignored() -> None:
+    """A speech_started while the LLM is still generating (no active TTS) is ignored."""
+
+    llm_started = asyncio.Event()
+    release_llm = asyncio.Event()
+
+    class GatedLlm:
+        def stream(self, messages: Any, tools: Any) -> AsyncIterator[Any]:
+            del tools
+
+            async def events() -> AsyncIterator[Any]:
+                llm_started.set()
+                yield TextDelta("慢速回复")
+                await release_llm.wait()
+                yield completed()
+
+            return events()
+
+    class EarlySpeechAsr:
+        def __init__(self, llm_started: asyncio.Event) -> None:
+            self._llm_started = llm_started
+
+        def stream(self, audio: AsyncIterable[bytes]) -> AsyncIterator[Any]:
+            async def events() -> AsyncIterator[Any]:
+                async for _ in audio:
+                    pass
+                yield TranscriptCompleted("你好")
+                await self._llm_started.wait()
+                yield SpeechStarted()
+
+            return events()
+
+    async def scenario() -> None:
+        sink = RecordingSink()
+        agent = ComposedVoiceAgent(
+            EarlySpeechAsr(llm_started),
+            lambda account_id, observer, client_location: Agent(GatedLlm(), ToolRegistry([])),
+            FakeTts(),
+            sink,
+        )
+        task = asyncio.create_task(agent.handle_audio(chunks(), Stream(voice_mode="continuous")))
+        await asyncio.wait_for(llm_started.wait(), 2)
+        await asyncio.sleep(0.01)
+        release_llm.set()
+        await task
+
+        assert all(kind != "audio_canceled" for kind, _ in sink.calls)
+
+    asyncio.run(scenario())
+
+
+def test_continuous_turn_failure_cancels_pump_and_propagates() -> None:
+    """A failing agent event propagates and cancels the still-running ASR pump."""
+
+    class RaisingSink(RecordingSink):
+        async def deliver_reply_text(self, value: Any, stream: Any) -> None:
+            raise RuntimeError("sink failed")
+
+    class HangingAsr:
+        def stream(self, audio: AsyncIterable[bytes]) -> AsyncIterator[Any]:
+            async def events() -> AsyncIterator[Any]:
+                async for _ in audio:
+                    pass
+                yield TranscriptCompleted("你好")
+                await asyncio.Event().wait()
+
+            return events()
+
+    async def scenario() -> None:
+        agent = ComposedVoiceAgent(
+            HangingAsr(),
+            lambda account_id, observer, client_location: Agent(
+                FakeLlm([[TextDelta("好。"), completed()]]), ToolRegistry([])
+            ),
+            FakeTts(),
+            RaisingSink(),
+        )
+
+        with pytest.raises(RuntimeError, match="sink failed"):
+            await agent.handle_audio(chunks(), Stream(voice_mode="continuous"))
+
+    asyncio.run(scenario())
