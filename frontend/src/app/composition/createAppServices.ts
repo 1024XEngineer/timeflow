@@ -6,9 +6,9 @@ import type {
 } from '../../features/reminder/application/interfaces';
 import { LocalReminderApplication } from '../../features/reminder/application';
 import {
-  MockLocalScheduleReader,
-  MockReminderDispositionSync,
-  MockReminderStateStore,
+  LocalReminderDispositionSync,
+  SqliteLocalScheduleReader,
+  SqliteReminderStateStore,
 } from '../../features/reminder/data/local';
 import { ExpoAudioPlayback } from '../../infrastructure/audio';
 import { ExpoLocationMonitor } from '../../infrastructure/location';
@@ -31,7 +31,9 @@ export type AppServices = {
   runtime: AppRuntime;
   reminder: ReminderApplicationPort;
   reminderPorts: ReminderApplicationDependencies;
+  reminderState: SqliteReminderStateStore;
   scheduleView: ScheduleViewStore;
+  schedules: SqliteLocalScheduleReader;
   webSocketClient: AuthRuntime['webSocketClient'];
 };
 
@@ -42,8 +44,10 @@ export interface CreateAppServicesOptions {
 /** 应用唯一组合根：认证传输、功能服务、生命周期和账号内存清理在此接线。 */
 export function createAppServices(options: CreateAppServicesOptions = {}): AppServices {
   const auth = createAuthRuntime(options.auth);
+  const schedules = new SqliteLocalScheduleReader();
+  const reminderState = new SqliteReminderStateStore();
   const reminderPorts: ReminderApplicationDependencies = {
-    schedules: new MockLocalScheduleReader(),
+    schedules,
     time: new IntervalTimeListener(),
     location: new ExpoLocationMonitor(),
     alarms: new NativeAlarmScheduler(),
@@ -55,8 +59,8 @@ export function createAppServices(options: CreateAppServicesOptions = {}): AppSe
     popup: new MockPopup(),
     vibration: new MockVibration(),
     recovery: new MockReminderRecovery(),
-    state: new MockReminderStateStore(),
-    dispositionSync: new MockReminderDispositionSync(),
+    state: reminderState,
+    dispositionSync: new LocalReminderDispositionSync(),
   };
   const reminder = new LocalReminderApplication(reminderPorts);
   const scheduleView = new ScheduleViewStore();
@@ -76,7 +80,9 @@ export function createAppServices(options: CreateAppServicesOptions = {}): AppSe
     runtime,
     reminder,
     reminderPorts,
+    reminderState,
     scheduleView,
+    schedules,
     webSocketClient: auth.webSocketClient,
   };
 }

@@ -2,11 +2,12 @@ import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
 import { AppRoot } from '../../../src/app/AppRoot';
-import { createScheduleSnapshotPreparation } from '../../../src/app/composition/createScheduleSnapshotPreparation';
 import {
   createAppServices,
   type AppServices,
 } from '../../../src/app/composition/createAppServices';
+import { createScheduleSnapshotPreparation } from '../../../src/app/composition/createScheduleSnapshotPreparation';
+import { LocalScheduleWriter } from '../../../src/features/assistant/data/local/LocalScheduleWriter';
 import type {
   ScheduleSnapshotBootstrapResult,
   ScheduleSnapshotBootstrapService,
@@ -20,9 +21,19 @@ jest.mock('../../../src/infrastructure/database', () => ({
 jest.mock('../../../src/app/composition/createScheduleSnapshotPreparation', () => ({
   createScheduleSnapshotPreparation: jest.fn(),
 }));
-jest.mock('../../../src/features/schedule/data', () => ({ ScheduleLocalRepository: jest.fn() }));
+jest.mock('../../../src/features/schedule/data', () => ({
+  ScheduleLocalRepository: jest.fn().mockImplementation(() => ({
+    getSchedule: jest.fn<() => Promise<null>>().mockResolvedValue(null),
+    listSchedules: jest.fn<() => Promise<never[]>>().mockResolvedValue([]),
+  })),
+}));
 jest.mock('../../../src/features/schedule/application', () => ({
   SqliteScheduleClientService: jest.fn(),
+}));
+jest.mock('../../../src/features/assistant/data/local/LocalScheduleWriter', () => ({
+  LocalScheduleWriter: jest.fn().mockImplementation(() => ({
+    applyCommandResult: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+  })),
 }));
 jest.mock('../../../src/features/schedule/presentation/ScheduleCalendarScreen', () => ({
   ScheduleCalendarScreen: ({
@@ -90,9 +101,16 @@ beforeEach(() => {
   );
   mockedCreateScheduleSnapshotPreparation.mockReset();
   mockedCreateScheduleSnapshotPreparation.mockReturnValue({
-    repository: {},
+    // scheduleReader.refresh() (wired in AppRoot's ready-state effect) calls through to
+    // these two on whatever repository the snapshot preparation hands back, so the stub
+    // needs real methods now, not just an opaque {} -- see SqliteLocalScheduleReader.
+    repository: {
+      getSchedule: jest.fn<() => Promise<null>>().mockResolvedValue(null),
+      listSchedules: jest.fn<() => Promise<never[]>>().mockResolvedValue([]),
+    },
     bootstrap: { ensureLocalSnapshot: mockedEnsureLocalSnapshot },
   } as never);
+  jest.mocked(LocalScheduleWriter).mockClear();
 });
 
 describe('AppRoot', () => {
@@ -324,6 +342,34 @@ describe('AppRoot', () => {
 
     await waitFor(() => expect(screen.getByText('登录或注册')).toBeTruthy());
     expect(controller.getViewState()).toEqual({ status: 'unauthenticated' });
+  });
+
+  it('binds the reminder SQLite adapters and detaches them on sign out', async () => {
+    const services = createController({
+      accountId: 'acc_001',
+      accessToken: 'opaque-token',
+      expiresAt: 200_000,
+      username: 'timeflow_user',
+    });
+    const attachSchedules = jest.spyOn(services.schedules, 'attach');
+    const detachSchedules = jest.spyOn(services.schedules, 'detach');
+    const refreshSchedules = jest.spyOn(services.schedules, 'refresh').mockResolvedValue(undefined);
+    const attachState = jest.spyOn(services.reminderState, 'attach');
+    const detachState = jest.spyOn(services.reminderState, 'detach');
+
+    render(<AppRoot services={services} />);
+
+    await screen.findByText('日程日历');
+    expect(attachSchedules).toHaveBeenCalledWith(expect.anything(), 'acc_001');
+    expect(attachState).toHaveBeenCalledWith(expect.anything(), 'acc_001');
+    expect(refreshSchedules).toHaveBeenCalledTimes(1);
+    expect(LocalScheduleWriter).toHaveBeenCalledWith(expect.anything(), services.schedules);
+
+    fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
+
+    await waitFor(() => expect(screen.getByText('登录或注册')).toBeTruthy());
+    expect(detachSchedules).toHaveBeenCalledTimes(1);
+    expect(detachState).toHaveBeenCalledTimes(1);
   });
 });
 
