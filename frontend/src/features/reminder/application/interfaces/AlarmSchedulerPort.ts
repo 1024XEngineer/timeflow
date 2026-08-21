@@ -3,6 +3,10 @@ export type AlarmScheduleRequest = {
   trigger_at: string;
   title: string;
   exact: boolean;
+  /** 原生响铃时是否震动/出声/弹全屏止铃界面；由提醒强度换算而来。 */
+  vibrate: boolean;
+  sound: boolean;
+  full_screen: boolean;
 };
 
 export type AlarmScheduleReceipt = {

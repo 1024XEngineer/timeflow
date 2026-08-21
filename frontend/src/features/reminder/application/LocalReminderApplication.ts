@@ -361,6 +361,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
           trigger_at: triggerAt,
           title: schedule.title,
           exact: true,
+          ...alarmRingChannels(schedule),
         };
       })
       .filter((request): request is NonNullable<typeof request> => request != null);
@@ -498,6 +499,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
           trigger_at: snoozedUntil,
           title: schedule.title,
           exact: true,
+          ...alarmRingChannels(schedule),
         });
         if (!this.isLive(generation)) {
           if (receipt.scheduled) {
@@ -976,6 +978,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
       trigger_at: triggerAt,
       title: schedule.title,
       exact: true,
+      ...alarmRingChannels(schedule),
     });
     void this.reportPermissionGaps(schedule.id, [
       'exact_alarm',
@@ -1050,6 +1053,20 @@ function toDeliveryRequest(
     strength: schedule.reminder?.reminder_strength ?? 'medium',
     trigger,
   };
+}
+
+/**
+ * 原生闹钟响铃时要不要震动/出声/弹全屏止铃界面。全屏三档都要弹（时间型提醒
+ * 没有别的可见形式，静音也得让用户看到），vibrate/sound 复用 JS 侧的强度
+ * 换算表：低=都不要、中=只震动、高=震动+出声。
+ */
+function alarmRingChannels(schedule: LocalReminderSchedule): {
+  vibrate: boolean;
+  sound: boolean;
+  full_screen: boolean;
+} {
+  const plan = resolveStrengthDeliveryPlan(schedule.reminder?.reminder_strength ?? 'medium');
+  return { vibrate: plan.useVibration, sound: plan.useAudio, full_screen: true };
 }
 
 function toTimeReason(schedule: LocalReminderSchedule): ReminderTriggerReason {

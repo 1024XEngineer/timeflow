@@ -34,6 +34,9 @@ type TimeflowAlarmNative = {
     triggerAtMillis: number,
     title?: string | null,
     scheduleId?: string | null,
+    vibrate?: boolean,
+    sound?: boolean,
+    fullScreen?: boolean,
   ) => Promise<{ alarmId: string; scheduleId?: string }>;
   cancel: (alarmId: string) => Promise<boolean>;
   cancelAll: () => Promise<number>;
@@ -64,13 +67,26 @@ export async function nativeScheduleAlarm(
   triggerAtMillis: number,
   title: string,
   scheduleId?: string,
+  vibrate?: boolean,
+  sound?: boolean,
+  fullScreen?: boolean,
 ): Promise<string | null> {
   const native = getNativeAlarm();
   if (!isTimeflowAlarmAvailable() || native == null) return null;
   try {
-    const result = await native.schedule(triggerAtMillis, title, scheduleId ?? '');
+    const result = await native.schedule(
+      triggerAtMillis,
+      title,
+      scheduleId ?? '',
+      vibrate ?? true,
+      sound ?? true,
+      fullScreen ?? true,
+    );
     return result.alarmId;
-  } catch {
+  } catch (error) {
+    // 临时诊断日志：定位"原生闹钟排不上"到底是权限拒绝、触发时间已过，
+    // 还是 JS<->原生桥接调用本身抛了异常（比如原生端还是旧签名，参数对不上）。
+    console.warn('[TimeflowAlarm] nativeScheduleAlarm failed', error);
     return null;
   }
 }
