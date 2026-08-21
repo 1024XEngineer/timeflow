@@ -1,5 +1,6 @@
 package com.timeflow.alarm;
 
+import android.app.ActivityOptions;
 import android.app.AlarmManager;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -34,9 +35,9 @@ public final class RingActivity extends Activity {
         alarmId = extras.alarmId;
         scheduleId = extras.scheduleId;
         alarmTitle = extras.title;
+        setContentView(buildContentView());
         makeVisibleOverLockScreen();
         matchSystemBarsToReminder();
-        setContentView(buildContentView());
         removeFromSavedAlarms();
         AlarmSoundService.start(
                 this,
@@ -60,6 +61,56 @@ public final class RingActivity extends Activity {
         if (activity != null && !activity.isFinishing()) {
             activity.finishAndRemoveTask();
         }
+    }
+
+    static boolean isShowing() {
+        RingActivity activity = currentActivity.get();
+        return activity != null && !activity.isFinishing();
+    }
+
+    /**
+     * 悬浮窗不可用时（权限未授 / OEM 拦截）由 AlarmSoundService 主动拉起的兜底宿主。
+     * 已经在展示就不再重复启动，避免多重叠 UI。
+     * <p>
+     * 不能直接 context.startActivity()：Android 10+ 的后台 Activity 启动限制（BAL）会
+     * 拦截从"无可见窗口的前台服务"启动 Activity（实测 Android 16 上直接 startActivity
+     * 抛 result code=102 BAL_BLOCK）。必须像 buildNotification 的 fullScreenIntent 一样，
+     * 给 PendingIntent 带上创建者豁免（MODE_BACKGROUND_ACTIVITY_START_ALLOWED）再 send。
+     */
+    static void launch(Context context, String alarmId, String scheduleId, int requestCode, String title) {
+        if (isShowing()) {
+            return;
+        }
+        Intent intent = new Intent(context, RingActivity.class)
+                .setData(AlarmScheduler.alarmUri(alarmId))
+                .putExtra(AlarmContract.EXTRA_ALARM_ID, alarmId)
+                .putExtra(AlarmContract.EXTRA_SCHEDULE_ID, scheduleId)
+                .putExtra(AlarmContract.EXTRA_REQUEST_CODE, requestCode)
+                .putExtra(AlarmContract.EXTRA_TITLE, title)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        PendingIntent pending = PendingIntent.getActivity(
+                context,
+                requestCode,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE,
+                pendingIntentOptions()
+        );
+        try {
+            pending.send();
+        } catch (PendingIntent.CanceledException ignored) {
+            // 极少发生：pending 刚被取消。悬浮层若仍在，用户仍能看到自定义 UI。
+        }
+    }
+
+    private static Bundle pendingIntentOptions() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            return null;
+        }
+        ActivityOptions options = ActivityOptions.makeBasic();
+        options.setPendingIntentCreatorBackgroundActivityStartMode(
+                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+        );
+        return options.toBundle();
     }
 
     private View buildContentView() {

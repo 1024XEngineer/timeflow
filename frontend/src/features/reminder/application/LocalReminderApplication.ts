@@ -23,7 +23,7 @@ import type {
   ReminderTrigger,
   ReminderTriggerReason,
 } from '../domain';
-import { DEFAULT_SNOOZE_MINUTES } from '../domain';
+import { DEFAULT_SNOOZE_MINUTES, buildReminderSpeechText } from '../domain';
 import { evaluateGeofence, resolveGeofenceCenter, resolveWatchMode } from '../domain/geofence';
 import { resolveStrengthDeliveryPlan } from '../domain/strengthDelivery';
 import {
@@ -356,11 +356,13 @@ export class LocalReminderApplication implements ReminderApplicationPort {
       .map((schedule) => {
         const triggerAt = resolveEffectiveTriggerAt(schedule);
         if (triggerAt == null) return null;
+        const scheduledAt = schedule.start_time ?? triggerAt;
         return {
           schedule_id: schedule.id,
           trigger_at: triggerAt,
           title: schedule.title,
           exact: true,
+          speech_text: toAlarmSpeechText(schedule, scheduledAt),
         };
       })
       .filter((request): request is NonNullable<typeof request> => request != null);
@@ -498,6 +500,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
           trigger_at: snoozedUntil,
           title: schedule.title,
           exact: true,
+          speech_text: toAlarmSpeechText(schedule, snoozedUntil),
         });
         if (!this.isLive(generation)) {
           if (receipt.scheduled) {
@@ -971,11 +974,13 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   ): Promise<AlarmScheduleReceipt | null> {
     const triggerAt = resolveEffectiveTriggerAt(schedule);
     if (triggerAt == null) return null;
+    const scheduledAt = schedule.start_time ?? triggerAt;
     const receipt = await this.dependencies.alarms.schedule({
       schedule_id: schedule.id,
       trigger_at: triggerAt,
       title: schedule.title,
       exact: true,
+      speech_text: toAlarmSpeechText(schedule, scheduledAt),
     });
     void this.reportPermissionGaps(schedule.id, [
       'exact_alarm',
@@ -1054,6 +1059,15 @@ function toDeliveryRequest(
 
 function toTimeReason(schedule: LocalReminderSchedule): ReminderTriggerReason {
   return schedule.reminder?.reminder_type === 'before_start' ? 'before_start' : 'at_time';
+}
+
+function toAlarmSpeechText(schedule: LocalReminderSchedule, scheduledAt: string): string {
+  return buildReminderSpeechText({
+    title: schedule.title,
+    scheduledAt,
+    timezone: schedule.timezone,
+    isAllDay: schedule.is_all_day,
+  });
 }
 
 function toLocationReason(schedule: LocalReminderSchedule): ReminderTriggerReason {

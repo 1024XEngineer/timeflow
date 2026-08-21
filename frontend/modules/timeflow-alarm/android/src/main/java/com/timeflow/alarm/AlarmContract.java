@@ -10,13 +10,19 @@ final class AlarmContract {
     static final String EXTRA_REQUEST_CODE = "request_code";
     static final String EXTRA_TITLE = "alarm_title";
     static final String EXTRA_SCHEDULE_ID = "schedule_id";
+    static final String EXTRA_SPEECH_TEXT = "speech_text";
     static final String EXTRA_EVENT_TYPE = "event_type";
     static final String EVENT_FIRED = "fired";
     static final String EVENT_DISMISSED = "dismissed";
     static final String EVENT_SNOOZED = "snoozed";
     /** 与 JS DEFAULT_SNOOZE_MINUTES 对齐。 */
     static final long SNOOZE_MINUTES = 10L;
-    static final String CHANNEL_ID = "timeflow_alarm_channel_v1";
+    /**
+     * 前台服务常驻通知的频道。旧版用 IMPORTANCE_HIGH + fullScreenIntent，亮屏时
+     * 一定会弹出系统 heads-up——用户看到的就是"系统弹窗"。响铃提醒只该由自定义
+     * 悬浮层 / RingActivity 负责，这个频道改成低调静默，只占通知栏一席不打扰。
+     */
+    static final String FG_CHANNEL_ID = "timeflow_alarm_fg_channel_v1";
     static final String PREFS_NAME = "timeflow_alarms";
     static final String ALARMS_KEY = "pending_alarms";
     static final String DISPOSITIONS_KEY = "native_dispositions";
@@ -41,12 +47,14 @@ final class AlarmContract {
         final String alarmId;
         final String scheduleId;
         final String title;
+        final String speechText;
         final int requestCode;
 
-        private ExtractedExtras(String alarmId, String scheduleId, String title, int requestCode) {
+        private ExtractedExtras(String alarmId, String scheduleId, String title, String speechText, int requestCode) {
             this.alarmId = alarmId;
             this.scheduleId = scheduleId;
             this.title = title;
+            this.speechText = speechText;
             this.requestCode = requestCode;
         }
 
@@ -55,6 +63,7 @@ final class AlarmContract {
             String alarmId = intent == null ? null : intent.getStringExtra(EXTRA_ALARM_ID);
             String scheduleId = intent == null ? null : intent.getStringExtra(EXTRA_SCHEDULE_ID);
             String title = intent == null ? null : intent.getStringExtra(EXTRA_TITLE);
+            String speechText = intent == null ? null : intent.getStringExtra(EXTRA_SPEECH_TEXT);
             if (alarmId == null || alarmId.isEmpty()) {
                 alarmId = "legacy-" + requestCode;
             }
@@ -64,7 +73,10 @@ final class AlarmContract {
             if (title == null || title.isEmpty()) {
                 title = "日程提醒";
             }
-            return new ExtractedExtras(alarmId, scheduleId, title, requestCode);
+            if (speechText == null || speechText.isEmpty()) {
+                speechText = ReminderSpeechFormatter.format(title, System.currentTimeMillis());
+            }
+            return new ExtractedExtras(alarmId, scheduleId, title, speechText, requestCode);
         }
     }
 }

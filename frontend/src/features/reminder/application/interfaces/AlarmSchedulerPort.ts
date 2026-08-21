@@ -3,6 +3,7 @@ export type AlarmScheduleRequest = {
   trigger_at: string;
   title: string;
   exact: boolean;
+  speech_text?: string;
 };
 
 export type AlarmScheduleReceipt = {
