@@ -10,6 +10,7 @@ import {
   normalizeDetailText,
   ScheduleDetailSheet,
 } from './ScheduleDetailSheet';
+import { DetailIcon } from './DetailIcon';
 import { dateKeyInTimezone, formatTime, scheduleCategoryLabel } from './scheduleDisplay';
 
 export function ScheduleOccurrenceDetailSheet({
@@ -52,7 +53,7 @@ export function ScheduleOccurrenceDetailSheet({
       <View style={styles.timeCard}>
         <View style={styles.timeHeader}>
           <View accessible={false} style={styles.timeIcon}>
-            <Text style={styles.timeIconText}>◷</Text>
+            <DetailIcon name="time" />
           </View>
           <Text style={styles.timeLabel}>时间</Text>
         </View>
@@ -91,10 +92,12 @@ export function ScheduleOccurrenceDetailSheet({
         )}
       </View>
       {categoryLabel ? <DetailSection icon="◈" label="分类" primary={categoryLabel} /> : null}
-      {location ? <DetailSection icon="📍" label="地点" primary={location} /> : null}
+      {location ? (
+        <DetailSection icon={<DetailIcon name="location" />} label="地点" primary={location} />
+      ) : null}
       {reminder ? (
         <DetailSection
-          icon="🔔"
+          icon={<DetailIcon name="reminder" />}
           label="提醒"
           primary={reminder.primary}
           secondary={reminder.secondary}
@@ -186,15 +189,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     overflow: 'hidden',
     width: 30,
-  },
-  timeIconText: {
-    color: colors.text,
-    fontSize: 17,
-    height: 17,
-    includeFontPadding: false,
-    lineHeight: 17,
-    textAlign: 'center',
-    textAlignVertical: 'center',
   },
   timeLabel: { color: colors.mutedText, fontSize: 12, fontWeight: '700' },
   timePoint: { flex: 1, minWidth: 96 },

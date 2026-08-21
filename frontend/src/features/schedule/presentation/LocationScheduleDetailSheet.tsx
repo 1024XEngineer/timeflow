@@ -8,6 +8,7 @@ import {
   normalizeDetailText,
   ScheduleDetailSheet,
 } from './ScheduleDetailSheet';
+import { DetailIcon } from './DetailIcon';
 import { scheduleCategoryLabel } from './scheduleDisplay';
 
 export function LocationScheduleDetailSheet({
@@ -36,10 +37,12 @@ export function LocationScheduleDetailSheet({
   return (
     <ScheduleDetailSheet onClose={onClose} title={detailSchedule.title} visible={schedule !== null}>
       {categoryLabel ? <DetailSection icon="◈" label="分类" primary={categoryLabel} /> : null}
-      {location ? <DetailSection icon="📍" label="地点" primary={location} /> : null}
+      {location ? (
+        <DetailSection icon={<DetailIcon name="location" />} label="地点" primary={location} />
+      ) : null}
       {reminder ? (
         <DetailSection
-          icon="🔔"
+          icon={<DetailIcon name="reminder" />}
           label="提醒"
           primary={reminder.primary}
           secondary={reminder.secondary}
