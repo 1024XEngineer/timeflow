@@ -47,6 +47,7 @@ export function useAssistantConversation(application: AssistantApplicationPort) 
   }, [application]);
 
   return {
+    cancelTurn: () => application.cancelTurn?.() ?? Promise.resolve(),
     dismissReply: () => application.dismissReply(),
     endTurn: () => application.endTurn(),
     lastAppliedCommand,

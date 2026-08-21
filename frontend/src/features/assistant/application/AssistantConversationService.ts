@@ -50,6 +50,8 @@ export class AssistantConversationService implements AssistantApplicationPort {
   // streamId/conversationId 还没就绪时执行。endTurn() 等这个 promise，把两者
   // 重新串成先后顺序，而不是让 endTurn() 在它们仍是 null 时静默不做事。
   private pendingStartTurn: Promise<void> | null = null;
+  /** 上滑取消期间为 true，阻止 pending start、迟到音频和服务端结果继续生效。 */
+  private cancelRequested = false;
   /** Category events can arrive before the command result creates their local row. */
   private readonly pendingCategoryUpdates = new Map<string, ScheduleCategory>();
   /** 串起每条 voice.command.result 的本地落库，见 AssistantContinuousConversationService
@@ -93,6 +95,10 @@ export class AssistantConversationService implements AssistantApplicationPort {
   }
 
   async startTurn(): Promise<void> {
+    if (this.pendingStartTurn !== null) {
+      return;
+    }
+    this.cancelRequested = false;
     const run = this._startTurn();
     this.pendingStartTurn = run;
     try {
@@ -116,6 +122,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
       this.setState({ phase: 'connecting' });
       await this.connect();
     }
+    this.throwIfCanceled();
     const connection = this.requireConnection();
 
     // 权限必须在 voice.stream.start 之前拿到并检查结果：这条消息一旦发出并被
@@ -123,6 +130,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
     // 被发现拒绝，我们没有办法清理（没收到 voice.stream.started 就没有
     // stream_id，发不了 voice.stream.end），这条 session 就再也开不了新流了。
     const permissionGranted = await this.deps.capture.requestPermission();
+    this.throwIfCanceled();
     if (!permissionGranted) {
       this.setState({ message: '没有麦克风权限', phase: 'error' });
       throw new Error('麦克风权限被拒绝');
@@ -142,14 +150,19 @@ export class AssistantConversationService implements AssistantApplicationPort {
       type: 'voice.stream.start',
     });
     const conversationId = await started;
+    this.throwIfCanceled();
 
     try {
       await this.deps.capture.start((chunk, soundLevel) => {
+        if (this.cancelRequested || this.streamId === null) return;
         connection.sendAudioFrame(chunk);
         this.soundLevel = soundLevel;
         this.notifyListeners();
       });
     } catch (error) {
+      if (this.cancelRequested) {
+        throw error;
+      }
       // 服务端这时候已经确认开流了（stream_id 拿到手了）；采集本身失败也要把
       // 这条流关掉，不然跟权限被拒是一样的后果——session 卡在"有一条活跃流"。
       if (this.streamId !== null) {
@@ -159,6 +172,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
       this.setState({ message: '录音启动失败', phase: 'error' });
       throw error;
     }
+    this.throwIfCanceled();
     this.setState({ conversationId, phase: 'recording' });
   }
 
@@ -178,6 +192,33 @@ export class AssistantConversationService implements AssistantApplicationPort {
     }
     if (this.conversationId !== null) {
       this.setState({ conversationId: this.conversationId, phase: 'awaiting_result' });
+    }
+  }
+
+  async cancelTurn(): Promise<void> {
+    this.cancelRequested = true;
+    this.rejectPendingStreamStart(new Error('语音已取消'));
+    const pendingStart = this.pendingStartTurn;
+    const stopCapture = this.deps.capture.stop().catch(() => {});
+    await Promise.all([pendingStart?.catch(() => undefined), stopCapture]);
+    this.soundLevel = null;
+    this.replyText = null;
+    this.currentAudioId = null;
+
+    const connection = this.connection;
+    this.unsubscribeConnection?.();
+    this.unsubscribeConnection = null;
+    this.connection = null;
+    this.streamId = null;
+    this.conversationId = null;
+    try {
+      connection?.close();
+    } catch {
+      // 取消的最终目标是回到可重新按下的 idle，连接关闭失败也不能阻塞 UI。
+    }
+    await this.deps.playback.stop().catch(() => {});
+    if (!this.disposed) {
+      this.setState({ phase: 'idle' });
     }
   }
 
@@ -229,6 +270,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
   }
 
   private handleMessage(message: AssistantServerMessage): void {
+    if (this.cancelRequested) return;
     if (isTransportError(message)) {
       this.setState({ message: message.error.message, phase: 'error' });
       this.rejectPendingStreamStart(new Error(message.error.message));
@@ -385,6 +427,10 @@ export class AssistantConversationService implements AssistantApplicationPort {
     this.unsubscribeConnection?.();
     this.connection = null;
     this.unsubscribeConnection = null;
+    if (this.cancelRequested) {
+      this.rejectPendingStreamStart(new Error('语音已取消'));
+      return;
+    }
     const message = event.reason || `连接已断开（${event.code}）`;
     this.setState({ message, phase: 'error' });
     this.rejectPendingStreamStart(new Error(message));
@@ -403,6 +449,12 @@ export class AssistantConversationService implements AssistantApplicationPort {
       throw new Error('startTurn called without an open connection');
     }
     return this.connection;
+  }
+
+  private throwIfCanceled(): void {
+    if (this.cancelRequested) {
+      throw new Error('语音已取消');
+    }
   }
 
   private setState(state: ConversationTurnState): void {

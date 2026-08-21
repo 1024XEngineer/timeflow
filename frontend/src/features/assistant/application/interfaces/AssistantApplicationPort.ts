@@ -39,6 +39,8 @@ export interface AssistantApplicationPort {
   getMessages(): readonly VoiceChatMessage[];
   startTurn(): Promise<void>;
   endTurn(): Promise<void>;
+  /** 按住说话上滑取消：停止采集并丢弃当前未提交的语音，不等待服务端结果。 */
+  cancelTurn?(): Promise<void>;
   /** 用户主动关掉回复气泡：清空气泡内容并打断正在播放的 TTS。 */
   dismissReply(): Promise<void>;
   /** 连续模式独有：暂停/恢复麦克风推流，不挂断连接。按住说话不实现这个方法。 */
