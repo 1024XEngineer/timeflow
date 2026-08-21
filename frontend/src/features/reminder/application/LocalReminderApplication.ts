@@ -1055,12 +1055,16 @@ function toDeliveryRequest(
   };
 }
 
-/** 原生闹钟响铃时要不要震动/出声/弹全屏止铃界面，跟 JS 侧通道开关同一份强度换算表。 */
+/**
+ * 原生闹钟响铃时要不要震动/出声/弹全屏止铃界面。全屏三档都要弹（时间型提醒
+ * 没有别的可见形式，静音也得让用户看到），vibrate/sound 复用 JS 侧的强度
+ * 换算表：低=都不要、中=只震动、高=震动+出声。
+ */
 function alarmRingChannels(
   schedule: LocalReminderSchedule,
 ): { vibrate: boolean; sound: boolean; full_screen: boolean } {
   const plan = resolveStrengthDeliveryPlan(schedule.reminder?.reminder_strength ?? 'medium');
-  return { vibrate: plan.useVibration, sound: plan.useAudio, full_screen: plan.usePopup };
+  return { vibrate: plan.useVibration, sound: plan.useAudio, full_screen: true };
 }
 
 function toTimeReason(schedule: LocalReminderSchedule): ReminderTriggerReason {
