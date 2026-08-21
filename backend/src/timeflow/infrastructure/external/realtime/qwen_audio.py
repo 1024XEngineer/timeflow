@@ -288,14 +288,18 @@ class QwenAudioSession:
                     return
                 await observer.tool_requested(**requested)
             elif kind == "response.done":
-                # Not the turn's end if a tool ran: the next response is the one that speaks.
+                # Not the turn's end if a tool asked for a follow-up: the next response
+                # is the one that speaks. A tool that ended the conversation instead
+                # (respond=False, _followup_suppressed) has no follow-up coming -- that
+                # must fall through to the normal settlement below, not skip it, or the
+                # turn never ends and the next recv() reads past the finished stream.
                 self._open_responses -= 1
-                if self._followup_requested or self._followup_suppressed:
-                    if self._followup_requested and not self._followup_suppressed:
-                        await self._send({"type": "response.create"})
-                        self._open_responses += 1
-                    self._followup_requested = False
-                    self._followup_suppressed = False
+                wants_followup = self._followup_requested and not self._followup_suppressed
+                self._followup_requested = False
+                self._followup_suppressed = False
+                if wants_followup:
+                    await self._send({"type": "response.create"})
+                    self._open_responses += 1
                     continue
                 if self._open_responses <= 0:
                     return
@@ -357,19 +361,23 @@ class QwenAudioSession:
             elif kind == "response.done":
                 if self._open_responses > 0:
                     self._open_responses -= 1
-                if self._followup_requested or self._followup_suppressed:
-                    # One or more tool calls happened inside the response that just
-                    # finished; ask for the follow-up only now that the vendor
-                    # considers it done (see send_tool_result). That follow-up, not
-                    # this response, is what actually finishes the turn -- settling
-                    # here would let a caller like end_conversation hang up before the
-                    # model's actual reply to it has even started. Same pattern as
-                    # _pump_single_turn's push-to-talk handling below.
-                    if self._followup_requested and not self._followup_suppressed:
-                        await self._send({"type": "response.create"})
-                        self._open_responses += 1
-                    self._followup_requested = False
-                    self._followup_suppressed = False
+                # A tool call inside the response that just finished may have asked for
+                # a follow-up; ask for it only now that the vendor considers this
+                # response done (see send_tool_result). That follow-up, not this
+                # response, is what actually finishes the turn -- settling here would
+                # let a caller like end_conversation hang up before the model's actual
+                # reply to it has even started. Same pattern as _pump_single_turn's
+                # push-to-talk handling below. A tool that ended the conversation
+                # instead (respond=False, _followup_suppressed) has no follow-up
+                # coming, so it must NOT take this branch -- it needs the normal
+                # settlement below to actually report turn_completed and let the
+                # caller close out the call.
+                wants_followup = self._followup_requested and not self._followup_suppressed
+                self._followup_requested = False
+                self._followup_suppressed = False
+                if wants_followup:
+                    await self._send({"type": "response.create"})
+                    self._open_responses += 1
                     continue
                 self._responding = False
                 # The bytes just sent still take this long to actually play out on the

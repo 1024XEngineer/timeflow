@@ -380,6 +380,55 @@ def test_a_tool_result_that_wants_no_reply_asks_for_none() -> None:
     asyncio.run(scenario())
 
 
+def test_a_suppressed_followup_settles_the_turn_instead_of_reading_past_it() -> None:
+    """A tool that ends the conversation asks for no follow-up
+    (send_tool_result(..., respond=False)). Its response.done is the turn's actual
+    last event and must settle the pump immediately, not be treated the same as the
+    "a follow-up is coming, keep waiting" case above -- doing that leaves nothing to
+    stop the loop, so the next recv() reads past the end of the stream.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(_event("response.done"))
+        session = QwenAudioSession(transport, CONFIG, PUSH_TO_TALK)
+        observer = RecordingObserver()
+        await session.finish_input()
+        await session.send_tool_result("call-1", "{}", respond=False)
+
+        await session.pump(observer)
+
+        assert observer.calls == []
+
+    asyncio.run(scenario())
+
+
+def test_continuous_suppressed_followup_reports_turn_completed() -> None:
+    """Continuous-mode counterpart: a tool ending the conversation must still report
+    turn_completed() so the caller (agent.py's _finish_reply/deliver_session_end)
+    actually closes out the call, instead of being swallowed by the "a follow-up is
+    coming" branch and leaving the call open.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("response.created"),
+            _event("response.done"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        session = QwenAudioSession(transport, CONFIG, CONTINUOUS)
+        observer = RecordingObserver()
+        await session.send_tool_result("call-1", "{}", respond=False)
+
+        await session.pump(observer)
+
+        assert observer.calls == [
+            ("turn_completed", None),
+            ("failed", "stream ended"),
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_two_tool_calls_in_one_response_only_ask_for_a_single_followup() -> None:
     """A batch turn can call several tools before the response that requested them is
     done (e.g. a batch create/delete voice command). Each call must not eagerly ask
