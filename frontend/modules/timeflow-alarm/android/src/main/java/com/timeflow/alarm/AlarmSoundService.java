@@ -159,13 +159,15 @@ public final class AlarmSoundService extends Service {
             String alarmId,
             String scheduleId,
             int requestCode,
-            String title
+            String title,
+            String speechText
     ) {
         Intent intent = new Intent(context, AlarmSoundService.class)
                 .putExtra(AlarmContract.EXTRA_ALARM_ID, alarmId)
                 .putExtra(AlarmContract.EXTRA_SCHEDULE_ID, scheduleId)
                 .putExtra(AlarmContract.EXTRA_REQUEST_CODE, requestCode)
-                .putExtra(AlarmContract.EXTRA_TITLE, title);
+                .putExtra(AlarmContract.EXTRA_TITLE, title)
+                .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, speechText);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent);
         } else {
@@ -180,6 +182,7 @@ public final class AlarmSoundService extends Service {
                 .putExtra(AlarmContract.EXTRA_SCHEDULE_ID, scheduleId)
                 .putExtra(AlarmContract.EXTRA_REQUEST_CODE, requestCode)
                 .putExtra(AlarmContract.EXTRA_TITLE, title)
+                .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, currentSpeechText)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                         | Intent.FLAG_ACTIVITY_MULTIPLE_TASK
                         | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
@@ -265,6 +268,7 @@ public final class AlarmSoundService extends Service {
         String targetAlarmId = alarmId;
         String targetScheduleId = scheduleId;
         String targetTitle = title;
+        String targetSpeechText = currentSpeechText;
 
         View content = AlarmRingUi.build(
                 this,
@@ -273,7 +277,13 @@ public final class AlarmSoundService extends Service {
                     long triggerAt = System.currentTimeMillis()
                             + AlarmContract.SNOOZE_MINUTES * 60_000L;
                     try {
-                        AlarmScheduler.schedule(this, triggerAt, targetTitle, targetScheduleId);
+                        AlarmScheduler.schedule(
+                                this,
+                                triggerAt,
+                                targetTitle,
+                                targetScheduleId,
+                                targetSpeechText
+                        );
                     } catch (RuntimeException ignored) {
                         // ignore
                     }

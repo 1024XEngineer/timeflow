@@ -154,6 +154,7 @@ public final class AlarmScheduler {
                 .putExtra(AlarmContract.EXTRA_ALARM_ID, record.alarmId)
                 .putExtra(AlarmContract.EXTRA_SCHEDULE_ID, record.scheduleId)
                 .putExtra(AlarmContract.EXTRA_TITLE, record.title)
+                .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, record.speechText)
                 .putExtra(AlarmContract.EXTRA_REQUEST_CODE, record.requestCode)
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent showPendingIntent = PendingIntent.getActivity(

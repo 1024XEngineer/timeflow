@@ -16,6 +16,7 @@ public final class AlarmReceiver extends BroadcastReceiver {
         String alarmId = intent.getStringExtra(AlarmContract.EXTRA_ALARM_ID);
         String scheduleId = intent.getStringExtra(AlarmContract.EXTRA_SCHEDULE_ID);
         String title = intent.getStringExtra(AlarmContract.EXTRA_TITLE);
+        String speechText = intent.getStringExtra(AlarmContract.EXTRA_SPEECH_TEXT);
         if (alarmId == null || alarmId.isEmpty()) {
             alarmId = "legacy-" + requestCode;
         }
@@ -26,7 +27,8 @@ public final class AlarmReceiver extends BroadcastReceiver {
                 .putExtra(AlarmContract.EXTRA_ALARM_ID, alarmId)
                 .putExtra(AlarmContract.EXTRA_SCHEDULE_ID, scheduleId)
                 .putExtra(AlarmContract.EXTRA_REQUEST_CODE, requestCode)
-                .putExtra(AlarmContract.EXTRA_TITLE, title);
+                .putExtra(AlarmContract.EXTRA_TITLE, title)
+                .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, speechText);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(serviceIntent);
         } else {

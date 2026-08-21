@@ -22,6 +22,7 @@ public final class RingActivity extends Activity {
     private String alarmId;
     private String scheduleId;
     private String alarmTitle;
+    private String speechText;
     private int requestCode;
     private boolean dismissNotified;
 
@@ -34,6 +35,7 @@ public final class RingActivity extends Activity {
         alarmId = extras.alarmId;
         scheduleId = extras.scheduleId;
         alarmTitle = extras.title;
+        speechText = extras.speechText;
         makeVisibleOverLockScreen();
         matchSystemBarsToReminder();
         setContentView(buildContentView());
@@ -43,7 +45,8 @@ public final class RingActivity extends Activity {
                 alarmId,
                 scheduleId,
                 requestCode,
-                alarmTitle
+                alarmTitle,
+                speechText
         );
     }
 
@@ -128,7 +131,7 @@ public final class RingActivity extends Activity {
             long triggerAt = System.currentTimeMillis()
                     + AlarmContract.SNOOZE_MINUTES * 60_000L;
             try {
-                AlarmScheduler.schedule(this, triggerAt, alarmTitle, scheduleId);
+                AlarmScheduler.schedule(this, triggerAt, alarmTitle, scheduleId, speechText);
             } catch (RuntimeException ignored) {
                 // 尽力重新挂闹钟；即使失败也通知 JS 落 snooze 状态。
             }
