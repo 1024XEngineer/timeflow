@@ -380,6 +380,41 @@ def test_a_tool_result_that_wants_no_reply_asks_for_none() -> None:
     asyncio.run(scenario())
 
 
+def test_two_tool_calls_in_one_response_only_ask_for_a_single_followup() -> None:
+    """A batch turn can call several tools before the response that requested them is
+    done (e.g. a batch create/delete voice command). Each call must not eagerly ask
+    for its own follow-up -- doing so, one per tool call, sends a second
+    response.create while the vendor still considers the first response in progress,
+    and it rejects the request outright ("Cannot create response while another
+    response is in progress."). Exactly one follow-up should be asked for, once,
+    after that response's own response.done.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(_event("response.done"), _event("response.done"))
+        session = QwenAudioSession(transport, CONFIG, PUSH_TO_TALK)
+        await session.finish_input()
+        transport.sent.clear()
+
+        await session.send_tool_result("call_1", '{"count":2}')
+        await session.send_tool_result("call_2", '{"count":3}')
+
+        # Both tool outputs are written back immediately; neither asks for a reply yet.
+        assert transport.types() == ["conversation.item.create", "conversation.item.create"]
+
+        await session.pump(RecordingObserver())
+
+        # The follow-up is requested exactly once, after the tool-calling response's
+        # own response.done -- not once per tool call.
+        assert transport.types() == [
+            "conversation.item.create",
+            "conversation.item.create",
+            "response.create",
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_first_response_done_does_not_end_a_tool_extended_turn() -> None:
     async def scenario() -> None:
         transport = FakeTransport(
@@ -1076,6 +1111,42 @@ def test_continuous_first_response_done_after_a_tool_call_does_not_end_the_turn(
             ("turn_completed", None),
             ("failed", "stream ended"),
         ]
+
+    asyncio.run(scenario())
+
+
+def test_continuous_two_tool_calls_in_one_response_only_ask_for_a_single_followup() -> None:
+    """Continuous mode's version of test_two_tool_calls_in_one_response_only_ask_for_a
+    _single_followup above: a batch voice command (e.g. "create three schedules")
+    can make the model call several tools inside one response before that response
+    is done. Asking for a follow-up per call, instead of once the response settles,
+    is what force-ends the whole conversation in production -- the vendor's
+    rejection is reported through failed(), which continuous mode treats as the
+    call having to hang up.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("response.created"),
+            _event("response.done"),
+            _event("response.created"),
+            _event("response.audio_transcript.done", transcript="好的，都办好了"),
+            _event("response.done"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        session = QwenAudioSession(transport, CONFIG, CONTINUOUS)
+        observer = RecordingObserver()
+        await session.send_tool_result("call-1", "{}")
+        await session.send_tool_result("call-2", "{}")
+
+        await session.pump(observer)
+
+        assert observer.calls == [
+            ("spoke", "好的，都办好了"),
+            ("turn_completed", None),
+            ("failed", "stream ended"),
+        ]
+        assert transport.types().count("response.create") == 1
 
     asyncio.run(scenario())
 
