@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -50,6 +51,8 @@ if TYPE_CHECKING:
 
 _EnumT = TypeVar("_EnumT", bound=StrEnum)
 _MISSING = object()
+
+logger = logging.getLogger(__name__)
 
 _DATETIME_SCHEMA = {"type": ["string", "null"], "format": "date-time"}
 _NULLABLE_STRING_SCHEMA = {"type": ["string", "null"]}
@@ -117,6 +120,11 @@ class _ScheduleTool:
     observer: ScheduleResultObserver | None = None
 
     async def execute(self, arguments: Mapping[str, object]) -> str:
+        if self.definition.name == "schedule_query":
+            logger.info(
+                "schedule_query args=%s",
+                json.dumps(arguments, ensure_ascii=False, sort_keys=True),
+            )
         execution = asyncio.create_task(asyncio.to_thread(self._execute, arguments))
         cancelled = False
         try:

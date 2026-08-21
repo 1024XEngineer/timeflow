@@ -229,6 +229,56 @@ async def test_tool_round_text_is_not_exposed_as_agent_text_delta() -> None:
 
 
 @pytest.mark.asyncio
+async def test_success_claim_without_tool_is_corrected() -> None:
+    """A no-tool reply that claims success is blocked and the model is re-prompted."""
+    tool = RecordingTool(
+        ToolDefinition("schedule_create", "创建日程", {"type": "object"}),
+        result='{"status":"ok"}',
+    )
+    llm = FakeLlm(
+        [
+            [TextDelta("已创建"), completed()],
+            tool_events("schedule_create", '{"title":"开会"}'),
+            [TextDelta("已帮你创建"), completed()],
+        ]
+    )
+    conversation = AgentConversation()
+    agent = Agent(llm, ToolRegistry([tool]))
+
+    events = [event async for event in agent.run_turn(conversation, "帮我创建会议")]
+
+    # The fabricated "已创建" is never exposed; the tool is called and its result spoken.
+    assert events == [
+        AgentTextDelta("已帮你创建"),
+        AgentCompleted(LlmUsage(5, 5, 10)),
+    ]
+    assert tool.calls == [{"title": "开会"}]
+    assert conversation.messages[3] == ChatMessage(
+        role="user",
+        content=(
+            "（系统）你刚才没有调用任何工具就声称操作成功，这是不允许的。"
+            "请调用对应的工具真正执行，再根据工具返回结果如实回复。"
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_farewell_without_end_conversation_ends_session() -> None:
+    """A no-tool farewell reply still ends the session without leaking a correction."""
+    llm = FakeLlm([[TextDelta("再见"), completed()]])
+    conversation = AgentConversation()
+    agent = Agent(llm, ToolRegistry([]))
+
+    events = [event async for event in agent.run_turn(conversation, "再见")]
+
+    assert events == [
+        AgentTextDelta("再见"),
+        AgentSessionEnd(),
+        AgentCompleted(LlmUsage(1, 2, 3)),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_final_round_text_is_streamed_before_completion() -> None:
     """The final-answer round yields text as it streams, not after the round ends."""
     release = asyncio.Event()
