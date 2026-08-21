@@ -8,12 +8,12 @@ import type {
 import { LocalReminderApplication } from '../../features/reminder/application';
 import {
   LocalReminderDelivery,
-  LocalReminderDispositionSync,
   LocalReminderRecovery,
   NoopPopup,
   SqliteLocalScheduleReader,
   SqliteReminderStateStore,
 } from '../../features/reminder/data/local';
+import { ReminderDispositionHttpSync } from '../../features/reminder/data/http';
 import { AlertReminderPresenter } from '../../features/reminder/presentation';
 import { ExpoAudioPlayback } from '../../infrastructure/audio';
 import { ExpoLocationMonitor } from '../../infrastructure/location';
@@ -74,7 +74,7 @@ export function createAppServices(options: CreateAppServicesOptions = {}): AppSe
     vibration: new ReactNativeVibration(),
     recovery: new LocalReminderRecovery(),
     state: reminderState,
-    dispositionSync: new LocalReminderDispositionSync(),
+    dispositionSync: new ReminderDispositionHttpSync(auth.protectedClient),
     ...restOverrides,
     schedules,
     presenter,

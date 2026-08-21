@@ -255,7 +255,7 @@ describe('LocalReminderApplication', () => {
       expect(ackOrder).toBeGreaterThan(submitOrder as number);
     });
 
-    it('does not ack anything when persisting one row in the batch fails', async () => {
+    it('acks locally persisted rows when cloud sync remains pending', async () => {
       const rows: AlarmNativeDisposition[] = [
         {
           schedule_id: 's1',
@@ -282,8 +282,13 @@ describe('LocalReminderApplication', () => {
       });
       const app = new LocalReminderApplication(deps);
 
-      await expect(app.start()).rejects.toThrow('sync failed');
-      expect(alarms.ackNativeDispositions).not.toHaveBeenCalled();
+      await app.start();
+
+      expect(alarms.ackNativeDispositions).toHaveBeenCalledWith(['s1', 's2']);
+      await expect(deps.state.read('s2')).resolves.toMatchObject({
+        reminder_disposition_state: 'confirmed',
+        sync_status: 'pending',
+      });
     });
 
     it('does nothing when the native buffer has no pending rows', async () => {
@@ -442,6 +447,69 @@ describe('LocalReminderApplication', () => {
       await expect(deps.state.read('s1')).resolves.toMatchObject({
         reminder_disposition_state: 'confirmed',
         next_trigger_at: null,
+      });
+    });
+
+    it('reports foreground sync failure after persisting confirmation and releasing delivery', async () => {
+      const schedule = fixtureSchedule({ id: 's1' });
+      const deps = createDeps({
+        schedules: new FakeScheduleReader([schedule]),
+        dispositionSync: {
+          submitConfirmed: jest.fn(async () => {
+            throw new Error('network unavailable');
+          }),
+        },
+      });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      await app.deliver({
+        reminder_id: 'r1',
+        schedule_id: 's1',
+        reason: 'at_time',
+        triggered_at: '2026-08-18T10:00:00.000Z',
+      });
+
+      await expect(app.confirm('s1', '2026-08-18T10:05:00.000Z')).rejects.toThrow(
+        'network unavailable',
+      );
+      await expect(deps.state.read('s1')).resolves.toMatchObject({
+        reminder_disposition_state: 'confirmed',
+        sync_status: 'pending',
+      });
+
+      await deps.state.write('s1', {
+        ...emptyRuntime(),
+        next_trigger_at: '2026-08-18T10:10:00.000Z',
+      });
+      await app.handleTime({ observed_at: '2026-08-18T10:10:00.000Z' });
+
+      expect(deps.vibration.vibrate).toHaveBeenCalledTimes(2);
+    });
+
+    it('retries a persisted pending confirmation during startup rebuild', async () => {
+      const pendingRuntime: ReminderRuntimeState = {
+        ...emptyRuntime(),
+        reminder_disposition_state: 'confirmed',
+        disposition_updated_at: '2026-08-18T10:05:00.000Z',
+        sync_status: 'pending',
+      };
+      const schedule = fixtureSchedule({ id: 's1', runtime: pendingRuntime });
+      const deps = createDeps({ schedules: new FakeScheduleReader([schedule]) });
+      await deps.state.write('s1', pendingRuntime);
+      const app = new LocalReminderApplication(deps);
+
+      await app.start();
+
+      expect(deps.dispositionSync.submitConfirmed).toHaveBeenCalledWith({
+        schedule_id: 's1',
+        state: 'confirmed',
+        updated_at: '2026-08-18T10:05:00.000Z',
+        snoozed_until: null,
+        sync_status: 'pending',
+      });
+      await expect(deps.state.read('s1')).resolves.toMatchObject({
+        reminder_disposition_state: 'confirmed',
+        sync_status: 'synced',
       });
     });
 
