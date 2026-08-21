@@ -56,20 +56,8 @@ export function VoiceCallScreen({
   onTogglePause,
 }: VoiceCallScreenProps) {
   const insets = useSafeAreaInsets();
-  const {
-    fitsViewport,
-    hasUnseenLatest,
-    jumpToLatest,
-    onContentSizeChange,
-    onLayout,
-    onMomentumScrollBegin,
-    onMomentumScrollEnd,
-    onScroll,
-    onScrollBeginDrag,
-    onScrollEndDrag,
-    transcriptRef,
-  } = usePinnedTranscriptScroll();
-  const latestText = messages[messages.length - 1]?.text;
+  const { fitsViewport, onContentSizeChange, onLayout, onScroll, transcriptRef } =
+    usePinnedTranscriptScroll();
   const [scale] = useState(() => new Animated.Value(1));
 
   useEffect(() => {
@@ -116,86 +104,64 @@ export function VoiceCallScreen({
         <CollapseChevron color={colors.onPrimary} />
       </Pressable>
 
-      <View style={styles.transcriptWrap}>
-        <ScrollView
-          ref={transcriptRef}
-          contentContainerStyle={[
-            styles.transcriptContent,
-            !fitsViewport && styles.transcriptContentOverflow,
-          ]}
-          onContentSizeChange={onContentSizeChange}
-          onLayout={onLayout}
-          onMomentumScrollBegin={onMomentumScrollBegin}
-          onMomentumScrollEnd={onMomentumScrollEnd}
-          onScroll={onScroll}
-          onScrollBeginDrag={onScrollBeginDrag}
-          onScrollEndDrag={onScrollEndDrag}
-          scrollEventThrottle={16}
-          showsVerticalScrollIndicator={false}
-          style={styles.transcript}
-          testID="voice-call-transcript"
-        >
-          {messages.map((message, index) => (
+      <ScrollView
+        ref={transcriptRef}
+        contentContainerStyle={[
+          styles.transcriptContent,
+          !fitsViewport && styles.transcriptContentOverflow,
+        ]}
+        onContentSizeChange={onContentSizeChange}
+        onLayout={onLayout}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        showsVerticalScrollIndicator={false}
+        style={styles.transcript}
+        testID="voice-call-transcript"
+      >
+        {messages.map((message, index) => (
+          <View
+            accessibilityLabel={`${message.role === 'user' ? '你' : '助手'}：${message.text}`}
+            key={message.id}
+            style={[
+              styles.turn,
+              message.role === 'user' ? styles.turnUser : styles.turnAssistant,
+              index < messages.length - 1 && styles.turnPast,
+            ]}
+          >
             <View
-              accessibilityLabel={`${message.role === 'user' ? '你' : '助手'}：${message.text}`}
-              key={message.id}
               style={[
-                styles.turn,
-                message.role === 'user' ? styles.turnUser : styles.turnAssistant,
-                index < messages.length - 1 && styles.turnPast,
+                styles.bubble,
+                message.role === 'user' ? styles.bubbleUser : styles.bubbleAssistant,
               ]}
             >
-              <View
+              <Text
                 style={[
-                  styles.bubble,
-                  message.role === 'user' ? styles.bubbleUser : styles.bubbleAssistant,
+                  styles.bubbleText,
+                  message.role === 'user' ? styles.bubbleTextUser : styles.bubbleTextAssistant,
                 ]}
               >
-                <Text
-                  style={[
-                    styles.bubbleText,
-                    message.role === 'user' ? styles.bubbleTextUser : styles.bubbleTextAssistant,
-                  ]}
-                >
-                  {message.text}
-                </Text>
-                {message.pending ? (
-                  <Voiceprint
-                    active
-                    barCount={BUBBLE_VOICEPRINT_BARS}
-                    barStyle={
-                      message.role === 'user'
-                        ? [styles.speakingWaveBar, styles.speakingWaveBarUser]
-                        : [styles.speakingWaveBar, styles.speakingWaveBarAssistant]
-                    }
-                    containerStyle={styles.speakingWave}
-                    maxHeight={12}
-                    minHeight={2}
-                    soundLevel={soundLevel}
-                    testID={`voice-call-speaking-wave-${message.role}`}
-                  />
-                ) : null}
-              </View>
-            </View>
-          ))}
-        </ScrollView>
-        {hasUnseenLatest ? (
-          <Pressable
-            accessibilityLabel="查看最新"
-            accessibilityRole="button"
-            onPress={jumpToLatest}
-            style={({ pressed }) => [styles.latestChip, pressed && styles.buttonPressed]}
-            testID="voice-call-latest"
-          >
-            <Text style={styles.latestChipEyebrow}>查看最新</Text>
-            {latestText ? (
-              <Text numberOfLines={1} style={styles.latestChipText}>
-                {latestText}
+                {message.text}
               </Text>
-            ) : null}
-          </Pressable>
-        ) : null}
-      </View>
+              {message.pending ? (
+                <Voiceprint
+                  active
+                  barCount={BUBBLE_VOICEPRINT_BARS}
+                  barStyle={
+                    message.role === 'user'
+                      ? [styles.speakingWaveBar, styles.speakingWaveBarUser]
+                      : [styles.speakingWaveBar, styles.speakingWaveBarAssistant]
+                  }
+                  containerStyle={styles.speakingWave}
+                  maxHeight={12}
+                  minHeight={2}
+                  soundLevel={soundLevel}
+                  testID={`voice-call-speaking-wave-${message.role}`}
+                />
+              ) : null}
+            </View>
+          </View>
+        ))}
+      </ScrollView>
 
       <View
         style={[styles.dock, { paddingBottom: Math.max(spacing.lg, insets.bottom + spacing.sm) }]}
@@ -523,35 +489,9 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
     textAlign: 'center',
   },
-  transcriptWrap: {
-    flex: 1,
-    marginTop: 56,
-  },
   transcript: {
     flex: 1,
-  },
-  latestChip: {
-    alignSelf: 'center',
-    backgroundColor: 'rgba(234,247,200,0.94)',
-    borderRadius: 999,
-    bottom: spacing.md,
-    maxWidth: '86%',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    position: 'absolute',
-    zIndex: 2,
-  },
-  latestChipEyebrow: {
-    color: colors.text,
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.4,
-  },
-  latestChipText: {
-    color: colors.text,
-    fontSize: 13,
-    lineHeight: 18,
-    marginTop: 2,
+    marginTop: 56,
   },
   transcriptContent: {
     flexGrow: 1,
