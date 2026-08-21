@@ -35,6 +35,7 @@ export class AlertReminderPresenter implements ReminderPresenterPort {
     await this.dialog.show({
       title: request.title || '日程提醒',
       message,
+      cancelable: false,
       buttons: [
         {
           text: '延后',
