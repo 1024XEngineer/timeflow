@@ -18,6 +18,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.provider.Settings;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
@@ -30,6 +31,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 public final class AlarmSoundService extends Service {
+    private static final String TAG = "AlarmSoundService";
     private static final long SPEECH_REPEAT_DELAY_MILLIS = 1_500L;
 
     private final Handler playbackHandler = new Handler(Looper.getMainLooper());
@@ -317,7 +319,13 @@ public final class AlarmSoundService extends Service {
         try {
             overlayWindowManager.addView(content, params);
             overlayView = content;
+            OemPermissionHelper.recordOverlayFailure(this, false);
         } catch (RuntimeException exception) {
+            // 常见于小米"后台弹出界面"关闭、或自启动被拦导致系统对这次前台状态判定
+            // 不认账——标准悬浮窗权限（上面 canDrawOverlays 那道早退）已经通过了，
+            // 这里失败往往是 OEM 私有权限层的问题，留痕给权限页参考。
+            Log.w(TAG, "showAlarmOverlay addView failed", exception);
+            OemPermissionHelper.recordOverlayFailure(this, true);
             overlayWindowManager = null;
         }
     }

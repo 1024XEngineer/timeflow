@@ -107,6 +107,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
     render(
       <ScheduleCalendarScreen
         accountId="account-a"
+        onOpenPermissions={() => {}}
         onSignOut={() => {}}
         service={service}
         timezone="Asia/Shanghai"
@@ -136,6 +137,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
     render(
       <ScheduleCalendarScreen
         accountId="account-a"
+        onOpenPermissions={() => {}}
         onSignOut={() => {}}
         service={service}
         timezone="Asia/Shanghai"
@@ -158,6 +160,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
     render(
       <ScheduleCalendarScreen
         accountId="account-a"
+        onOpenPermissions={() => {}}
         onSignOut={() => {}}
         service={service}
         timezone="Asia/Shanghai"
@@ -179,6 +182,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
     render(
       <ScheduleCalendarScreen
         accountId={accountId}
+        onOpenPermissions={() => {}}
         onSignOut={() => {}}
         service={service}
         timezone="Asia/Shanghai"
@@ -198,6 +202,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
     const service = createService();
     const props = {
       accountId: 'account-a',
+      onOpenPermissions: () => {},
       onSignOut: () => {},
       service,
       timezone: 'Asia/Shanghai',
@@ -225,6 +230,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
     render(
       <ScheduleCalendarScreen
         accountId="account-a"
+        onOpenPermissions={() => {}}
         onSignOut={onSignOut}
         service={service}
         timezone="Asia/Shanghai"
@@ -252,11 +258,32 @@ describe('ScheduleCalendarScreen location schedules', () => {
     expect(onSignOut).toHaveBeenCalledTimes(1);
   });
 
+  it('opens permissions when the user pill is pressed', async () => {
+    const service = createService();
+    const onOpenPermissions = jest.fn();
+    render(
+      <ScheduleCalendarScreen
+        accountId="account-a"
+        onOpenPermissions={onOpenPermissions}
+        onSignOut={() => {}}
+        service={service}
+        timezone="Asia/Shanghai"
+        username="Sarah"
+      />,
+    );
+
+    await waitFor(() => expect(service.getSchedulesByRange).toHaveBeenCalled());
+    fireEvent.press(screen.getByLabelText('当前用户 Sarah，点击查看权限设置'));
+
+    expect(onOpenPermissions).toHaveBeenCalledTimes(1);
+  });
+
   it('shows a location section that stays visible after selecting a day and changing month', async () => {
     const service = createService();
     render(
       <ScheduleCalendarScreen
         accountId="account-a"
+        onOpenPermissions={() => {}}
         onSignOut={() => {}}
         service={service}
         timezone="Asia/Shanghai"
@@ -305,6 +332,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
     render(
       <ScheduleCalendarScreen
         accountId="account-a"
+        onOpenPermissions={() => {}}
         onSignOut={() => {}}
         service={service}
         timezone="Asia/Shanghai"
@@ -381,6 +409,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
       .mockResolvedValueOnce([{ ...initialOccurrence, category: 'work' }]);
     const props = {
       accountId: 'account-a',
+      onOpenPermissions: () => {},
       onSignOut: () => {},
       service,
       timezone: 'Asia/Shanghai',
@@ -425,6 +454,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
       .mockResolvedValueOnce([{ ...initialLocation, category: 'study' }]);
     const props = {
       accountId: 'account-a',
+      onOpenPermissions: () => {},
       onSignOut: () => {},
       service,
       timezone: 'Asia/Shanghai',
@@ -453,6 +483,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
     render(
       <ScheduleCalendarScreen
         accountId="account-a"
+        onOpenPermissions={() => {}}
         onSignOut={() => {}}
         service={service}
         timezone="Asia/Shanghai"

@@ -56,6 +56,8 @@ export type {
   LocationWatchHandle,
   LocationWatchMode,
   LocationWatchRequest,
+  OemGuidance,
+  OemManufacturer,
   AlertDialogButton,
   AlertDialogPort,
   AlertDialogRequest,
@@ -69,6 +71,7 @@ export type {
   ReminderDeliveryPort,
   ReminderDispositionSyncPort,
   ReminderDispositionSyncReceipt,
+  ReminderPermissionBlockedEvent,
   ReminderPresentationAction,
   ReminderPresentationReceipt,
   ReminderPresenterPort,
@@ -94,5 +97,9 @@ export {
   SqliteLocalScheduleReader,
   SqliteReminderStateStore,
 } from './data/local';
-export { AlertReminderPresenter, useReminderPermissionsOnLaunch } from './presentation';
+export {
+  AlertReminderPresenter,
+  PermissionOnboardingScreen,
+  useReminderPermissionNudge,
+} from './presentation';
 export type { ReminderActionHandler, ReminderViewModel } from './presentation';

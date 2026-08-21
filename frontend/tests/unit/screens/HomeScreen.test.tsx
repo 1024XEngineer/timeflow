@@ -67,9 +67,12 @@ describe('HomeScreen calendar refresh', () => {
       <HomeScreen
         accountId="account-a"
         continuousApplication={continuousApplication}
+        alertDialog={{ show: async () => {} }}
         isSigningOut={false}
+        onRequestPermission={() => {}}
         onSignOut={async () => {}}
         pushToTalkApplication={pushToTalkApplication}
+        reminder={{ onPermissionBlocked: () => () => {} } as never}
         scheduleService={scheduleService}
         timezone="Asia/Shanghai"
         username="Sarah"

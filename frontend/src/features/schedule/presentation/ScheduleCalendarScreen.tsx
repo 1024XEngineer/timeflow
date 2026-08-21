@@ -36,6 +36,8 @@ interface ScheduleCalendarScreenProps {
   username: string;
   onSignOut: () => void | Promise<void>;
   isSigningOut?: boolean;
+  /** 打开权限列表页（不带具体权限，用户随时可以回去看全部状态）。 */
+  onOpenPermissions: () => void;
   /** 外部触发刷新用（比如语音写完一条日程）；变化即重取，不用管具体数值。 */
   refreshSignal?: number;
   focusTarget?: CalendarFocusTarget | null;
@@ -48,6 +50,7 @@ export function ScheduleCalendarScreen({
   username,
   onSignOut,
   isSigningOut = false,
+  onOpenPermissions,
   refreshSignal,
   focusTarget,
 }: ScheduleCalendarScreenProps) {
@@ -95,7 +98,13 @@ export function ScheduleCalendarScreen({
                 {selectedLabel}
               </Text>
               <View style={styles.accountActions} testID="schedule-account-actions">
-                <View accessibilityLabel={`当前用户 ${displayUsername}`} style={styles.userPill}>
+                <Pressable
+                  accessibilityLabel={`当前用户 ${displayUsername}，点击查看权限设置`}
+                  accessibilityRole="button"
+                  hitSlop={6}
+                  onPress={onOpenPermissions}
+                  style={({ pressed }) => [styles.userPill, pressed && styles.userPillPressed]}
+                >
                   <View style={styles.avatar}>
                     <Text style={styles.avatarText}>{avatarInitial}</Text>
                   </View>
@@ -107,7 +116,7 @@ export function ScheduleCalendarScreen({
                   >
                     {displayUsername}
                   </Text>
-                </View>
+                </Pressable>
                 <Pressable
                   accessibilityLabel="退出登录"
                   accessibilityRole="button"
@@ -354,5 +363,6 @@ const styles = StyleSheet.create({
     paddingRight: 10,
     paddingVertical: 3,
   },
+  userPillPressed: { opacity: 0.62 },
   username: { color: colors.text, flexShrink: 1, fontSize: 13, fontWeight: '700', minWidth: 0 },
 });

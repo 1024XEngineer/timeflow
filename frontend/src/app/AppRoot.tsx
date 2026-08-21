@@ -9,7 +9,15 @@ import { ExpoAudioPlayback } from '../features/assistant/data/audio/ExpoAudioPla
 import { AuthenticatedVoiceTransport } from '../features/assistant/data/websocket/AuthenticatedVoiceTransport';
 import { LocalScheduleWriter } from '../features/assistant/data/local/LocalScheduleWriter';
 import { useAuth } from '../features/auth/presentation/AuthProvider';
-import type { SqliteLocalScheduleReader, SqliteReminderStateStore } from '../features/reminder';
+import type {
+  AlertDialogPort,
+  DeviceCapabilityPort,
+  DevicePermission,
+  ReminderApplicationPort,
+  SqliteLocalScheduleReader,
+  SqliteReminderStateStore,
+} from '../features/reminder';
+import { PermissionOnboardingScreen } from '../features/reminder';
 import { SqliteScheduleClientService } from '../features/schedule/application';
 import type { ScheduleLocalRepository } from '../features/schedule/data';
 import { RNAppStateProvider } from '../infrastructure/appState/RNAppStateProvider';
@@ -27,6 +35,9 @@ import { createScheduleSnapshotPreparation } from './composition/createScheduleS
 export function AppRoot({ services: providedServices }: { services?: AppServices }) {
   const services = useMemo(() => providedServices ?? createAppServices(), [providedServices]);
   const controller = services.auth.controller;
+  const handlePermissionsUpdated = useCallback(() => {
+    void services.reminder.rebuild();
+  }, [services]);
   return (
     <AppProviders
       authController={controller}
@@ -34,7 +45,11 @@ export function AppRoot({ services: providedServices }: { services?: AppServices
       services={services}
     >
       <AuthRoute
+        alertDialog={services.alertDialog}
+        device={services.reminderPorts.device}
+        onPermissionsUpdated={handlePermissionsUpdated}
         protectedClient={services.protectedClient}
+        reminder={services.reminder}
         reminderState={services.reminderState}
         scheduleReader={services.schedules}
         webSocketClient={services.webSocketClient}
@@ -44,12 +59,20 @@ export function AppRoot({ services: providedServices }: { services?: AppServices
 }
 
 function AuthRoute({
+  alertDialog,
+  device,
+  onPermissionsUpdated,
   protectedClient,
+  reminder,
   reminderState,
   scheduleReader,
   webSocketClient,
 }: {
+  readonly alertDialog: AlertDialogPort;
+  readonly device: DeviceCapabilityPort;
+  readonly onPermissionsUpdated: () => void;
   readonly protectedClient: ApiRequest;
+  readonly reminder: ReminderApplicationPort;
   readonly reminderState: SqliteReminderStateStore;
   readonly scheduleReader: SqliteLocalScheduleReader;
   readonly webSocketClient: AuthenticatedWebSocketClient;
@@ -83,8 +106,12 @@ function AuthRoute({
   return (
     <AuthenticatedScheduleRoute
       accountId={viewState.accountId}
+      alertDialog={alertDialog}
+      device={device}
       key={viewState.accountId}
+      onPermissionsUpdated={onPermissionsUpdated}
       protectedClient={protectedClient}
+      reminder={reminder}
       reminderState={reminderState}
       scheduleReader={scheduleReader}
       username={viewState.username}
@@ -106,14 +133,22 @@ type ScheduleLoadState =
 
 function AuthenticatedScheduleRoute({
   accountId,
+  alertDialog,
+  device,
+  onPermissionsUpdated,
   protectedClient,
+  reminder,
   reminderState,
   scheduleReader,
   username,
   webSocketClient,
 }: {
   readonly accountId: string;
+  readonly alertDialog: AlertDialogPort;
+  readonly device: DeviceCapabilityPort;
+  readonly onPermissionsUpdated: () => void;
   readonly protectedClient: ApiRequest;
+  readonly reminder: ReminderApplicationPort;
   readonly reminderState: SqliteReminderStateStore;
   readonly scheduleReader: SqliteLocalScheduleReader;
   readonly username: string;
@@ -123,6 +158,30 @@ function AuthenticatedScheduleRoute({
   const [loadState, setLoadState] = useState<ScheduleLoadState>();
   const [retryToken, setRetryToken] = useState(0);
   const [isSigningOut, setIsSigningOut] = useState(false);
+  const [permissionGate, setPermissionGate] = useState<'checking' | 'gated' | 'clear'>('checking');
+  const [highlightPermission, setHighlightPermission] = useState<DevicePermission | null>(null);
+
+  // 只有通知是硬性门槛：没给就先留在权限页，其余权限允许先跳过，用到对应功能
+  // 时再单独引导（见 useReminderPermissionNudge 和麦克风被拒的弹窗）。
+  useEffect(() => {
+    let active = true;
+    void device.getStatus().then((status) => {
+      if (active) setPermissionGate(status.permissions.notifications ? 'clear' : 'gated');
+    });
+    return () => {
+      active = false;
+    };
+  }, [device]);
+
+  const handleRequestPermission = useCallback((permission?: DevicePermission) => {
+    setHighlightPermission(permission ?? null);
+    setPermissionGate('gated');
+  }, []);
+
+  const handlePermissionsContinue = useCallback(() => {
+    setPermissionGate('clear');
+    setHighlightPermission(null);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -250,16 +309,32 @@ function AuthenticatedScheduleRoute({
       scheduleService &&
       pushToTalkApplication &&
       continuousApplication ? (
-        <HomeScreen
-          accountId={accountId}
-          continuousApplication={continuousApplication}
-          isSigningOut={isSigningOut}
-          onSignOut={handleSignOut}
-          pushToTalkApplication={pushToTalkApplication}
-          scheduleService={scheduleService}
-          timezone={Intl.DateTimeFormat().resolvedOptions().timeZone}
-          username={username}
-        />
+        permissionGate === 'gated' ? (
+          <PermissionOnboardingScreen
+            device={device}
+            highlightPermission={highlightPermission}
+            onContinue={handlePermissionsContinue}
+            onPermissionsUpdated={onPermissionsUpdated}
+          />
+        ) : permissionGate === 'checking' ? (
+          <View style={styles.authenticatedScreen}>
+            <Text style={styles.title}>正在检查权限</Text>
+          </View>
+        ) : (
+          <HomeScreen
+            accountId={accountId}
+            alertDialog={alertDialog}
+            continuousApplication={continuousApplication}
+            isSigningOut={isSigningOut}
+            onRequestPermission={handleRequestPermission}
+            onSignOut={handleSignOut}
+            pushToTalkApplication={pushToTalkApplication}
+            reminder={reminder}
+            scheduleService={scheduleService}
+            timezone={Intl.DateTimeFormat().resolvedOptions().timeZone}
+            username={username}
+          />
+        )
       ) : (
         <View style={styles.authenticatedScreen}>
           <Text style={styles.title}>

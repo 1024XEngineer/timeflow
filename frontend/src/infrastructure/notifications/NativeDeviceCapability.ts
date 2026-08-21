@@ -1,4 +1,4 @@
-import { AppState, Linking, Platform, type AppStateStatus } from 'react-native';
+import { AppState, Linking, PermissionsAndroid, Platform, type AppStateStatus } from 'react-native';
 import * as ExpoLocation from 'expo-location';
 
 import type {
@@ -43,6 +43,7 @@ export class NativeDeviceCapability implements DeviceCapabilityPort {
   async getStatus(): Promise<DeviceCapabilityStatus> {
     const platform = toPlatform();
     const location = await this.readLocationPermissions();
+    const microphone = await readMicrophonePermission();
 
     if (!isTimeflowAlarmAvailable()) {
       return {
@@ -52,8 +53,10 @@ export class NativeDeviceCapability implements DeviceCapabilityPort {
           ...emptyPermissions(false),
           location_foreground: location.foreground,
           location_background: location.background,
+          microphone,
         },
         background_execution: false,
+        oemGuidance: emptyOemGuidance(),
       };
     }
 
@@ -66,8 +69,10 @@ export class NativeDeviceCapability implements DeviceCapabilityPort {
           ...emptyPermissions(false),
           location_foreground: location.foreground,
           location_background: location.background,
+          microphone,
         },
         background_execution: false,
+        oemGuidance: emptyOemGuidance(),
       };
     }
 
@@ -82,8 +87,15 @@ export class NativeDeviceCapability implements DeviceCapabilityPort {
         battery_optimization: status.battery,
         location_foreground: location.foreground,
         location_background: location.background,
+        microphone,
       },
       background_execution: status.battery,
+      oemGuidance: {
+        manufacturer: status.manufacturer,
+        autostartGuided: status.oemAutostartGuided,
+        backgroundPopupGuided: status.oemBackgroundPopupGuided,
+        lastOverlayFailed: status.oemLastOverlayFailed,
+      },
     };
   }
 
@@ -94,10 +106,29 @@ export class NativeDeviceCapability implements DeviceCapabilityPort {
     if (permission === 'location_foreground' || permission === 'location_background') {
       return this.requestLocationPermission(permission);
     }
+    if (permission === 'microphone') {
+      return requestMicrophonePermission();
+    }
     return this.openSettings(permission);
   }
 
   async openSettings(permission: DevicePermission): Promise<boolean> {
+    if (permission === 'microphone') {
+      // PermissionsAndroid has no read-only "canAskAgain" query like
+      // expo-location does, so unlike the location branch below we can't
+      // tell ahead of time whether another request() would show a dialog.
+      // Keep this a pure settings fallback -- never call request() here --
+      // so it can't resurface the system dialog a caller already saw.
+      if (await readMicrophonePermission()) {
+        return true;
+      }
+      try {
+        await Linking.openSettings();
+        return true;
+      } catch {
+        return false;
+      }
+    }
     if (permission === 'location_foreground' || permission === 'location_background') {
       try {
         const Location = await this.loadLocationModule();
@@ -132,6 +163,10 @@ export class NativeDeviceCapability implements DeviceCapabilityPort {
       }
     }
     const kind = SETTINGS_KIND[permission] ?? 'app';
+    return nativeOpenAlarmPermissionSettings(kind);
+  }
+
+  async openOemSettings(kind: 'autostart' | 'backgroundPopup'): Promise<boolean> {
     return nativeOpenAlarmPermissionSettings(kind);
   }
 
@@ -210,11 +245,45 @@ export class NativeDeviceCapability implements DeviceCapabilityPort {
   }
 }
 
+async function readMicrophonePermission(): Promise<boolean> {
+  if (Platform.OS !== 'android') return false;
+  try {
+    return await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+  } catch (error) {
+    console.warn('[permissions] failed to read microphone permission status', {
+      errorType: error instanceof Error ? error.name : typeof error,
+    });
+    return false;
+  }
+}
+
+async function requestMicrophonePermission(): Promise<boolean> {
+  if (Platform.OS !== 'android') return false;
+  try {
+    const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+    return result === PermissionsAndroid.RESULTS.GRANTED;
+  } catch (error) {
+    console.warn('[permissions] failed to request microphone permission', {
+      errorType: error instanceof Error ? error.name : typeof error,
+    });
+    return false;
+  }
+}
+
 function toPlatform(): DeviceCapabilityStatus['platform'] {
   if (Platform.OS === 'android') return 'android';
   if (Platform.OS === 'ios') return 'ios';
   if (Platform.OS === 'web') return 'web';
   return 'unknown';
+}
+
+function emptyOemGuidance(): DeviceCapabilityStatus['oemGuidance'] {
+  return {
+    manufacturer: null,
+    autostartGuided: false,
+    backgroundPopupGuided: false,
+    lastOverlayFailed: false,
+  };
 }
 
 function emptyPermissions(value: boolean): Readonly<Record<DevicePermission, boolean>> {
@@ -226,5 +295,6 @@ function emptyPermissions(value: boolean): Readonly<Record<DevicePermission, boo
     battery_optimization: value,
     location_foreground: value,
     location_background: value,
+    microphone: value,
   };
 }

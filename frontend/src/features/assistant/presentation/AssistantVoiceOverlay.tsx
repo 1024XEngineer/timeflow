@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -7,6 +7,7 @@ import {
   floatingVoiceBarBottomOffset,
 } from '../../../shared/ui/floatingVoiceBarLayout';
 import { colors, spacing } from '../../../shared/ui/theme';
+import type { AlertDialogPort, DevicePermission } from '../../reminder';
 import type { AssistantApplicationPort } from '../application/AssistantApplication';
 import type { ConversationTurnState } from '../domain/ConversationTurn';
 
@@ -17,9 +18,14 @@ import { VoiceCallScreen } from './VoiceCallScreen';
 
 export type CallStatus = 'off' | 'listening' | 'speaking' | 'interrupted' | 'paused' | 'busy';
 
+/** AssistantConversationService/AssistantContinuousConversationService 请求被拒后设的原话。 */
+const MICROPHONE_DENIED_MESSAGE = '没有麦克风权限';
+
 interface AssistantVoiceOverlayProps {
   pushToTalkApplication: AssistantApplicationPort;
   continuousApplication: AssistantApplicationPort;
+  alertDialog: AlertDialogPort;
+  onRequestPermission: (permission?: DevicePermission) => void;
 }
 
 function callStatusFor(phase: ConversationTurnState['phase']): CallStatus {
@@ -91,11 +97,16 @@ function titleFor(state: ConversationTurnState): string {
 export function AssistantVoiceOverlay({
   pushToTalkApplication,
   continuousApplication,
+  alertDialog,
+  onRequestPermission,
 }: AssistantVoiceOverlayProps) {
   const insets = useSafeAreaInsets();
   const ptt = useAssistantConversation(pushToTalkApplication);
   const call = useAssistantConversation(continuousApplication);
   const [expanded, setExpanded] = useState(false);
+
+  useMicrophoneDeniedNudge(ptt.state, alertDialog, onRequestPermission);
+  useMicrophoneDeniedNudge(call.state, alertDialog, onRequestPermission);
 
   const isCallActive = CALL_ACTIVE_PHASES.has(call.state.phase);
   const isPttBusy = PTT_BUSY_PHASES.has(ptt.state.phase);
@@ -173,6 +184,27 @@ export function AssistantVoiceOverlay({
       </View>
     </View>
   );
+}
+
+/** 麦克风被拒时弹一次"去权限页开启"，用 phase+message 做依赖，状态没变就不重复弹。 */
+function useMicrophoneDeniedNudge(
+  state: ConversationTurnState,
+  alertDialog: AlertDialogPort,
+  onRequestPermission: (permission?: DevicePermission) => void,
+): void {
+  const message = state.phase === 'error' ? state.message : null;
+  useEffect(() => {
+    if (message !== MICROPHONE_DENIED_MESSAGE) return;
+    void alertDialog.show({
+      title: '需要麦克风权限',
+      message: '拒绝了麦克风权限，没法使用语音功能。现在去开启吗？',
+      cancelable: true,
+      buttons: [
+        { text: '暂不', style: 'cancel' },
+        { text: '去开启', onPress: () => onRequestPermission('microphone') },
+      ],
+    });
+  }, [message, alertDialog, onRequestPermission]);
 }
 
 const styles = StyleSheet.create({

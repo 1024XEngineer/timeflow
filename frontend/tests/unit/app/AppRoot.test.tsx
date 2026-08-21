@@ -371,6 +371,93 @@ describe('AppRoot', () => {
     expect(detachSchedules).toHaveBeenCalledTimes(1);
     expect(detachState).toHaveBeenCalledTimes(1);
   });
+
+  it('shows the permission list instead of the calendar when notifications are not granted', async () => {
+    const services = createController({
+      accountId: 'acc_001',
+      accessToken: 'opaque-token',
+      expiresAt: 200_000,
+      username: 'timeflow_user',
+    });
+    jest.spyOn(services.reminderPorts.device, 'getStatus').mockResolvedValue({
+      platform: 'android',
+      supported: true,
+      permissions: {
+        notifications: false,
+        exact_alarm: true,
+        overlay: true,
+        full_screen: true,
+        battery_optimization: true,
+        location_foreground: true,
+        location_background: true,
+        microphone: true,
+      },
+      background_execution: true,
+      oemGuidance: {
+        manufacturer: null,
+        autostartGuided: false,
+        backgroundPopupGuided: false,
+        lastOverlayFailed: false,
+      },
+    });
+
+    render(<AppRoot services={services} />);
+
+    await screen.findByText('需要这些权限');
+    expect(screen.queryByText('日程日历')).toBeNull();
+    expect(screen.getByLabelText('进入 App').props.accessibilityState.disabled).toBe(true);
+  });
+
+  it('lets the user into the calendar after granting notifications from the permission list', async () => {
+    const services = createController({
+      accountId: 'acc_001',
+      accessToken: 'opaque-token',
+      expiresAt: 200_000,
+      username: 'timeflow_user',
+    });
+    let status = {
+      platform: 'android' as const,
+      supported: true,
+      permissions: {
+        notifications: false,
+        exact_alarm: true,
+        overlay: true,
+        full_screen: true,
+        battery_optimization: true,
+        location_foreground: true,
+        location_background: true,
+        microphone: true,
+      },
+      background_execution: true,
+      oemGuidance: {
+        manufacturer: null,
+        autostartGuided: false,
+        backgroundPopupGuided: false,
+        lastOverlayFailed: false,
+      },
+    };
+    jest.spyOn(services.reminderPorts.device, 'getStatus').mockImplementation(async () => status);
+    jest
+      .spyOn(services.reminderPorts.device, 'requestPermission')
+      .mockImplementation(async (permission) => {
+        status = { ...status, permissions: { ...status.permissions, [permission]: true } };
+        return true;
+      });
+    const rebuild = jest.spyOn(services.reminder, 'rebuild').mockResolvedValue([]);
+
+    render(<AppRoot services={services} />);
+
+    await screen.findByText('需要这些权限');
+    fireEvent.press(screen.getByTestId('permission-action-notifications'));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('进入 App').props.accessibilityState.disabled).toBe(false),
+    );
+    expect(rebuild).toHaveBeenCalledTimes(1);
+
+    fireEvent.press(screen.getByLabelText('进入 App'));
+    await screen.findByText('日程日历');
+  });
 });
 
 function createController(
@@ -393,13 +480,38 @@ function createController(
       expires_in: 3600,
     }),
   })) as unknown as typeof globalThis.fetch;
-  return createAppServices({
+  const services = createAppServices({
     auth: {
       fetch,
       now: () => 100_000,
       store,
     },
   });
+  // 权限列表页只有通知是硬性门槛；测试环境里的真实 NativeDeviceCapability 读不到
+  // 原生模块会 fail closed 到全部未授予，把这里锁死到全部已授予，让这些用例继续
+  // 测它们本来要测的东西（登录态切换、SQLite 绑定），不卡在权限页上。
+  jest.spyOn(services.reminderPorts.device, 'getStatus').mockResolvedValue({
+    platform: 'android',
+    supported: true,
+    permissions: {
+      notifications: true,
+      exact_alarm: true,
+      overlay: true,
+      full_screen: true,
+      battery_optimization: true,
+      location_foreground: true,
+      location_background: true,
+      microphone: true,
+    },
+    background_execution: true,
+    oemGuidance: {
+      manufacturer: null,
+      autostartGuided: false,
+      backgroundPopupGuided: false,
+      lastOverlayFailed: false,
+    },
+  });
+  return services;
 }
 
 function createDeferred<T>() {

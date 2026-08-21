@@ -4,6 +4,12 @@ import { StyleSheet, View } from 'react-native';
 import type { AssistantApplicationPort } from '../features/assistant/application/AssistantApplication';
 import { AssistantVoiceOverlay } from '../features/assistant/presentation/AssistantVoiceOverlay';
 import { useAssistantConversation } from '../features/assistant/presentation/useAssistantConversation';
+import type {
+  AlertDialogPort,
+  DevicePermission,
+  ReminderApplicationPort,
+} from '../features/reminder';
+import { useReminderPermissionNudge } from '../features/reminder';
 import type { ScheduleCalendarReadService } from '../features/schedule/application';
 import { ScheduleCalendarScreen } from '../features/schedule/presentation/ScheduleCalendarScreen';
 import {
@@ -16,8 +22,12 @@ interface HomeScreenProps {
   continuousApplication: AssistantApplicationPort;
   scheduleService: ScheduleCalendarReadService;
   accountId: string;
+  alertDialog: AlertDialogPort;
   isSigningOut: boolean;
   onSignOut: () => Promise<void>;
+  /** 跳转权限列表页；不传具体权限就是打开列表让用户自己看，传了会定位/高亮那一行。 */
+  onRequestPermission: (permission?: DevicePermission) => void;
+  reminder: ReminderApplicationPort;
   timezone: string;
   username: string;
 }
@@ -32,8 +42,11 @@ export function HomeScreen({
   continuousApplication,
   scheduleService,
   accountId,
+  alertDialog,
   isSigningOut,
   onSignOut,
+  onRequestPermission,
+  reminder,
   timezone,
   username,
 }: HomeScreenProps) {
@@ -44,6 +57,8 @@ export function HomeScreen({
   const [trackedPttCommand, setTrackedPttCommand] = useState(pttCommand);
   const [trackedCallCommand, setTrackedCallCommand] = useState(callCommand);
   const [focusTarget, setFocusTarget] = useState<CalendarFocusTarget | null>(null);
+
+  useReminderPermissionNudge(reminder, alertDialog, onRequestPermission);
 
   // command.result 写完本地库之后 lastAppliedCommand 才会更新（见
   // AssistantConversationService.applyCommandResultLocally），所以这里发现它
@@ -67,6 +82,7 @@ export function HomeScreen({
       <ScheduleCalendarScreen
         accountId={accountId}
         isSigningOut={isSigningOut}
+        onOpenPermissions={() => onRequestPermission()}
         onSignOut={onSignOut}
         refreshSignal={pttScheduleRevision + callScheduleRevision}
         focusTarget={focusTarget}
@@ -75,7 +91,9 @@ export function HomeScreen({
         username={username}
       />
       <AssistantVoiceOverlay
+        alertDialog={alertDialog}
         continuousApplication={continuousApplication}
+        onRequestPermission={onRequestPermission}
         pushToTalkApplication={pushToTalkApplication}
       />
     </View>

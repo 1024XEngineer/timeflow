@@ -6,6 +6,12 @@ export type NativeAlarmPermissionStatus = {
   fullScreen: boolean;
   notifications: boolean;
   battery: boolean;
+  /** 只有小米/华为/OPPO/vivo 四家会识别出来；其余机型/无法判断时是 null。 */
+  manufacturer: 'xiaomi' | 'huawei' | 'oppo' | 'vivo' | null;
+  /** 没有标准 API 能查真实授权状态，这三项只表示"带没带用户跳过对应设置页"。 */
+  oemAutostartGuided: boolean;
+  oemBackgroundPopupGuided: boolean;
+  oemLastOverlayFailed: boolean;
 };
 
 export type NativeAlarmEventPayload = {
@@ -36,7 +42,8 @@ type TimeflowAlarmNative = {
   ackNativeDispositions: (scheduleIds: string[]) => Promise<boolean>;
   getPermissionStatus: () => Promise<NativeAlarmPermissionStatus>;
   openPermissionSettings: (
-    kind: 'exactAlarm' | 'overlay' | 'fullScreen' | 'battery' | 'app',
+    kind:
+      'exactAlarm' | 'overlay' | 'fullScreen' | 'battery' | 'app' | 'autostart' | 'backgroundPopup',
   ) => Promise<boolean>;
   requestNotificationPermission: () => Promise<boolean>;
   addListener?: (eventName: string) => void;
@@ -129,7 +136,8 @@ export async function nativeGetAlarmPermissionStatus(): Promise<NativeAlarmPermi
 }
 
 export async function nativeOpenAlarmPermissionSettings(
-  kind: 'exactAlarm' | 'overlay' | 'fullScreen' | 'battery' | 'app',
+  kind:
+    'exactAlarm' | 'overlay' | 'fullScreen' | 'battery' | 'app' | 'autostart' | 'backgroundPopup',
 ): Promise<boolean> {
   const native = getNativeAlarm();
   if (!isTimeflowAlarmAvailable() || native == null) return false;
