@@ -453,6 +453,53 @@ describe('AssistantContinuousConversationService', () => {
     disposeService(service);
   });
 
+  it('keeps applying queued command results even if a subscriber listener throws', async () => {
+    // markScheduleDataChanged() synchronously notifies every subscriber; a listener
+    // that throws (e.g. a buggy re-render) rejects applyCommandResultLocally()'s
+    // promise. queueCommandResult() must neutralize that with .catch(() => {})
+    // chained in the same statement (same idiom as chainPlayback) -- deferring the
+    // catch to a later call leaves the rejection unhandled for a few microtask
+    // ticks, which crashes the process outright (reproduced while writing this
+    // test, before adding the immediate .catch()).
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+    await startListening(fake, service);
+
+    // handleMessage's own setState() notifies once synchronously before
+    // applyCommandResultLocally's markScheduleDataChanged() notifies again
+    // asynchronously; only the second one is the one queueCommandResult's chain
+    // needs to survive.
+    let notifyCount = 0;
+    const unsubscribe = service.subscribe(() => {
+      notifyCount += 1;
+      if (notifyCount === 2) {
+        throw new Error('listener boom');
+      }
+    });
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_1',
+      payload: { operation: 'create_schedule', schedule: { id: 'a' }, status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+    unsubscribe();
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_2',
+      payload: { operation: 'create_schedule', schedule: { id: 'b' }, status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getLastAppliedCommand()).toEqual(
+      expect.objectContaining({ operation: 'create_schedule', schedule: { id: 'b' } }),
+    );
+    disposeService(service);
+  });
+
   it('serializes local writes so a batch of back-to-back command results cannot race', async () => {
     // Regression test for a batch create/delete race: the model can call several
     // tools inside one turn, so voice.command.result messages can arrive only

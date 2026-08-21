@@ -464,11 +464,15 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     }
   }
 
+  /** 跟 chainPlayback 一个模式：.catch(() => {}) 必须紧跟在同一条语句里同步接上——
+   * 迟一拍再接（比如靠下一次 queueCommandResult 调用里的第二个 then 参数兜底）
+   * 这段窗口期这个被拒绝的 promise 没有任何 handler，Node 的 unhandled rejection
+   * 检测在下一次调用到达前就已经判定“没人接”，直接把整个进程带崩——不是理论
+   * 风险，用一个会抛的 state 订阅者复现过。 */
   private queueCommandResult(command: AppliedCommand, messageId: string): void {
-    this.commandResultChain = this.commandResultChain.then(
-      () => this.applyCommandResultLocally(command, messageId),
-      () => this.applyCommandResultLocally(command, messageId),
-    );
+    this.commandResultChain = this.commandResultChain
+      .then(() => this.applyCommandResultLocally(command, messageId))
+      .catch(() => {});
   }
 
   private async applyCommandResultLocally(

@@ -292,6 +292,54 @@ describe('AssistantConversationService', () => {
     expect(service.getLastAppliedCommand()).toBeNull();
   });
 
+  it('keeps applying queued command results even if a subscriber listener throws', async () => {
+    // markScheduleDataChanged() synchronously notifies every subscriber; a listener
+    // that throws (e.g. a buggy re-render) rejects applyCommandResultLocally()'s
+    // promise. queueCommandResult() must neutralize that with .catch(() => {})
+    // chained in the same statement (same idiom as
+    // AssistantContinuousConversationService/chainPlayback) -- deferring the catch
+    // leaves the rejection unhandled for a few microtask ticks, which crashes the
+    // process outright (reproduced while writing this test, before adding the
+    // immediate .catch()).
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    const turn = service.startTurn();
+    await completeStreamStart(fake, turn);
+    // handleMessage's own setState() notifies once synchronously before
+    // applyCommandResultLocally's markScheduleDataChanged() notifies again
+    // asynchronously; only the second one is the one queueCommandResult's chain
+    // needs to survive.
+    let notifyCount = 0;
+    const unsubscribe = service.subscribe(() => {
+      notifyCount += 1;
+      if (notifyCount === 2) {
+        throw new Error('listener boom');
+      }
+    });
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_1',
+      payload: { operation: 'create_schedule', schedule: { id: 'a' }, status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+    unsubscribe();
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_2',
+      payload: { operation: 'create_schedule', schedule: { id: 'b' }, status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getLastAppliedCommand()).toEqual(
+      expect.objectContaining({ operation: 'create_schedule', schedule: { id: 'b' } }),
+    );
+  });
+
   it('serializes local writes so a batch of back-to-back command results cannot race', async () => {
     // Regression test: a single utterance can make the model call several tools in
     // one turn, so voice.command.result messages can arrive only milliseconds
