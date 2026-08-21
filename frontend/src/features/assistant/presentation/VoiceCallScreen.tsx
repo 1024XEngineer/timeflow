@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
-import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
+import { useEffect, useState } from 'react';
 import {
   Animated,
   Easing,
@@ -9,19 +8,24 @@ import {
   StyleSheet,
   Text,
   View,
+  type StyleProp,
+  type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Defs, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
 
 import { colors, spacing } from '../../../shared/ui/theme';
-import type { ConversationTurnRecord } from '../domain/ConversationTurn';
+import type { VoiceChatMessage } from '../domain/ConversationTurn';
 
 import type { CallStatus } from './AssistantVoiceOverlay';
 import { PhoneCallIcon } from './PhoneCallIcon';
+import { usePinnedTranscriptScroll } from './usePinnedTranscriptScroll';
 
 interface VoiceCallScreenProps {
   status: CallStatus;
   title: string;
-  turns?: readonly ConversationTurnRecord[];
+  messages: readonly VoiceChatMessage[];
+  soundLevel?: number | null;
   onCollapse: () => void;
   onEnd: () => void;
   onTogglePause: () => void;
@@ -29,32 +33,32 @@ interface VoiceCallScreenProps {
 
 const BREATH_SCALE = { duration: 1600, from: 1, to: 1.06 };
 const TALK_SCALE = { duration: 650, from: 1, to: 1.14 };
-const STICK_TO_BOTTOM_THRESHOLD = 48;
+const VOICEPRINT_BAR_COUNT = 9;
+const VOICEPRINT_TICK_MS = 80;
+const BUBBLE_VOICEPRINT_BARS = 5;
+const CALL_BACKGROUND = '#0E241F';
+const CALL_GLOW = '#18443A';
+const CALL_VIGNETTE = '#071310';
+const END_BUTTON_SIZE = 72;
 
 /**
- * 免提通话的沉浸式全屏层：主体是一份可回看的完整问答记录（每轮一条用户话
- * +对应回复），下方是一个跟着状态变化的小状态点+文字，只报通用状态（聆听中
- * /回答中/已打断……），具体说了什么、回复了什么都在上面的记录里，标题不
- * 重复展示。底部只保留“结束对话”（真正挂断）。左上角收起不挂断，回到底部长
- * 条状入口，连接和麦克风都还开着。状态点这一整行可点：点一下暂停/恢复麦克风
- * 推流，是“用户点击暂停”的唯一入口。
+ * 免提通话的沉浸式全屏层，布局贴近 GPT Voice：对白从声纹球上方长出来，
+ * 球本身靠底部。左上角收起不挂断；点圆圈暂停/恢复麦克风；底部红色按钮才是
+ * 真正挂断。
  */
 export function VoiceCallScreen({
   status,
   title,
-  turns = [],
+  messages,
+  soundLevel = null,
   onCollapse,
   onEnd,
   onTogglePause,
 }: VoiceCallScreenProps) {
   const insets = useSafeAreaInsets();
+  const { fitsViewport, onContentSizeChange, onLayout, onScroll, transcriptRef } =
+    usePinnedTranscriptScroll();
   const [scale] = useState(() => new Animated.Value(1));
-  const [statusRowHeight, setStatusRowHeight] = useState(0);
-  const historyRef = useRef<ScrollView>(null);
-  // 回复是流式的（累计文字每收到一段就整段刷新一次），跟着一路自动滚会跟
-  // 用户手动上滑打架——用户一滑走就不再强制拉回底部，直到他自己滑回底部
-  // 附近才恢复跟随，不然会出现看似“滑不动”的情况。
-  const stickToBottomRef = useRef(true);
 
   useEffect(() => {
     scale.stopAnimation();
@@ -84,230 +88,436 @@ export function VoiceCallScreen({
     return undefined;
   }, [status, scale]);
 
-  // 只在用户真的拖动结束时才重新判断是否贴底——不能用 onScroll，流式内容
-  // 一直在长，我们自己触发的 scrollToEnd 也会产生 onScroll 事件，那时候
-  // contentSize 可能已经比滚动目标又长了一截，会被误判成“用户滑走了”，
-  // 之后就再也不会自动跟随，导致流式说完了还有一段没露出来。
-  // onScrollEndDrag/onMomentumScrollEnd 只在手指真正划过之后才触发，不受
-  // animated:false 的程序化跳转影响。
-  function handleScrollSettled(event: NativeSyntheticEvent<NativeScrollEvent>) {
-    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    const distanceFromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height;
-    stickToBottomRef.current = distanceFromBottom <= STICK_TO_BOTTOM_THRESHOLD;
-  }
-
   return (
-    <View style={styles.screen}>
-      <View
-        style={[styles.navigation, { paddingTop: Math.max(spacing.md, insets.top) }]}
-        testID="voice-call-navigation"
+    <View style={styles.screen} testID="voice-call-screen">
+      <CallBackdrop />
+      <Pressable
+        accessibilityLabel="收起通话"
+        accessibilityRole="button"
+        onPress={onCollapse}
+        style={({ pressed }) => [
+          styles.collapseButton,
+          { top: Math.max(spacing.md, insets.top) },
+          pressed && styles.buttonPressed,
+        ]}
       >
-        <Pressable
-          accessibilityLabel="收起通话"
-          accessibilityRole="button"
-          onPress={onCollapse}
-          style={({ pressed }) => [styles.collapseButton, pressed && styles.buttonPressed]}
-        >
-          <PhoneCallIcon color={colors.onPrimary} size={18} />
-        </Pressable>
-      </View>
+        <CollapseChevron color={colors.onPrimary} />
+      </Pressable>
 
       <ScrollView
-        ref={historyRef}
+        ref={transcriptRef}
         contentContainerStyle={[
-          styles.historyContent,
-          // 用实测的“聆听中”状态行高度兜底，不管这行到底多高、有没有跟
-          // ScrollView 自身的 flex 计算对不上，最后一条记录都保证能完整
-          // 露出来，不会被这一行挡住最后一点。
-          { paddingBottom: spacing.xl + statusRowHeight },
-          turns.length === 0 && styles.historyContentEmpty,
+          styles.transcriptContent,
+          !fitsViewport && styles.transcriptContentOverflow,
         ]}
-        onContentSizeChange={() => {
-          if (!stickToBottomRef.current) {
-            return;
-          }
-          // 延后两帧再滚：Android 上 onContentSizeChange 触发时原生 ScrollView
-          // 有时还没把新内容高度提交完，内容越高时越容易滚不到底。用
-          // animated:false 直接跳到底，流式刷新很密集，动画会跟下一次
-          // 内容变化互相打断、显得卡住不动。
-          requestAnimationFrame(() =>
-            requestAnimationFrame(() => historyRef.current?.scrollToEnd({ animated: false })),
-          );
-        }}
-        onMomentumScrollEnd={handleScrollSettled}
-        onScrollEndDrag={handleScrollSettled}
-        style={styles.history}
+        onContentSizeChange={onContentSizeChange}
+        onLayout={onLayout}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        showsVerticalScrollIndicator={false}
+        style={styles.transcript}
+        testID="voice-call-transcript"
       >
-        {turns.length > 0 ? (
-          turns.map((turn) => (
-            <View key={turn.id} style={styles.historyTurn}>
-              <Text style={styles.historyTranscript}>{turn.transcript}</Text>
-              {turn.replyText !== null ? (
-                <Text style={styles.historyReply}>{turn.replyText}</Text>
+        {messages.map((message, index) => (
+          <View
+            accessibilityLabel={`${message.role === 'user' ? '你' : '助手'}：${message.text}`}
+            key={message.id}
+            style={[
+              styles.turn,
+              message.role === 'user' ? styles.turnUser : styles.turnAssistant,
+              index < messages.length - 1 && styles.turnPast,
+            ]}
+          >
+            <View
+              style={[
+                styles.bubble,
+                message.role === 'user' ? styles.bubbleUser : styles.bubbleAssistant,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.bubbleText,
+                  message.role === 'user' ? styles.bubbleTextUser : styles.bubbleTextAssistant,
+                ]}
+              >
+                {message.text}
+              </Text>
+              {message.pending ? (
+                <Voiceprint
+                  active
+                  barCount={BUBBLE_VOICEPRINT_BARS}
+                  barStyle={
+                    message.role === 'user'
+                      ? [styles.speakingWaveBar, styles.speakingWaveBarUser]
+                      : [styles.speakingWaveBar, styles.speakingWaveBarAssistant]
+                  }
+                  containerStyle={styles.speakingWave}
+                  maxHeight={12}
+                  minHeight={2}
+                  soundLevel={soundLevel}
+                  testID={`voice-call-speaking-wave-${message.role}`}
+                />
               ) : null}
             </View>
-          ))
-        ) : (
-          <Text style={styles.historyEmptyText}>对话开始后，这里会显示完整记录</Text>
-        )}
+          </View>
+        ))}
       </ScrollView>
 
       <View
-        onLayout={(event) => setStatusRowHeight(event.nativeEvent.layout.height)}
-        style={styles.body}
+        style={[styles.dock, { paddingBottom: Math.max(spacing.lg, insets.bottom + spacing.sm) }]}
       >
+        {title ? <Text style={styles.title}>{title}</Text> : null}
         <Pressable
           accessibilityLabel={status === 'paused' ? '继续' : '暂停'}
           accessibilityRole="button"
-          hitSlop={spacing.md}
           onPress={onTogglePause}
-          style={styles.statusPill}
+          style={styles.orbHit}
         >
-          <Animated.View
-            style={[
-              styles.statusDot,
-              status === 'speaking' && styles.statusDotSpeaking,
-              status === 'interrupted' && styles.statusDotInterrupted,
-              status === 'paused' && styles.statusDotPaused,
-              { transform: [{ scale }] },
-            ]}
-          />
-          <Text style={styles.title}>{title}</Text>
+          <View style={styles.orbWell}>
+            <Animated.View
+              pointerEvents="none"
+              style={[styles.ring, styles.ringOuter, { transform: [{ scale }] }]}
+            />
+            <Animated.View
+              pointerEvents="none"
+              style={[styles.ring, styles.ringInner, { transform: [{ scale }] }]}
+            />
+            <Animated.View
+              style={[
+                styles.circle,
+                status === 'interrupted' && styles.circleInterrupted,
+                status === 'paused' && styles.circlePaused,
+                status === 'busy' && styles.circleBusy,
+                { transform: [{ scale }] },
+              ]}
+            >
+              {status === 'listening' || status === 'speaking' ? (
+                <Voiceprint
+                  active
+                  barCount={VOICEPRINT_BAR_COUNT}
+                  barStyle={styles.orbWaveBar}
+                  maxHeight={34}
+                  minHeight={3}
+                  soundLevel={soundLevel}
+                  testID="voice-call-orb-wave"
+                  testIDPrefix="voice-call-voiceprint-bar"
+                />
+              ) : null}
+            </Animated.View>
+          </View>
         </Pressable>
-      </View>
-
-      <View
-        style={[
-          styles.actions,
-          { paddingBottom: Math.max(spacing.xl, insets.bottom + spacing.md) },
-        ]}
-        testID="voice-call-actions"
-      >
         <Pressable
           accessibilityLabel="结束对话"
           accessibilityRole="button"
           onPress={onEnd}
-          style={({ pressed }) => [
-            styles.actionButton,
-            styles.endButton,
-            pressed && styles.buttonPressed,
-          ]}
+          style={({ pressed }) => [styles.endButton, pressed && styles.buttonPressed]}
         >
-          <Text style={[styles.actionText, styles.endText]}>结束对话</Text>
+          <View style={styles.endIcon} testID="voice-call-end-icon">
+            <PhoneCallIcon color={colors.onPrimary} size={26} />
+          </View>
+          <Text style={styles.endText}>结束对话</Text>
         </Pressable>
       </View>
     </View>
   );
 }
 
+function CallBackdrop() {
+  return (
+    <Svg
+      height="100%"
+      pointerEvents="none"
+      style={StyleSheet.absoluteFill}
+      testID="voice-call-backdrop"
+      width="100%"
+    >
+      <Defs>
+        <RadialGradient cx="50%" cy="58%" fx="50%" fy="58%" id="callGlow" rx="98%" ry="92%">
+          <Stop offset="0%" stopColor={CALL_GLOW} />
+          <Stop offset="82%" stopColor={CALL_BACKGROUND} />
+          <Stop offset="100%" stopColor={CALL_VIGNETTE} />
+        </RadialGradient>
+      </Defs>
+      <Rect fill="url(#callGlow)" height="100%" width="100%" />
+    </Svg>
+  );
+}
+
+function CollapseChevron({ color }: { color: string }) {
+  return (
+    <Svg fill="none" height={22} viewBox="0 0 24 24" width={22}>
+      <Path
+        d="M6 9l6 6 6-6"
+        stroke={color}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={1.8}
+      />
+    </Svg>
+  );
+}
+
+function normalizeLevel(dbfs: number | null): number {
+  if (dbfs === null) {
+    return 0;
+  }
+  const clamped = Math.max(-50, Math.min(0, dbfs));
+  return (clamped + 50) / 50;
+}
+
+function equalizerSamples(count: number, energy: number, tick: number): number[] {
+  if (count === 0) {
+    return [];
+  }
+  if (energy <= 0) {
+    return Array.from({ length: count }, () => 0);
+  }
+  const center = (count - 1) / 2;
+  return Array.from({ length: count }, (_, index) => {
+    const dist = center === 0 ? 0 : Math.abs(index - center) / center;
+    const envelope = 1 - dist * 0.58;
+    const phase = tick * (0.85 + index * 0.41) + index * 1.63;
+    const wobble = 0.42 + 0.58 * Math.abs(Math.sin(phase));
+    return energy * envelope * wobble;
+  });
+}
+
+/**
+ * 球里的均衡器声纹：柱子位置不动，高度跟麦克风音量上下跳。中间柱更敏感，
+ * 两边稍弱，各自相位不同，所以看起来是声纹在跳，而不是一条波形在横着挪。
+ */
+function Voiceprint({
+  active,
+  barCount,
+  barStyle,
+  containerStyle,
+  maxHeight,
+  minHeight,
+  soundLevel,
+  testID,
+  testIDPrefix,
+}: {
+  active: boolean;
+  barCount: number;
+  barStyle: StyleProp<ViewStyle>;
+  containerStyle?: StyleProp<ViewStyle>;
+  maxHeight: number;
+  minHeight: number;
+  soundLevel: number | null;
+  testID: string;
+  testIDPrefix?: string;
+}) {
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!active) {
+      return undefined;
+    }
+    const timer = setInterval(() => {
+      setTick((current) => current + 1);
+    }, VOICEPRINT_TICK_MS);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [active]);
+
+  const energy = active ? normalizeLevel(soundLevel) : 0;
+  const samples = equalizerSamples(barCount, energy, tick);
+
+  return (
+    <View style={[styles.orbWave, containerStyle]} testID={testID}>
+      {samples.map((level, index) => (
+        <View
+          key={`voiceprint-${testID}-${index}`}
+          style={[
+            styles.voiceprintBar,
+            barStyle,
+            { height: minHeight + level * (maxHeight - minHeight) },
+          ]}
+          testID={testIDPrefix ? `${testIDPrefix}-${index}` : undefined}
+        />
+      ))}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  actionButton: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    borderRadius: 999,
-    flex: 1,
-    paddingVertical: spacing.md,
+  bubble: {
+    borderRadius: 22,
+    maxWidth: '100%',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
-  actionText: {
+  bubbleAssistant: {
+    backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  bubbleText: {
+    fontSize: 16,
+    lineHeight: 24,
+  },
+  bubbleTextAssistant: {
     color: colors.onPrimary,
-    fontSize: 15,
-    fontWeight: '600',
   },
-  actions: {
-    flexDirection: 'row',
-    gap: spacing.md,
-    paddingBottom: spacing.xl,
-    paddingHorizontal: spacing.xl,
+  bubbleTextUser: {
+    color: colors.text,
   },
-  body: {
-    alignItems: 'center',
-    flexShrink: 0,
-    paddingBottom: spacing.md,
-    paddingHorizontal: spacing.xl,
-    paddingTop: spacing.sm,
+  bubbleUser: {
+    backgroundColor: colors.accent,
   },
   buttonPressed: {
     opacity: 0.8,
+  },
+  circle: {
+    alignItems: 'center',
+    backgroundColor: colors.focus,
+    borderRadius: 999,
+    height: 96,
+    justifyContent: 'center',
+    width: 96,
+  },
+  circleBusy: {
+    backgroundColor: 'rgba(184,216,117,0.55)',
+  },
+  circleInterrupted: {
+    backgroundColor: colors.error,
+  },
+  circlePaused: {
+    backgroundColor: colors.mutedText,
   },
   collapseButton: {
     alignItems: 'center',
     height: 40,
     justifyContent: 'center',
+    left: spacing.md,
+    position: 'absolute',
     width: 40,
+    zIndex: 2,
   },
-  endButton: {
-    backgroundColor: colors.error,
-  },
-  endText: {
-    color: colors.onPrimary,
-  },
-  navigation: {
-    paddingBottom: spacing.sm,
-    paddingHorizontal: spacing.lg,
-  },
-  history: {
-    flex: 1,
-    paddingTop: spacing.xl * 2,
-  },
-  historyContent: {
+  dock: {
+    alignItems: 'center',
     gap: spacing.md,
     paddingHorizontal: spacing.xl,
+    paddingTop: spacing.sm,
   },
-  historyContentEmpty: {
+  endButton: {
     alignItems: 'center',
-    flexGrow: 1,
+    gap: spacing.xs,
+    marginTop: spacing.xxl,
+  },
+  endIcon: {
+    alignItems: 'center',
+    backgroundColor: colors.error,
+    borderRadius: 999,
+    height: END_BUTTON_SIZE,
     justifyContent: 'center',
+    transform: [{ rotate: '135deg' }],
+    width: END_BUTTON_SIZE,
   },
-  historyEmptyText: {
-    color: 'rgba(255,255,255,0.4)',
-    fontSize: 13,
-    textAlign: 'center',
-  },
-  historyReply: {
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: 15,
-    marginTop: spacing.xs,
-  },
-  historyTranscript: {
-    color: colors.onPrimary,
-    fontSize: 15,
+  endText: {
+    color: 'rgba(255,255,255,0.78)',
+    fontSize: 14,
     fontWeight: '600',
   },
-  historyTurn: {
-    gap: 2,
+  orbHit: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  orbWave: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 3,
+    height: 36,
+    justifyContent: 'center',
+  },
+  orbWaveBar: {
+    backgroundColor: colors.text,
+    borderRadius: 999,
+    width: 3.5,
+  },
+  speakingWave: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    height: 12,
+    marginTop: 8,
+  },
+  speakingWaveBar: {
+    borderRadius: 999,
+    width: 2.5,
+  },
+  speakingWaveBarAssistant: {
+    backgroundColor: 'rgba(255,255,255,0.78)',
+  },
+  speakingWaveBarUser: {
+    backgroundColor: colors.text,
+  },
+  voiceprintBar: {
+    alignSelf: 'center',
+    borderRadius: 999,
+  },
+  orbWell: {
+    alignItems: 'center',
+    height: 168,
+    justifyContent: 'center',
+    width: 168,
+  },
+  ring: {
+    borderRadius: 999,
+    position: 'absolute',
+  },
+  ringInner: {
+    backgroundColor: 'rgba(184,216,117,0.22)',
+    height: 128,
+    width: 128,
+  },
+  ringOuter: {
+    backgroundColor: 'rgba(184,216,117,0.12)',
+    height: 168,
+    width: 168,
   },
   screen: {
-    backgroundColor: colors.text,
+    backgroundColor: CALL_BACKGROUND,
     bottom: 0,
     left: 0,
     position: 'absolute',
     right: 0,
     top: 0,
   },
-  statusDot: {
-    backgroundColor: colors.focus,
-    borderRadius: 999,
-    height: 8,
-    width: 8,
-  },
-  statusDotInterrupted: {
-    backgroundColor: colors.error,
-  },
-  statusDotPaused: {
-    backgroundColor: colors.mutedText,
-  },
-  statusDotSpeaking: {
-    backgroundColor: colors.onPrimary,
-  },
-  statusPill: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
   title: {
-    color: 'rgba(255,255,255,0.6)',
-    fontSize: 12,
+    color: 'rgba(255,255,255,0.78)',
+    fontSize: 14,
     fontWeight: '600',
-    letterSpacing: 0.2,
+    letterSpacing: 0.4,
+    textAlign: 'center',
+  },
+  transcript: {
+    flex: 1,
+    marginTop: 56,
+  },
+  transcriptContent: {
+    flexGrow: 1,
+    gap: spacing.md,
+    justifyContent: 'flex-end',
+    paddingBottom: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+  },
+  transcriptContentOverflow: {
+    flexGrow: 0,
+    justifyContent: 'flex-start',
+  },
+  turn: {
+    gap: 6,
+    maxWidth: '86%',
+  },
+  turnAssistant: {
+    alignItems: 'flex-start',
+    alignSelf: 'flex-start',
+  },
+  turnPast: {
+    opacity: 0.62,
+  },
+  turnUser: {
+    alignItems: 'flex-end',
+    alignSelf: 'flex-end',
   },
 });

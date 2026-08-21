@@ -1,6 +1,10 @@
 import { isTransportError, type AssistantServerMessage } from '../../../contracts/conversation';
 import type { ScheduleCategory } from '../../../contracts/schedule';
-import type { AppliedCommand, ConversationTurnState } from '../domain/ConversationTurn';
+import type {
+  AppliedCommand,
+  ConversationTurnState,
+  VoiceChatMessage,
+} from '../domain/ConversationTurn';
 
 import type {
   AssistantApplicationDependencies,
@@ -12,6 +16,7 @@ import type { VoiceTransportConnection } from './interfaces/VoiceTransportPort';
 const AUDIO_FORMAT = 'pcm_s16le';
 const SAMPLE_RATE_HZ = 16000;
 const CHANNELS = 1;
+const EMPTY_MESSAGES: readonly VoiceChatMessage[] = [];
 // 共享连接的握手超时（AuthenticatedWebSocketClient 内部固定 5s）已经不归这里管；
 // 这个只是给定位单独留的预算，拿不到就不带，不能让 connect() 本身被定位拖住。
 const LOCATION_TIMEOUT_MS = 2000;
@@ -77,6 +82,10 @@ export class AssistantConversationService implements AssistantApplicationPort {
 
   getReplyText(): string | null {
     return this.replyText;
+  }
+
+  getMessages(): readonly VoiceChatMessage[] {
+    return EMPTY_MESSAGES;
   }
 
   getSoundLevel(): number | null {
