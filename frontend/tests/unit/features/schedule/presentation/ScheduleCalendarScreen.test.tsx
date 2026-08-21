@@ -107,6 +107,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
     render(
       <ScheduleCalendarScreen
         accountId="account-a"
+        onOpenPermissions={() => {}}
         onSignOut={() => {}}
         service={service}
         timezone="Asia/Shanghai"
@@ -136,6 +137,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
     render(
       <ScheduleCalendarScreen
         accountId="account-a"
+        onOpenPermissions={() => {}}
         onSignOut={() => {}}
         service={service}
         timezone="Asia/Shanghai"
@@ -158,6 +160,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
     render(
       <ScheduleCalendarScreen
         accountId="account-a"
+        onOpenPermissions={() => {}}
         onSignOut={() => {}}
         service={service}
         timezone="Asia/Shanghai"

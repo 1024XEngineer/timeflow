@@ -96,7 +96,9 @@ describe('AssistantVoiceOverlay layout', () => {
 
     render(
       <AssistantVoiceOverlay
+        alertDialog={{ show: async () => {} }}
         continuousApplication={continuousApplication}
+        onRequestPermission={() => {}}
         pushToTalkApplication={mockPttApplication}
       />,
     );
@@ -152,7 +154,9 @@ describe('AssistantVoiceOverlay layout', () => {
     const continuousApplication = { ...createApplication(), startTurn };
     render(
       <AssistantVoiceOverlay
+        alertDialog={{ show: async () => {} }}
         continuousApplication={continuousApplication}
+        onRequestPermission={() => {}}
         pushToTalkApplication={mockPttApplication}
       />,
     );
