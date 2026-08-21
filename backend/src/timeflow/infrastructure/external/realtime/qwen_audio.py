@@ -136,6 +136,17 @@ class QwenAudioSession:
         # ran the tool, then whatever response.create it triggered actually carries the
         # reply. Both pump loops use this to wait for the last one before settling.
         self._open_responses = 0
+        # Set by send_tool_result() while the response that requested the tool(s) is
+        # still in progress; consumed at that response's own response.done (see the two
+        # pump loops). A batch turn can carry several function calls in one response --
+        # asking for the follow-up as each tool finishes, instead of once the response
+        # itself is done, would send response.create while the vendor still considers
+        # that response in progress and it rejects the request outright.
+        self._followup_requested = False
+        # Set instead of _followup_requested when a tool in the current response ended
+        # the conversation: no follow-up is wanted even if an earlier tool call in the
+        # same batch asked for one.
+        self._followup_suppressed = False
         # Continuous mode only: true between a response.created and its matching
         # response.done (or a cancellation). cancel_response() reads this to know
         # whether there is anything to tell the vendor to abandon.
@@ -185,14 +196,20 @@ class QwenAudioSession:
         self._open_responses += 1
 
     async def send_tool_result(self, call_id: str, output: str, *, respond: bool = True) -> None:
-        """Write a tool's output back and let the model continue from it.
+        """Write a tool's output back and mark whether it should be followed by a reply.
 
         The output is written back either way, so the vendor's conversation history stays
-        complete for later turns. Asking for a reply is separate: response.create is
-        required in every mode when one is wanted -- the vendor's own turn_detection only
-        starts a turn from the user's audio, never from a tool result on its own -- but a
-        tool that ends the conversation has nothing to follow up, and asking anyway just
-        buys a second goodbye on top of the one the model already spoke.
+        complete for later turns. Asking for a reply is separate, and deliberately deferred:
+        response.create is required in every mode when one is wanted -- the vendor's own
+        turn_detection only starts a turn from the user's audio, never from a tool result on
+        its own -- but the response that requested this tool may still be in progress (a
+        batch turn can call several tools before that response is done), and the vendor
+        rejects a response.create sent while another response is still open. The two pump
+        loops send it exactly once, at that response's own response.done, once every tool
+        call belonging to it has been recorded here. A tool that ends the conversation has
+        nothing to follow up, and asking anyway just buys a second goodbye on top of the one
+        the model already spoke -- that takes priority over any other tool in the same batch
+        that asked for a reply.
         """
         await self._send(
             {
@@ -200,10 +217,10 @@ class QwenAudioSession:
                 "item": {"type": "function_call_output", "call_id": call_id, "output": output},
             }
         )
-        if not respond:
-            return
-        await self._send({"type": "response.create"})
-        self._open_responses += 1
+        if respond:
+            self._followup_requested = True
+        else:
+            self._followup_suppressed = True
 
     async def cancel_response(self) -> None:
         """Tell the vendor to abandon its in-flight reply, if there is one.
@@ -218,6 +235,8 @@ class QwenAudioSession:
             return
         self._responding = False
         self._open_responses = 0
+        self._followup_requested = False
+        self._followup_suppressed = False
         await self._send({"type": "response.cancel"})
 
     async def close(self) -> None:
@@ -269,8 +288,19 @@ class QwenAudioSession:
                     return
                 await observer.tool_requested(**requested)
             elif kind == "response.done":
-                # Not the turn's end if a tool ran: the next response is the one that speaks.
+                # Not the turn's end if a tool asked for a follow-up: the next response
+                # is the one that speaks. A tool that ended the conversation instead
+                # (respond=False, _followup_suppressed) has no follow-up coming -- that
+                # must fall through to the normal settlement below, not skip it, or the
+                # turn never ends and the next recv() reads past the finished stream.
                 self._open_responses -= 1
+                wants_followup = self._followup_requested and not self._followup_suppressed
+                self._followup_requested = False
+                self._followup_suppressed = False
+                if wants_followup:
+                    await self._send({"type": "response.create"})
+                    self._open_responses += 1
+                    continue
                 if self._open_responses <= 0:
                     return
             elif kind == "error":
@@ -330,13 +360,24 @@ class QwenAudioSession:
                 await observer.tool_requested(**requested)
             elif kind == "response.done":
                 if self._open_responses > 0:
-                    # A tool call inside this response asked the vendor for a
-                    # follow-up (send_tool_result's response.create) -- that follow-up,
-                    # not this response, is what actually finishes the turn. Settling
-                    # here would let a caller like end_conversation hang up before the
-                    # model's actual reply to it has even started. Same pattern as
-                    # _pump_single_turn's push-to-talk handling below.
                     self._open_responses -= 1
+                # A tool call inside the response that just finished may have asked for
+                # a follow-up; ask for it only now that the vendor considers this
+                # response done (see send_tool_result). That follow-up, not this
+                # response, is what actually finishes the turn -- settling here would
+                # let a caller like end_conversation hang up before the model's actual
+                # reply to it has even started. Same pattern as _pump_single_turn's
+                # push-to-talk handling below. A tool that ended the conversation
+                # instead (respond=False, _followup_suppressed) has no follow-up
+                # coming, so it must NOT take this branch -- it needs the normal
+                # settlement below to actually report turn_completed and let the
+                # caller close out the call.
+                wants_followup = self._followup_requested and not self._followup_suppressed
+                self._followup_requested = False
+                self._followup_suppressed = False
+                if wants_followup:
+                    await self._send({"type": "response.create"})
+                    self._open_responses += 1
                     continue
                 self._responding = False
                 # The bytes just sent still take this long to actually play out on the

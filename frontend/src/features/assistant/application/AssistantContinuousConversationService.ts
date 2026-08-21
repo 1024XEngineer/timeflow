@@ -96,6 +96,12 @@ export class AssistantContinuousConversationService implements AssistantApplicat
   private playbackGeneration = 0;
   /** Category events can arrive before the command result creates their local row. */
   private readonly pendingCategoryUpdates = new Map<string, ScheduleCategory>();
+  /** 串起每条 voice.command.result 的本地落库；一次连续通话里模型可能连续触发多个
+   * 工具调用（批量新建/删除），command.result 消息前后脚到达时若不排队，会有两个
+   * applyCommandResultLocally() 同时各开一个 withExclusiveTransactionAsync（各自
+   * 新建一条原生连接），互相踩 "database is locked" 甚至留下损坏的原生连接状态——
+   * 跟 playbackChain 一个模式：不管上一条成功与否都排到下一条前面。 */
+  private commandResultChain: Promise<void> = Promise.resolve();
   private disposed = false;
   private readonly unsubscribeAppState: () => void;
 
@@ -383,7 +389,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         };
         // 状态立刻回到 listening（麦克风还开着），不等写库；message.ack 必须等
         // 写库成功后才发，避免向服务端谎报已落库。
-        void this.applyCommandResultLocally(command, message.message_id);
+        this.queueCommandResult(command, message.message_id);
         this.setState({ conversationId: message.conversation_id, phase: 'listening' });
         return;
       }
@@ -456,6 +462,17 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       default:
         return;
     }
+  }
+
+  /** 跟 chainPlayback 一个模式：.catch(() => {}) 必须紧跟在同一条语句里同步接上——
+   * 迟一拍再接（比如靠下一次 queueCommandResult 调用里的第二个 then 参数兜底）
+   * 这段窗口期这个被拒绝的 promise 没有任何 handler，Node 的 unhandled rejection
+   * 检测在下一次调用到达前就已经判定“没人接”，直接把整个进程带崩——不是理论
+   * 风险，用一个会抛的 state 订阅者复现过。 */
+  private queueCommandResult(command: AppliedCommand, messageId: string): void {
+    this.commandResultChain = this.commandResultChain
+      .then(() => this.applyCommandResultLocally(command, messageId))
+      .catch(() => {});
   }
 
   private async applyCommandResultLocally(

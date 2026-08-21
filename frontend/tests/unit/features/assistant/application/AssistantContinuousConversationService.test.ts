@@ -453,6 +453,123 @@ describe('AssistantContinuousConversationService', () => {
     disposeService(service);
   });
 
+  it('keeps applying queued command results even if a subscriber listener throws', async () => {
+    // markScheduleDataChanged() synchronously notifies every subscriber; a listener
+    // that throws (e.g. a buggy re-render) rejects applyCommandResultLocally()'s
+    // promise. queueCommandResult() must neutralize that with .catch(() => {})
+    // chained in the same statement (same idiom as chainPlayback) -- deferring the
+    // catch to a later call leaves the rejection unhandled for a few microtask
+    // ticks, which crashes the process outright (reproduced while writing this
+    // test, before adding the immediate .catch()).
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+    await startListening(fake, service);
+
+    // handleMessage's own setState() notifies once synchronously before
+    // applyCommandResultLocally's markScheduleDataChanged() notifies again
+    // asynchronously; only the second one is the one queueCommandResult's chain
+    // needs to survive.
+    let notifyCount = 0;
+    const unsubscribe = service.subscribe(() => {
+      notifyCount += 1;
+      if (notifyCount === 2) {
+        throw new Error('listener boom');
+      }
+    });
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_1',
+      payload: { operation: 'create_schedule', schedule: { id: 'a' }, status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+    unsubscribe();
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_2',
+      payload: { operation: 'create_schedule', schedule: { id: 'b' }, status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getLastAppliedCommand()).toEqual(
+      expect.objectContaining({ operation: 'create_schedule', schedule: { id: 'b' } }),
+    );
+    disposeService(service);
+  });
+
+  it('serializes local writes so a batch of back-to-back command results cannot race', async () => {
+    // Regression test for a batch create/delete race: the model can call several
+    // tools inside one turn, so voice.command.result messages can arrive only
+    // milliseconds apart (observed as low as 12ms in production logs). Each write
+    // opens its own withExclusiveTransactionAsync() on the real SQLite adapter --
+    // running two at once opens two native connections that fight over the same
+    // exclusive lock ("database is locked"), and the loser's write is silently
+    // dropped even though the cloud already committed it. queueCommandResult()
+    // must serialize these instead of firing them concurrently.
+    const fake = createFakeConnection();
+    const order: string[] = [];
+    let resolveFirst: (() => void) | undefined;
+    let inFlight = 0;
+    let overlapped = false;
+    let callCount = 0;
+    const deps = createDeps({
+      applyCommandResult: async () => {
+        callCount += 1;
+        inFlight += 1;
+        if (inFlight > 1) overlapped = true;
+        if (callCount === 1) {
+          order.push('first-start');
+          await new Promise<void>((resolve) => {
+            resolveFirst = resolve;
+          });
+          order.push('first-end');
+        } else {
+          order.push('second-start');
+          order.push('second-end');
+        }
+        inFlight -= 1;
+      },
+      connection: fake.connection,
+    });
+    const service = createService(deps);
+    await startListening(fake, service);
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_1',
+      payload: { operation: 'create_schedule', schedule: { id: 'a' }, status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_2',
+      payload: { operation: 'create_schedule', schedule: { id: 'b' }, status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    // The second write must not have started yet -- the first is still stuck
+    // mid-transaction, waiting on resolveFirst.
+    expect(order).toEqual(['first-start']);
+    expect(overlapped).toBe(false);
+
+    resolveFirst?.();
+    await flushAsync();
+
+    expect(order).toEqual(['first-start', 'first-end', 'second-start', 'second-end']);
+    expect(overlapped).toBe(false);
+    expect(fake.sent).toContainEqual(
+      expect.objectContaining({ message_id: 'msg_1', type: 'message.ack' }),
+    );
+    expect(fake.sent).toContainEqual(
+      expect.objectContaining({ message_id: 'msg_2', type: 'message.ack' }),
+    );
+    disposeService(service);
+  });
+
   it('patches an asynchronous category update while the call remains active', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
