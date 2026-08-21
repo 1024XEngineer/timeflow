@@ -19,7 +19,7 @@ const SAMPLE_RATE_HZ = 16000;
 const CHANNELS = 1;
 // 共享连接的握手超时（AuthenticatedWebSocketClient 内部固定 5s）已经不归这里管；
 // 这个只是给定位单独留的预算，拿不到就不带，不能让 connect() 本身被定位拖住。
-const LOCATION_TIMEOUT_MS = 2000;
+const LOCATION_TIMEOUT_MS = 500;
 // 整场空闲超时：会话建立、听到一句真实语音、或播完一次回复之后，这个窗口内
 // 完全没有下一次真实语音就自动挂断。三分钟落在产品要求的 1~5 分钟区间中段；
 // 单独的"等待用户输入 10~30 秒"档位按设计简化，不再单独实现——这一档就是

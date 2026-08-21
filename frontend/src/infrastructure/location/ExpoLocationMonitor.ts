@@ -17,6 +17,11 @@ import {
   type GeofenceTaskPayload,
 } from './geofenceTask';
 import type { LocationProvider } from './LocationProvider';
+import { getNativeLastKnownLocationSample } from './NativeLocationFallback';
+
+type ExpoLocationMonitorOptions = {
+  nativeFallback?: () => Promise<LocationSample | null>;
+};
 
 type ActiveWatch = {
   listener_id: string;
@@ -49,7 +54,7 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
   private unsubscribeTask: (() => void) | null;
   private readonly appStateSub: NativeEventSubscription;
 
-  constructor() {
+  constructor(private readonly options: ExpoLocationMonitorOptions = {}) {
     this.unsubscribeTask = subscribeGeofenceTaskEvents(this.handleTaskEvent);
     this.appStateSub = AppState.addEventListener('change', this.handleAppState);
   }
@@ -135,7 +140,7 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
       const { status } = await Location.getForegroundPermissionsAsync();
       if (status !== 'granted') {
         console.warn('[geofence] getCurrentSample skipped: foreground permission not granted');
-        return this.lastSample;
+        return this.getNativeCachedSample();
       }
       const position = await Location.getCurrentPositionAsync({});
       const sample = toSample(position);
@@ -143,8 +148,24 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
       return sample;
     } catch (error) {
       console.warn('[geofence] getCurrentSample failed', error);
-      return this.lastSample;
+      return this.getNativeCachedSample();
     }
+  }
+
+  private async getNativeCachedSample(): Promise<LocationSample | null> {
+    const nativeFallback = this.options.nativeFallback ?? getNativeLastKnownLocationSample;
+    try {
+      const sample = await nativeFallback();
+      if (sample !== null) {
+        this.lastSample = sample;
+        return sample;
+      }
+    } catch (error) {
+      console.warn('[geofence] failed to read native cached location', {
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
+    }
+    return this.lastSample;
   }
 
   dispose(): void {
@@ -238,7 +259,16 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
       return;
     }
     // Android 要求先拿到前台权限才能申请后台权限，所以这两步不能对调顺序。
-    const { status: background } = await Location.getBackgroundPermissionsAsync();
+    const backgroundPermission = await Location.getBackgroundPermissionsAsync().catch((error) => {
+      console.warn('[geofence] syncRegions skipped: background permission status unavailable', {
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
+      return null;
+    });
+    if (backgroundPermission == null) {
+      return;
+    }
+    const { status: background } = backgroundPermission;
     if (background !== 'granted') {
       console.warn('[geofence] syncRegions skipped: background permission not granted');
       return;

@@ -97,6 +97,7 @@ function createDeps(
     applyCommandResult?: () => Promise<void>;
     applyCategoryUpdate?: () => Promise<boolean>;
     connection?: VoiceTransportConnection;
+    getCurrentSample?: LocationProvider['getCurrentSample'];
     requestPermission?: () => Promise<boolean>;
   } = {},
 ) {
@@ -121,7 +122,7 @@ function createDeps(
     stop: jest.fn(async () => undefined),
   };
   const location: LocationProvider = {
-    getCurrentSample: jest.fn(async () => null),
+    getCurrentSample: jest.fn(overrides.getCurrentSample ?? (async () => null)),
   };
   const localScheduleWriter: LocalScheduleWriterPort = {
     applyCommandResult: jest.fn(overrides.applyCommandResult ?? (async () => undefined)),
@@ -185,6 +186,30 @@ describe('AssistantContinuousConversationService', () => {
     }
     jest.clearAllTimers();
     jest.useRealTimers();
+  });
+
+  it('does not hold continuous mode start on a slow location sample', async () => {
+    jest.useFakeTimers();
+    const fake = createFakeConnection();
+    const deps = createDeps({
+      connection: fake.connection,
+      getCurrentSample: () => new Promise(() => undefined),
+    });
+    const service = createService(deps);
+
+    const turn = service.startTurn();
+    await advanceAndFlush(499);
+    expect(deps.transport.connect).not.toHaveBeenCalled();
+
+    await advanceAndFlush(1);
+    expect(deps.transport.connect).toHaveBeenCalledWith(null);
+
+    fake.emitMessage({
+      ok: true,
+      payload: { conversation_id: 'conv_001', stream_id: 'stream_001' },
+      type: 'voice.stream.started',
+    } as AssistantServerMessage);
+    await turn;
   });
 
   it('ends the turn once the idle timeout elapses without further speech', async () => {

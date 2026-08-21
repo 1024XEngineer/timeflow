@@ -11,6 +11,7 @@ import {
   drainPendingGeofenceEvents,
   subscribeGeofenceTaskEvents,
 } from '../../../../src/infrastructure/location/geofenceTask';
+import { getNativeLastKnownLocationSample } from '../../../../src/infrastructure/location/NativeLocationFallback';
 
 jest.mock('expo-location', () => ({
   getForegroundPermissionsAsync: jest.fn(),
@@ -27,6 +28,10 @@ jest.mock('../../../../src/infrastructure/location/geofenceTask', () => ({
   GEOFENCE_TASK_NAME: 'timeflow-geofence',
   subscribeGeofenceTaskEvents: jest.fn(),
   drainPendingGeofenceEvents: jest.fn(),
+}));
+
+jest.mock('../../../../src/infrastructure/location/NativeLocationFallback', () => ({
+  getNativeLastKnownLocationSample: jest.fn(),
 }));
 
 const getForeground = Location.getForegroundPermissionsAsync as jest.MockedFunction<
@@ -58,6 +63,9 @@ const subscribeTaskEvents = subscribeGeofenceTaskEvents as jest.MockedFunction<
 >;
 const drainPending = drainPendingGeofenceEvents as jest.MockedFunction<
   typeof drainPendingGeofenceEvents
+>;
+const getNativeCachedSample = getNativeLastKnownLocationSample as jest.MockedFunction<
+  typeof getNativeLastKnownLocationSample
 >;
 
 function granted(): Location.LocationPermissionResponse {
@@ -130,6 +138,7 @@ describe('ExpoLocationMonitor', () => {
     requestForeground.mockResolvedValue(granted());
     requestBackground.mockResolvedValue(granted());
     getCurrentPosition.mockResolvedValue(position());
+    getNativeCachedSample.mockResolvedValue(null);
     hasStartedGeofencing.mockResolvedValue(false);
     stopGeofencing.mockResolvedValue(undefined);
     startGeofencing.mockResolvedValue(undefined);
@@ -304,6 +313,34 @@ describe('ExpoLocationMonitor', () => {
       await expect(monitor.getCurrentSample()).resolves.toEqual(cached);
     });
 
+    it('uses the native cached sample when the current position is unavailable', async () => {
+      const nativeSample = {
+        latitude: 12.345678,
+        longitude: 98.765432,
+        accuracy_meters: 31,
+        observed_at: '2026-08-21T02:20:54.733Z',
+      };
+      getCurrentPosition.mockRejectedValue(new Error('Current location is unavailable'));
+      getNativeCachedSample.mockResolvedValue(nativeSample);
+      const monitor = new ExpoLocationMonitor();
+
+      await expect(monitor.getCurrentSample()).resolves.toEqual(nativeSample);
+      await expect(monitor.getLastSample()).resolves.toEqual(nativeSample);
+    });
+
+    it('keeps the last sample when the native cached location read throws', async () => {
+      const nativeFallback = jest.fn(async (): Promise<null> => {
+        throw new Error('native location unavailable');
+      });
+      const monitor = new ExpoLocationMonitor({ nativeFallback });
+      await monitor.watch(request(), jest.fn());
+      const cached = await monitor.getLastSample();
+
+      getCurrentPosition.mockRejectedValue(new Error('Current location is unavailable'));
+      await expect(monitor.getCurrentSample()).resolves.toEqual(cached);
+      expect(nativeFallback).toHaveBeenCalledTimes(1);
+    });
+
     it('defaults accuracy to 0 when the platform does not report it', async () => {
       getCurrentPosition.mockResolvedValue(position({ accuracy: null }));
       const monitor = new ExpoLocationMonitor();
@@ -452,6 +489,14 @@ describe('ExpoLocationMonitor', () => {
 
       expect(requestForeground).not.toHaveBeenCalled();
       expect(requestBackground).not.toHaveBeenCalled();
+      expect(startGeofencing).not.toHaveBeenCalled();
+    });
+
+    it('skips registration without throwing when background permission status cannot be read', async () => {
+      getBackground.mockRejectedValue(new Error('ACCESS_BACKGROUND_LOCATION missing'));
+      const monitor = new ExpoLocationMonitor();
+      await expect(monitor.watch(request(), jest.fn())).resolves.toBeDefined();
+
       expect(startGeofencing).not.toHaveBeenCalled();
     });
 

@@ -2,6 +2,7 @@ module.exports = {
   expo: {
     name: 'Timeflow',
     slug: 'timeflow',
+    scheme: 'timeflow',
     version: '1.0.0',
     orientation: 'portrait',
     icon: './assets/icon.png',
