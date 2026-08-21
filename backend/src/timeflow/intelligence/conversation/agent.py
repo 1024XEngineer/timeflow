@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
@@ -24,17 +25,31 @@ from timeflow.intelligence.conversation.llm import (
 )
 from timeflow.intelligence.conversation.tools import ToolRegistry
 
-SYSTEM_PROMPT = """你是 TimeFlow 时间管理助手，帮助用户通过简短自然的语音对话管理日程和提醒。
+logger = logging.getLogger(__name__)
 
-语言与口吻：始终使用中文纯文本，像日常对话一样简短自然，通常一句话说完。不要客套，不要复述用户原话，不要使用 Markdown、标题、编号、项目符号或一次罗列多项信息。
+SYSTEM_PROMPT = """你是 TimeFlow 时间管理助手，只负责用简短自然的语音对话帮用户创建、查询、修改、删除日程，超出范围一律不做。用户说的闹钟、提醒、会议、待办等，都是日程，一律按日程处理，不要按名称划分。
 
-必须通过工具执行创建、查询、修改和删除，不得仅凭文本声称操作成功；只有工具返回成功结果后才能告知用户成功。返回 error 或 not_implemented 时必须如实说明。不得编造日程 ID、revision、地点、地址、经纬度、候选项或业务结果。
+输出：始终中文纯文本、口语化、一句话说完；不客套、不复述、不用 Markdown、不一次罗列多项。
 
-信息不足时必须调用 request_user_input，不要直接输出普通文本让用户补充。每轮只能询问一个最关键的缺失信息；即使缺少多项，也要按多轮逐项引导，用户回答后再询问下一项。优先询问时间或地点等决定日程是否可执行的信息；标题可以结合用户表达推断，无法推断时再单独询问。schedule_type（时间型/地点型）和 schedule_kind（单次/重复）是内部字段，绝不要向用户提问或提及；用户提到具体地点就判为地点型，没提地点判为时间型，没说要重复判为单次，不要为此反问。speech_text 只包含当前这个简短问题，不要加“请提供以下信息”、示例、解释或其他待补字段。
+先判断输入属于哪类：
+1. 日程操作：按下面「日程操作」执行。
+2. 回答上一轮问题：当作补充信息，一次性提取所有日程信息（时间、标题、地点、日期、重复、提醒等），不要只取上一轮问的那一项；提取后再看还缺什么。
+3. 无关话题：简短说明「我是时间管理助手，只能帮你管理日程」，拉回日程，不编答案。
+4. 噪音：仅当完全无可用信息（「嗯」「啊」、听不清的碎句）才回「抱歉，我没听清，能再说一遍吗？」，不调工具。只要有一点日程相关意图（哪怕含糊、口误、缺字），就别归入噪音，尽力提取可用部分、只追问真正缺的。
 
-写入 title 字段时必须改写为简洁的名词短语，适合客户端提醒文案直接展示：去掉「我」「帮我」「提醒我」「记一下」等第一人称或祈使开头，不要把时间、地点塞进标题（它们属于 start_time、location_name 等字段），例如「帮我明天下午三点开会」的 title 写成「开会」。创建时补齐其余必要信息；地点信息不完整调用 location_search。修改或删除前先查询并确认目标；多个候选必须反问，不能自行选择；用户指代不明（如「那个会」）或匹配到多条日程时，先用 schedule_query 查询，再把查到的候选放进 request_user_input 的 candidates。删除前必须先调用 request_user_input，question_kind 用 confirmation，把要删的那条（标题加时间）说清楚让用户确认；用户明确确认后，才调用 schedule_delete 真正删除。周期删除还需确认 this_occurrence、this_and_future 或 entire_series。
+铁律：创建/查询/修改/删除必须通过工具执行，只有工具返回 status=ok 才能说「已创建/已删除/已修改/查到了」，返回 error/not_implemented 要如实说没做成。严禁编造任何日程信息（ID、revision、标题、时间、地点、地址、经纬度、候选、查询结果），只能来自工具实际返回。
 
-当前支持修改整个日程或整个周期系列，不支持只修改某一次周期发生实例；不得将后者错误地执行为整个周期修改。修改时未提及的字段保持原值。地点工具由系统处理默认搜索范围，不要猜测城市或把用户当前位置当作目标地点。相对时间使用系统提供的时间和时区。用户明确想结束连续语音对话时调用 end_conversation。"""
+信息补全：缺信息就调 request_user_input，不要用文字让用户补；每轮只问一个最关键缺失项，优先问时间或地点。schedule_type（时间/地点）和 schedule_kind（单次/重复）是内部字段，绝不问或提及：提到地点就是地点型、没提就是时间型、没说重复就是单次。speech_text 只放当前这一个问题。
+
+日程操作：
+- 创建：title 写成简洁名词短语（去掉「我/帮我/提醒我/记一下」等开头，不含时间地点），如「明天下午三点开会」→「开会」。用户提到地点（包括「附近地铁站」这类泛泛说法）就调 location_search 找候选，别直接问「是哪个」；搜到多条让用户选、一条直接用、没搜到如实说没找到。没提标题用「新建日程」、开始时间用下一个整点、非全天结束时间往后一小时、全天就当整个自然日；提醒默认 medium（非全天 before_start 提前 15 分钟、全天 at_time 当天 10 点）。
+- 查询：用户想了解日程时直接 schedule_query，结果如实汇报——先说几条、再逐条说时间/标题/地点；查不到就说没有。按用户实际说的维度筛选：问了具体时间（今天/明天/本周）才加时间范围；说出具体名称（如「周会」）才按标题查。「有哪些日程/日常/安排」这类列举问法就是查全部日程，这些泛指词不是标题，别拿来当 title 过滤。别用「我帮你查一下」这类空话。修改或删除前也先 schedule_query 确认目标；指代不明或命中多条时，把候选放进 request_user_input 的 candidates，别自己选。
+- 修改：只支持改整条或整个周期系列，不支持只改某一次；别把「改某一次」误执行为改整个系列。没提到的字段保持原值。
+- 删除：删除前先 request_user_input（confirmation）说清要删的，确认后才 schedule_delete。周期删除按意图定 scope：只删这一次 this_occurrence、这次及以后 this_and_future、整个系列 entire_series。
+
+结束对话：用户明确想结束时（「结束对话」「先这样」「不用了」「再见」等），先道别再调 end_conversation 工具，别只口头说再见。
+
+其他：地点搜索范围由系统处理，别猜城市。相对时间（今天/明天/后天/下周三等）按系统时间和时区换算；「三点」没说上下午的，白天默认下午三点。"""
 
 QuestionKind: TypeAlias = Literal[
     "missing_field",
@@ -217,6 +232,7 @@ class Agent:
         tool_call_llm_ms = 0.0
         tool_execution_ms = 0.0
         final_text_llm_ms = 0.0
+        correction_attempted = False
 
         while True:
             # Stream one model round. Text is spoken as it arrives only once a tool has
@@ -254,12 +270,32 @@ class Agent:
 
             if not tool_calls:
                 final_text_llm_ms += round_ms
-                conversation.messages.append(
-                    ChatMessage(role="assistant", content="".join(text_parts))
+                final_text = "".join(text_parts)
+                logger.info(
+                    "agent round=%d produced no tool call, text=%r",
+                    tool_rounds,
+                    final_text,
                 )
+                conversation.messages.append(ChatMessage(role="assistant", content=final_text))
+                if tool_rounds == 0 and not correction_attempted and _claims_success(final_text):
+                    correction_attempted = True
+                    logger.warning("agent claimed success without a tool call: %r", final_text)
+                    conversation.messages.append(
+                        ChatMessage(
+                            role="user",
+                            content=(
+                                "（系统）你刚才没有调用任何工具就声称操作成功，这是不允许的。"
+                                "请调用对应的工具真正执行，再根据工具返回结果如实回复。"
+                            ),
+                        )
+                    )
+                    continue
                 if not streamed:
                     for text in text_parts:
                         yield AgentTextDelta(text)
+                if tool_rounds == 0 and _is_farewell(final_text):
+                    logger.warning("agent said farewell without end_conversation: %r", final_text)
+                    yield AgentSessionEnd()
                 yield AgentCompleted(
                     _sum_usage(usages) if usage_complete else None,
                     AgentTurnTiming(tool_call_llm_ms, tool_execution_ms, final_text_llm_ms),
@@ -273,6 +309,11 @@ class Agent:
 
             accumulator = next(iter(tool_calls.values()))
             tool_call = _complete_tool_call(accumulator)
+            logger.info(
+                "agent tool call name=%s raw_args=%s",
+                tool_call.name,
+                tool_call.arguments,
+            )
             arguments = _parse_tool_arguments(tool_call.arguments)
             assistant_message = AssistantToolCallMessage(
                 content="".join(text_parts),
@@ -429,6 +470,44 @@ def _pending_question_from_arguments(
         required_response=required_response.strip() if isinstance(required_response, str) else None,
         candidates=tuple(cast(dict[str, Any], item) for item in candidate_items),
     )
+
+
+_SUCCESS_CLAIM_MARKERS = (
+    "已创建",
+    "创建成功",
+    "已添加",
+    "已新建",
+    "已记下",
+    "已删除",
+    "删除成功",
+    "已移除",
+    "已删掉",
+    "已修改",
+    "修改成功",
+    "已更新",
+    "已更改",
+    "已改好",
+    "已取消",
+    "取消成功",
+)
+
+
+def _claims_success(text: str) -> bool:
+    """Return True when a no-tool reply still claims a CRUD operation succeeded."""
+    return any(marker in text for marker in _SUCCESS_CLAIM_MARKERS)
+
+
+_FAREWELL_MARKERS = (
+    "再见",
+    "拜拜",
+    "先这样",
+    "就这样",
+)
+
+
+def _is_farewell(text: str) -> bool:
+    """Return True when a no-tool reply is a farewell that should end the session."""
+    return any(marker in text for marker in _FAREWELL_MARKERS)
 
 
 def _refusal_json(reason: str) -> str:
