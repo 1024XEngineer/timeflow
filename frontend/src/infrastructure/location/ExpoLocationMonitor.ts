@@ -209,12 +209,15 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
   /** 把一次区域同步接到 syncChain 末尾，保证上一次真正执行完（不管成功与否）才轮到
    * 这一次——不是排队等着处理各自不同的输入，每次都是重新读 this.watches 当前
    * 状态，纯粹为了不让 syncRegions() 并发跑，参照 AssistantContinuousConversationService
-   * 的 chainPlayback()/playbackChain 同一个模式。 */
+   * 的 chainPlayback()/playbackChain 同一个模式。.catch(() => {}) 必须紧跟在同一条
+   * 语句里同步接上——syncRegions() 里 getForegroundPermissionsAsync()/
+   * getBackgroundPermissionsAsync() 没包 try/catch，哪次真抛了，如果这段失败要
+   * 等下一次 chainSync() 调用（比如靠 then 的第二个参数）才被接住，中间这段没人
+   * 接的窗口期会被 Node/Hermes 判定成 unhandled rejection 直接崩进程——不是理论
+   * 风险，AssistantContinuousConversationService 的 commandResultChain 用一个会
+   * 抛错的场景实测复现过。 */
   private chainSync(): Promise<void> {
-    this.syncChain = this.syncChain.then(
-      () => this.syncRegions(),
-      () => this.syncRegions(),
-    );
+    this.syncChain = this.syncChain.then(() => this.syncRegions()).catch(() => {});
     return this.syncChain;
   }
 
