@@ -77,6 +77,17 @@ describe('schedule detail sheets', () => {
     expect(screen.queryByText('全天')).toBeNull();
   });
 
+  it('uses the same SVG size for time, location, and reminder icons', () => {
+    render(<ScheduleOccurrenceDetailSheet occurrence={timedOccurrence} onClose={() => {}} />);
+
+    for (const name of ['time', 'location', 'reminder']) {
+      expect(screen.getByTestId(`detail-icon-${name}`).props).toMatchObject({
+        height: 22,
+        width: 22,
+      });
+    }
+  });
+
   it('shows all-day status without empty location or reminder sections', () => {
     render(<ScheduleOccurrenceDetailSheet occurrence={allDayOccurrence} onClose={() => {}} />);
 

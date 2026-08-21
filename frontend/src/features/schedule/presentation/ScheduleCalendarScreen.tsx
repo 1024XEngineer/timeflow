@@ -94,7 +94,7 @@ export function ScheduleCalendarScreen({
         <View style={styles.content}>
           <View style={styles.header}>
             <View style={styles.headerTop}>
-              <Text numberOfLines={1} style={styles.title}>
+              <Text testID="schedule-selected-date" style={styles.title}>
                 {selectedLabel}
               </Text>
               <View style={styles.accountActions} testID="schedule-account-actions">
@@ -240,6 +240,8 @@ function LogoutIcon() {
 }
 
 const styles = StyleSheet.create({
+  // accountActions 整体上限收窄：用户名过长时 pill 内截断，不能挤占日期标题。
+  // 标题 (flex:1) 因此始终保有 ~150px（360px 屏）可用空间。
   accountActions: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -247,7 +249,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     justifyContent: 'flex-end',
     marginLeft: 'auto',
-    maxWidth: 240,
+    maxWidth: 168,
     minWidth: 0,
   },
   agenda: { paddingHorizontal: spacing.md, paddingTop: spacing.xl },
@@ -343,10 +345,11 @@ const styles = StyleSheet.create({
   title: {
     color: colors.text,
     flex: 1,
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: '800',
-    lineHeight: 34,
+    lineHeight: 30,
     minWidth: 0,
+    flexShrink: 1,
   },
   userPill: {
     alignItems: 'center',
@@ -357,7 +360,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexShrink: 1,
     gap: spacing.sm,
-    maxWidth: 196,
+    // 用户名过长时在 pill 内截断，不让它把日期标题挤出可视区
+    maxWidth: 124,
     minWidth: 0,
     paddingHorizontal: 4,
     paddingRight: 10,
