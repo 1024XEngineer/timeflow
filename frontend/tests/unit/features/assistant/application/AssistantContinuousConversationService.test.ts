@@ -248,9 +248,37 @@ describe('AssistantContinuousConversationService', () => {
     } as AssistantServerMessage);
     await flushAsync();
 
-    expect(service.getTurns()).toEqual([
-      { id: 'req_1', replyText: '明天下午三点', transcript: '明天几点开会' },
-      { id: 'req_2', replyText: null, transcript: '谁参加' },
+    expect(service.getMessages()).toEqual([
+      { id: 'user-1', role: 'user', text: '明天几点开会' },
+      { id: 'reply_1', role: 'assistant', text: '明天下午三点' },
+      { id: 'user-3', role: 'user', text: '谁参加' },
+    ]);
+  });
+
+  it('keeps a streaming assistant reply pending until it is done', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: false, reply_id: 'reply_1', speech_text: '明天' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getMessages()).toEqual([
+      { id: 'reply_1', pending: true, role: 'assistant', text: '明天' },
+    ]);
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '明天下午三点' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getMessages()).toEqual([
+      { id: 'reply_1', role: 'assistant', text: '明天下午三点' },
     ]);
   });
 
@@ -318,14 +346,15 @@ describe('AssistantContinuousConversationService', () => {
       } as AssistantServerMessage);
       await flushAsync();
 
-      expect(service.getTurns()).toEqual([
-        { id: 'req_1', replyText: speechText, transcript: '帮我订会议室' },
+      expect(service.getMessages()).toEqual([
+        { id: 'user-1', role: 'user', text: '帮我订会议室' },
+        { id: 'q_1', role: 'assistant', text: speechText },
       ]);
       expect(service.getState()).toMatchObject({ phase: 'asking' });
     },
   );
 
-  it('does not create a history turn when a reply arrives before any transcript', async () => {
+  it('records an assistant bubble even when a reply arrives before any transcript', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
     const service = createService(deps);
@@ -339,7 +368,7 @@ describe('AssistantContinuousConversationService', () => {
     await flushAsync();
 
     expect(service.getReplyText()).toBe('好的');
-    expect(service.getTurns()).toEqual([]);
+    expect(service.getMessages()).toEqual([{ id: 'reply_1', role: 'assistant', text: '好的' }]);
   });
 
   it('clears turn history when a new call starts', async () => {
@@ -355,12 +384,12 @@ describe('AssistantContinuousConversationService', () => {
       type: 'voice.asr.completed',
     } as AssistantServerMessage);
     await flushAsync();
-    expect(service.getTurns()).toHaveLength(1);
+    expect(service.getMessages()).toHaveLength(1);
 
     await service.endTurn();
     await startListening(fake, service);
 
-    expect(service.getTurns()).toHaveLength(0);
+    expect(service.getMessages()).toHaveLength(0);
   });
 
   it('resets the idle timer after a reply finishes playing', async () => {

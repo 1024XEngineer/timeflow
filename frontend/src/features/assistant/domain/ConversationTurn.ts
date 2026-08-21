@@ -26,11 +26,13 @@ export interface AppliedOccurrenceOverride {
   replacement_schedule_id: string | null;
 }
 
-/** 连续对话历史里的一轮：一次用户发言 + 对应的系统回复（可能还没到）。 */
-export interface ConversationTurnRecord {
-  readonly id: string;
-  readonly transcript: string;
-  readonly replyText: string | null;
+/** 免提长对话里一条已落屏的对白：用户来自 ASR，助手来自回复/追问。 */
+export interface VoiceChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  /** 流式还没收完时为 true，通话页用来画正在说的波形。 */
+  pending?: boolean;
 }
 
 export interface AppliedCommand {

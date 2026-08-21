@@ -3,8 +3,8 @@ import type { ScheduleCategory } from '../../../contracts/schedule';
 import type { AppLifecycleStatus } from '../../../infrastructure/appState/AppStateProvider';
 import type {
   AppliedCommand,
-  ConversationTurnRecord,
   ConversationTurnState,
+  VoiceChatMessage,
 } from '../domain/ConversationTurn';
 
 import type {
@@ -51,15 +51,12 @@ export class AssistantContinuousConversationService implements AssistantApplicat
   private connection: VoiceTransportConnection | null = null;
   private state: ConversationTurnState = { phase: 'idle' };
   private lastAppliedCommand: AppliedCommand | null = null;
-  private scheduleDataRevision = 0;
   private readonly listeners = new Set<(state: ConversationTurnState) => void>();
 
   private conversationId: string | null = null;
   private streamId: string | null = null;
   /** 非 null 表示当前正处于 voice.tts.start 和 voice.tts.end/canceled 之间。 */
   private currentAudioId: string | null = null;
-  /** 最近被打断的音频 id；服务端会在 canceled 后补发同 id 的 tts.end。 */
-  private canceledAudioId: string | null = null;
   private streamStartedWaiter: ((conversationId: string) => void) | null = null;
   /** 跟 streamStartedWaiter 配对；传输层报错/连接掉线时用它让等待方结束，不然会永远卡住。 */
   private streamStartRejecter: ((error: Error) => void) | null = null;
@@ -67,9 +64,8 @@ export class AssistantContinuousConversationService implements AssistantApplicat
   private unsubscribeConnection: (() => void) | null = null;
   private replyText: string | null = null;
   private soundLevel: number | null = null;
-  /** 本次开麦以来的问答历史，追加不覆盖；startTurn() 清空，跟 replyText 各管各的
-   * ——replyText 是当前这一轮的气泡内容，turns 是完整历史。 */
-  private turns: ConversationTurnRecord[] = [];
+  /** 本通免提电话里已经落屏的用户/助手对白，挂断后下一通 startTurn 会清空。 */
+  private messages: VoiceChatMessage[] = [];
   /** endTurn() 主动关闭连接期间为 true，让 handleClose 认出这是预期内的挂断。 */
   private endingCall = false;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -92,8 +88,6 @@ export class AssistantContinuousConversationService implements AssistantApplicat
    * startStream() 内部有一个没人等的 await（配置原生播放器），如果紧跟着的
    * 第一块音频不排在它后面，可能在原生侧还没配置完时就到达。 */
   private playbackChain: Promise<void> = Promise.resolve();
-  /** 取消时递增，让已经排队但尚未执行的旧流操作失效。 */
-  private playbackGeneration = 0;
   /** Category events can arrive before the command result creates their local row. */
   private readonly pendingCategoryUpdates = new Map<string, ScheduleCategory>();
   private disposed = false;
@@ -123,20 +117,16 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     return this.lastAppliedCommand;
   }
 
-  getScheduleDataRevision(): number {
-    return this.scheduleDataRevision;
-  }
-
   getReplyText(): string | null {
     return this.replyText;
   }
 
-  getSoundLevel(): number | null {
-    return this.soundLevel;
+  getMessages(): readonly VoiceChatMessage[] {
+    return this.messages;
   }
 
-  getTurns(): readonly ConversationTurnRecord[] {
-    return this.turns;
+  getSoundLevel(): number | null {
+    return this.soundLevel;
   }
 
   /** 打开连续会话：建连、开一次流、开始持续推流麦克风。 */
@@ -148,7 +138,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     try {
       this.replyText = null;
       this.soundLevel = null;
-      this.turns = [];
+      this.messages = [];
       // 上一通电话可能是在暂停期间被空闲超时兜底挂断的，muted 只在用户手动
       // togglePause() 里恢复；不在这里清一次，新开的电话会继承上一通的静音,
       // UI 显示 listening 但麦克风帧全被吞掉。
@@ -262,7 +252,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     this.replyText = null;
     this.currentAudioId = null;
     this.notifyListeners();
-    await this.stopPlaybackImmediately();
+    await this.deps.playback.stop().catch(() => {});
   }
 
   /** 用户点圆圈暂停/恢复。暂停期间空闲计时器照常跑——忘记恢复也会兜底挂断。 */
@@ -362,16 +352,8 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         return;
       case 'voice.asr.completed':
         // 听到一句真实语音：这是空闲计时器真正要等的信号，重新给一个完整窗口。
+        this.appendUserTranscript(message.payload.transcript);
         this.armIdleTimer();
-        this.turns = [
-          ...this.turns,
-          {
-            id: message.request_id ?? `turn-${this.turns.length}`,
-            replyText: null,
-            transcript: message.payload.transcript,
-          },
-        ];
-        this.notifyListeners();
         return;
       case 'voice.command.result': {
         const command: AppliedCommand = {
@@ -391,9 +373,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         void this.applyCategoryUpdate(message.payload.schedule_id, message.payload.category);
         return;
       case 'voice.dialogue.question':
-        // 缺字段/地点歧义之类的追问，对当前这轮来说就是系统的回复——记进历史，
-        // 不然标题过了这一阵子就变回通用文案，这句追问在记录里再也找不到。
-        this.updateLastTurnReply(message.request_id, message.payload.speech_text);
+        this.upsertAssistantTranscript(message.payload.question_id, message.payload.speech_text);
         this.setState({
           conversationId: message.conversation_id,
           phase: 'asking',
@@ -402,12 +382,14 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         return;
       case 'voice.dialogue.reply':
         this.replyText = message.payload.speech_text;
-        this.updateLastTurnReply(message.request_id, message.payload.speech_text);
+        this.upsertAssistantTranscript(
+          message.payload.reply_id,
+          message.payload.speech_text,
+          !message.payload.done,
+        );
         this.notifyListeners();
         return;
       case 'voice.tts.start':
-        this.playbackGeneration += 1;
-        this.canceledAudioId = null;
         this.currentAudioId = message.audio_id;
         this.setState({ conversationId: message.conversation_id, phase: 'speaking' });
         this.chainPlayback(() =>
@@ -418,16 +400,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         );
         return;
       case 'voice.tts.end':
-        // canceled 后服务端仍会补发同 id 的 tts.end；它不能收尾新流，也不能把
-        // interrupted 状态提前改回 listening。
-        if (
-          (this.canceledAudioId !== null && message.audio_id === this.canceledAudioId) ||
-          (this.currentAudioId !== null && message.audio_id !== this.currentAudioId)
-        ) {
-          return;
-        }
         this.currentAudioId = null;
-        this.canceledAudioId = null;
         this.chainPlayback(() => this.deps.playback.endStream());
         this.setState({ conversationId: message.conversation_id, phase: 'listening' });
         // 播报完成后给一个全新的窗口，对应"播报完成后进入短暂等待"——不用单独
@@ -435,17 +408,10 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         this.armIdleTimer();
         return;
       case 'voice.tts.canceled':
-        // 用户开口打断了正在播的回复：stop 必须绕过 playbackChain 立即执行，否则
-        // 已排队的 PCM 会先继续喂给原生播放器；旧队列随后由代次检查丢弃。
-        if (
-          this.currentAudioId !== null &&
-          (message.audio_id === '' || message.audio_id !== this.currentAudioId)
-        ) {
-          return;
-        }
-        this.canceledAudioId = message.audio_id || this.currentAudioId;
+        // 用户开口打断了正在播的回复：立刻丢掉播放端缓冲里还没放出来的音频，
+        // 而不是等 voice.tts.end（后面仍会补发，但语义已经不是"正常说完"）。
         this.currentAudioId = null;
-        void this.stopPlaybackImmediately();
+        this.chainPlayback(() => this.deps.playback.stop());
         this.setState({ conversationId: message.conversation_id, phase: 'interrupted' });
         return;
       case 'voice.session.end':
@@ -470,7 +436,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       return;
     }
     this.lastAppliedCommand = command;
-    this.markScheduleDataChanged();
+    this.notifyListeners();
     this.connection?.send({ message_id: messageId, status: 'applied', type: 'message.ack' });
     const schedules = command.schedules ?? (command.schedule ? [command.schedule] : []);
     await this.applyPendingCategoryUpdates(
@@ -491,7 +457,6 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       if (this.disposed) return;
       if (applied === true && this.pendingCategoryUpdates.get(key) === category) {
         this.pendingCategoryUpdates.delete(key);
-        this.markScheduleDataChanged();
       }
     } catch {
       if (!this.disposed) this.pendingCategoryUpdates.set(key, category);
@@ -510,10 +475,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
           category,
         );
         if (this.disposed) return;
-        if (applied === true) {
-          this.pendingCategoryUpdates.delete(key);
-          this.markScheduleDataChanged();
-        }
+        if (applied === true) this.pendingCategoryUpdates.delete(key);
       } catch {
         // Keep the latest pending value for a later authoritative local write.
       }
@@ -524,11 +486,6 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     return `${this.options.accountId}\u0000${scheduleId}`;
   }
 
-  private markScheduleDataChanged(): void {
-    this.scheduleDataRevision += 1;
-    this.notifyListeners();
-  }
-
   private handleAudioFrame(chunk: ArrayBuffer): void {
     if (this.currentAudioId === null) {
       return;
@@ -537,25 +494,9 @@ export class AssistantContinuousConversationService implements AssistantApplicat
   }
 
   /** 把一次对原生播放模块的调用接到 playbackChain 末尾，保证上一次真正执行完
-   * (不管成功与否)才轮到这一次；取消后旧代次的操作会被跳过。 */
+   * (不管成功与否)才轮到这一次。 */
   private chainPlayback(run: () => Promise<void>): void {
-    const generation = this.playbackGeneration;
-    this.playbackChain = this.playbackChain
-      .then(async () => {
-        if (generation !== this.playbackGeneration) {
-          return;
-        }
-        await run();
-      })
-      .catch(() => {});
-  }
-
-  /** 立即清空原生播放器，并把后续新操作排在 stop 完成之后。 */
-  private async stopPlaybackImmediately(): Promise<void> {
-    this.playbackGeneration += 1;
-    const stop = this.deps.playback.stop().catch(() => {});
-    this.playbackChain = stop;
-    await stop;
+    this.playbackChain = this.playbackChain.then(run).catch(() => {});
   }
 
   private handleClose(event: { code: number; reason: string }): void {
@@ -594,21 +535,32 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     return this.connection;
   }
 
-  /** speech_text 是累计到目前为止的完整文字（不是增量），直接覆盖对应轮次即可。
-   * 必须按 request_id 找到它真正所属的那一轮，不能想当然地假设"最后一轮"——
-   * 麦克风连续开着，用户可能在上一轮的回复还没到达前就已经开口问了下一句，
-   * asr.completed 先把新一轮 push 进 turns，这条迟到的回复到达时"最后一轮"
-   * 已经变成了下一轮，会把上一轮的回复错记成下一轮的（下一轮回复还没来时
-   * 显示的会是上一轮内容）。找不到匹配 id（服务端没带 request_id 这种理论上
-   * 不该发生的情况）时退化成更新最后一轮，好歹不丢内容。 */
-  private updateLastTurnReply(requestId: string | undefined, replyText: string): void {
-    if (this.turns.length === 0) {
+  private appendUserTranscript(transcript: string): void {
+    const text = transcript.trim();
+    if (text.length === 0) {
       return;
     }
-    const targetIndex =
-      requestId !== undefined ? this.turns.findIndex((turn) => turn.id === requestId) : -1;
-    const index = targetIndex === -1 ? this.turns.length - 1 : targetIndex;
-    this.turns = this.turns.map((turn, i) => (i === index ? { ...turn, replyText } : turn));
+    this.messages = [
+      ...this.messages,
+      { id: `user-${this.messages.length + 1}`, role: 'user', text },
+    ];
+    this.notifyListeners();
+  }
+
+  private upsertAssistantTranscript(id: string, speechText: string, pending = false): void {
+    const text = speechText.trim();
+    if (text.length === 0) {
+      return;
+    }
+    const next: VoiceChatMessage = pending
+      ? { id, role: 'assistant', text, pending: true }
+      : { id, role: 'assistant', text };
+    const existing = this.messages.findIndex((message) => message.id === id);
+    if (existing >= 0) {
+      this.messages = this.messages.map((message, index) => (index === existing ? next : message));
+      return;
+    }
+    this.messages = [...this.messages, next];
   }
 
   private armIdleTimer(): void {
