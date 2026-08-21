@@ -1060,9 +1060,11 @@ function toDeliveryRequest(
  * 没有别的可见形式，静音也得让用户看到），vibrate/sound 复用 JS 侧的强度
  * 换算表：低=都不要、中=只震动、高=震动+出声。
  */
-function alarmRingChannels(
-  schedule: LocalReminderSchedule,
-): { vibrate: boolean; sound: boolean; full_screen: boolean } {
+function alarmRingChannels(schedule: LocalReminderSchedule): {
+  vibrate: boolean;
+  sound: boolean;
+  full_screen: boolean;
+} {
   const plan = resolveStrengthDeliveryPlan(schedule.reminder?.reminder_strength ?? 'medium');
   return { vibrate: plan.useVibration, sound: plan.useAudio, full_screen: true };
 }

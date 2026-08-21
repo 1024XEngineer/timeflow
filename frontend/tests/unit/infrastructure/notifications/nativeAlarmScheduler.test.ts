@@ -250,9 +250,7 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
 
   it('forwards vibrate/sound/full_screen through to the native bridge', async () => {
     const scheduler = new NativeAlarmScheduler();
-    await scheduler.schedule(
-      request({ vibrate: false, sound: false, full_screen: false }),
-    );
+    await scheduler.schedule(request({ vibrate: false, sound: false, full_screen: false }));
     expect(native.schedule).toHaveBeenCalledWith(
       Date.parse(FUTURE),
       '晨会',

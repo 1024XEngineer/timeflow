@@ -738,11 +738,12 @@ describe('LocalReminderApplication', () => {
   describe('native alarm ring channels by strength', () => {
     // 全屏三档都要弹（静音也要让用户看得见），vibrate/sound 才按强度递进：
     // 低=都不要、中=只震动、高=震动+出声。
-    const cases: [ReminderStrength, { vibrate: boolean; sound: boolean; full_screen: boolean }][] = [
-      ['low', { vibrate: false, sound: false, full_screen: true }],
-      ['medium', { vibrate: true, sound: false, full_screen: true }],
-      ['high', { vibrate: true, sound: true, full_screen: true }],
-    ];
+    const cases: [ReminderStrength, { vibrate: boolean; sound: boolean; full_screen: boolean }][] =
+      [
+        ['low', { vibrate: false, sound: false, full_screen: true }],
+        ['medium', { vibrate: true, sound: false, full_screen: true }],
+        ['high', { vibrate: true, sound: true, full_screen: true }],
+      ];
     it.each(cases)('%s strength schedules the native alarm with %j', async (strength, expected) => {
       const schedule = fixtureSchedule({
         id: 's1',
