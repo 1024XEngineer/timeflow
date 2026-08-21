@@ -300,6 +300,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     const schedules = await this.dependencies.schedules.listReminderSchedules();
     const active: LocalReminderSchedule[] = [];
     for (const raw of schedules) {
+      await this.retryPendingConfirmation(raw);
       const merged = await this.withStoredRuntime(raw);
       if (this.isSchedulable(merged)) {
         active.push(merged);
@@ -406,49 +407,79 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     if (!this.isLive(generation)) {
       return { accepted: false, schedule_id: scheduleId, disposition: null };
     }
-    await this.teardownDelivery(scheduleId);
+    try {
+      await this.teardownDelivery(scheduleId);
 
-    const disposition: ReminderConfirmedDisposition = {
-      schedule_id: scheduleId,
+      const disposition: ReminderConfirmedDisposition = {
+        schedule_id: scheduleId,
+        state: 'confirmed',
+        updated_at: confirmedAt,
+        snoozed_until: null,
+        sync_status: 'pending',
+      };
+      await this.dependencies.state.setDisposition(scheduleId, disposition);
+
+      const current = (await this.readRuntime(scheduleId)) ?? emptyRuntime();
+      await this.patchRuntime(scheduleId, {
+        ...current,
+        reminder_disposition_state: 'confirmed',
+        snoozed_until: null,
+        next_trigger_at: null,
+        disposition_updated_at: confirmedAt,
+        sync_status: 'pending',
+      });
+
+      await this.dropRegistration(scheduleId);
+
+      if (!this.isLive(generation)) {
+        return { accepted: false, schedule_id: scheduleId, disposition: null };
+      }
+
+      const synced = await this.syncConfirmedDisposition(disposition);
+      return { accepted: true, schedule_id: scheduleId, disposition: synced };
+    } finally {
+      this.activeDeliveries.delete(scheduleId);
+    }
+  }
+
+  private async retryPendingConfirmation(schedule: LocalReminderSchedule): Promise<void> {
+    const runtime = schedule.runtime;
+    if (
+      runtime.reminder_disposition_state !== 'confirmed' ||
+      runtime.sync_status !== 'pending' ||
+      runtime.disposition_updated_at == null
+    ) {
+      return;
+    }
+    await this.syncConfirmedDisposition({
+      schedule_id: schedule.id,
       state: 'confirmed',
-      updated_at: confirmedAt,
+      updated_at: runtime.disposition_updated_at,
       snoozed_until: null,
-      sync_status: 'pending',
-    };
-    await this.dependencies.state.setDisposition(scheduleId, disposition);
-
-    const current = (await this.readRuntime(scheduleId)) ?? emptyRuntime();
-    await this.patchRuntime(scheduleId, {
-      ...current,
-      reminder_disposition_state: 'confirmed',
-      snoozed_until: null,
-      next_trigger_at: null,
-      disposition_updated_at: confirmedAt,
       sync_status: 'pending',
     });
+  }
 
-    await this.dropRegistration(scheduleId);
+  private async syncConfirmedDisposition(
+    disposition: ReminderConfirmedDisposition,
+  ): Promise<ReminderConfirmedDisposition> {
+    try {
+      const sync = await this.dependencies.dispositionSync.submitConfirmed(disposition);
+      if (!sync.accepted || sync.schedule_id !== disposition.schedule_id) return disposition;
 
-    if (!this.isLive(generation)) {
-      this.activeDeliveries.delete(scheduleId);
-      return { accepted: false, schedule_id: scheduleId, disposition: null };
-    }
-
-    const sync = await this.dependencies.dispositionSync.submitConfirmed(disposition);
-    const synced: ReminderDisposition = {
-      ...disposition,
-      sync_status: sync.accepted ? 'synced' : 'pending',
-    };
-    if (sync.accepted) {
-      await this.dependencies.state.setDisposition(scheduleId, synced);
-      const runtime = await this.readRuntime(scheduleId);
+      const synced: ReminderConfirmedDisposition = {
+        ...disposition,
+        sync_status: 'synced',
+      };
+      await this.dependencies.state.setDisposition(disposition.schedule_id, synced);
+      const runtime = await this.readRuntime(disposition.schedule_id);
       if (runtime != null) {
-        await this.patchRuntime(scheduleId, { ...runtime, sync_status: 'synced' });
+        await this.patchRuntime(disposition.schedule_id, { ...runtime, sync_status: 'synced' });
       }
+      return synced;
+    } catch {
+      return disposition;
     }
-
-    this.activeDeliveries.delete(scheduleId);
-    return { accepted: true, schedule_id: scheduleId, disposition: synced };
   }
 
   private async snoozeInternal(
