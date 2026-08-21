@@ -47,6 +47,10 @@ export class AssistantConversationService implements AssistantApplicationPort {
   private pendingStartTurn: Promise<void> | null = null;
   /** Category events can arrive before the command result creates their local row. */
   private readonly pendingCategoryUpdates = new Map<string, ScheduleCategory>();
+  /** 串起每条 voice.command.result 的本地落库，见 AssistantContinuousConversationService
+   * 里同名字段的注释——一次按住说话也可能在一句话里触发多个工具调用（批量新建/
+   * 删除），不排队会让两个 applyCommandResultLocally() 并发抢同一个 SQLite 连接。 */
+  private commandResultChain: Promise<void> = Promise.resolve();
   private disposed = false;
 
   constructor(
@@ -239,7 +243,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
           status: message.payload.status,
         };
         // 状态立刻回到 idle，不等写库；message.ack 必须等写库成功才发（AGENTS.md §6）。
-        void this.applyCommandResultLocally(command, message.message_id);
+        this.queueCommandResult(command, message.message_id);
         this.setState({ phase: 'idle' });
         return;
       }
@@ -275,6 +279,13 @@ export class AssistantConversationService implements AssistantApplicationPort {
       default:
         return;
     }
+  }
+
+  private queueCommandResult(command: AppliedCommand, messageId: string): void {
+    this.commandResultChain = this.commandResultChain.then(
+      () => this.applyCommandResultLocally(command, messageId),
+      () => this.applyCommandResultLocally(command, messageId),
+    );
   }
 
   private async applyCommandResultLocally(

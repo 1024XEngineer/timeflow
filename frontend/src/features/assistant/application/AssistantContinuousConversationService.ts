@@ -96,6 +96,12 @@ export class AssistantContinuousConversationService implements AssistantApplicat
   private playbackGeneration = 0;
   /** Category events can arrive before the command result creates their local row. */
   private readonly pendingCategoryUpdates = new Map<string, ScheduleCategory>();
+  /** 串起每条 voice.command.result 的本地落库；一次连续通话里模型可能连续触发多个
+   * 工具调用（批量新建/删除），command.result 消息前后脚到达时若不排队，会有两个
+   * applyCommandResultLocally() 同时各开一个 withExclusiveTransactionAsync（各自
+   * 新建一条原生连接），互相踩 "database is locked" 甚至留下损坏的原生连接状态——
+   * 跟 playbackChain 一个模式：不管上一条成功与否都排到下一条前面。 */
+  private commandResultChain: Promise<void> = Promise.resolve();
   private disposed = false;
   private readonly unsubscribeAppState: () => void;
 
@@ -383,7 +389,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         };
         // 状态立刻回到 listening（麦克风还开着），不等写库；message.ack 必须等
         // 写库成功后才发，避免向服务端谎报已落库。
-        void this.applyCommandResultLocally(command, message.message_id);
+        this.queueCommandResult(command, message.message_id);
         this.setState({ conversationId: message.conversation_id, phase: 'listening' });
         return;
       }
@@ -456,6 +462,13 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       default:
         return;
     }
+  }
+
+  private queueCommandResult(command: AppliedCommand, messageId: string): void {
+    this.commandResultChain = this.commandResultChain.then(
+      () => this.applyCommandResultLocally(command, messageId),
+      () => this.applyCommandResultLocally(command, messageId),
+    );
   }
 
   private async applyCommandResultLocally(

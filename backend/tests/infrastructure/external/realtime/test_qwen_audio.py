@@ -327,22 +327,32 @@ def test_a_tool_call_without_a_call_id_fails_the_turn() -> None:
 
 
 def test_sending_a_tool_result_lets_the_model_continue() -> None:
-    """The output is written back as a conversation item, then a reply is requested."""
+    """The output is written back as a conversation item immediately; the reply is only
+    requested once the response that called the tool is itself done (see
+    send_tool_result's docstring -- asking any earlier collides with that still-open
+    response on the vendor's side).
+    """
 
     async def scenario() -> None:
-        """Send a tool result and read back what was sent."""
-        transport = FakeTransport()
+        """Send a tool result, then read back what was sent before and after settling."""
+        transport = FakeTransport(_event("response.done"), _event("response.done"))
         session = QwenAudioSession(transport, CONFIG, PUSH_TO_TALK)
+        await session.finish_input()
+        transport.sent.clear()
 
         await session.send_tool_result("call_1", '{"count":2}')
 
-        assert transport.types() == ["conversation.item.create", "response.create"]
+        assert transport.types() == ["conversation.item.create"]
         item = transport.sent[0]["item"]
         assert item == {
             "type": "function_call_output",
             "call_id": "call_1",
             "output": '{"count":2}',
         }
+
+        await session.pump(RecordingObserver())
+
+        assert transport.types() == ["conversation.item.create", "response.create"]
 
     asyncio.run(scenario())
 
