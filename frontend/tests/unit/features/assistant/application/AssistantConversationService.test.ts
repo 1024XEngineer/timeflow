@@ -214,26 +214,44 @@ describe('AssistantConversationService', () => {
     await expect(Promise.all([turn, endTurn])).resolves.toBeDefined();
   });
 
-  it('returns to idle when cancellation happens before the connection finishes', async () => {
-    const fake = createFakeConnection();
-    let resolveConnection!: (connection: VoiceTransportConnection) => void;
-    const connectionPending = new Promise<VoiceTransportConnection>((resolve) => {
-      resolveConnection = resolve;
+  it('returns to idle immediately and allows a new turn while the canceled connection finishes', async () => {
+    const oldFake = createFakeConnection();
+    const nextFake = createFakeConnection();
+    let resolveOldConnection!: (connection: VoiceTransportConnection) => void;
+    const oldConnectionPending = new Promise<VoiceTransportConnection>((resolve) => {
+      resolveOldConnection = resolve;
     });
-    const deps = createDeps({ connection: fake.connection });
-    deps.transport.connect = jest.fn(() => connectionPending);
+    const deps = createDeps({ connection: oldFake.connection });
+    deps.transport.connect = jest
+      .fn<VoiceTransportPort['connect']>()
+      .mockReturnValueOnce(oldConnectionPending)
+      .mockResolvedValueOnce(nextFake.connection);
     const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
 
-    const turn = service.startTurn();
+    const firstTurn = service.startTurn();
     await flushAsync();
     const cancel = service.cancelTurn();
-    resolveConnection(fake.connection);
-
-    await expect(Promise.all([turn, cancel])).resolves.toBeDefined();
-    expect(fake.sent).toHaveLength(0);
-    expect(deps.capture.start).not.toHaveBeenCalled();
-    expect(fake.closeCalls.count).toBe(1);
     expect(service.getState()).toEqual({ phase: 'idle' });
+
+    const nextTurn = service.startTurn();
+    await flushAsync();
+    expect(deps.transport.connect).toHaveBeenCalledTimes(2);
+
+    resolveOldConnection(oldFake.connection);
+    await expect(Promise.all([firstTurn, cancel])).resolves.toBeDefined();
+    await flushAsync();
+    expect(oldFake.closeCalls.count).toBe(1);
+
+    nextFake.emitMessage({
+      ok: true,
+      payload: { conversation_id: 'conv_002', stream_id: 'stream_002' },
+      type: 'voice.stream.started',
+    } as AssistantServerMessage);
+    await nextTurn;
+
+    expect(oldFake.sent).toHaveLength(0);
+    expect(deps.capture.start).toHaveBeenCalledTimes(1);
+    expect(service.getState()).toEqual({ conversationId: 'conv_002', phase: 'recording' });
   });
 
   it('cancels a recording without ending the stream or applying a late command', async () => {
