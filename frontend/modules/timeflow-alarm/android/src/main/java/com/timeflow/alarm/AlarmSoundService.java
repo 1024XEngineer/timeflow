@@ -11,35 +11,41 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.graphics.PixelFormat;
 import android.media.AudioAttributes;
-import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.provider.Settings;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.InputStream;
 import java.util.ArrayDeque;
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Set;
+import java.util.UUID;
 
 public final class AlarmSoundService extends Service {
     private static final String TAG = "AlarmSoundService";
     private static final long SPEECH_REPEAT_DELAY_MILLIS = 1_500L;
+    private static final float TTS_SPEECH_RATE = 0.9f;
+    private static final float TTS_PITCH = 1.0f;
 
     private final Handler playbackHandler = new Handler(Looper.getMainLooper());
-    private final Runnable replaySpeech = this::replaySpeech;
+    private final Runnable replaySpeech = this::scheduleTtsReplay;
 
-    private MediaPlayer mediaPlayer;
+    private TextToSpeech textToSpeech;
+    private boolean ttsReady;
     private boolean destroyed;
-    private File bundledSpeechFile;
+    private String currentSpeechText;
+    private String currentUtteranceId;
     private WindowManager overlayWindowManager;
     /** 包内可见（而非 private）：AlarmSoundServiceTest 需要直接读取当前展示/排队状态。 */
     View overlayView;
@@ -86,6 +92,7 @@ public final class AlarmSoundService extends Service {
         alarmId = extras.alarmId;
         scheduleId = extras.scheduleId;
         alarmTitle = extras.title;
+        currentSpeechText = extras.speechText;
 
         createNotificationChannel();
         Notification notification = buildNotification(alarmId, alarmTitle);
@@ -104,9 +111,7 @@ public final class AlarmSoundService extends Service {
                 AlarmNativeBridge.notifyFired(this, scheduleId, alarmId, alarmTitle);
             }
             showAlarmOverlay(alarmTitle);
-            if (mediaPlayer == null) {
-                startBundledSpeech();
-            }
+            initTtsAndSpeak();
         } catch (RuntimeException exception) {
             advanceOrStop();
         }
@@ -131,8 +136,7 @@ public final class AlarmSoundService extends Service {
         destroyed = true;
         playbackHandler.removeCallbacksAndMessages(null);
         removeAlarmOverlay();
-        releaseMediaPlayer();
-        deleteCachedSpeechFile();
+        shutdownTts();
         NotificationManager manager =
                 (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager != null) {
@@ -342,84 +346,117 @@ public final class AlarmSoundService extends Service {
         overlayWindowManager = null;
     }
 
-    private void startBundledSpeech() {
-        if (destroyed || mediaPlayer != null) {
-            return;
-        }
-        try {
-            bundledSpeechFile = new File(getCacheDir(), "alarm_prompt_edge.mp3");
-            try (InputStream input = getAssets().open("alarm_prompt.mp3");
-                 FileOutputStream output = new FileOutputStream(bundledSpeechFile, false)) {
-                byte[] buffer = new byte[8_192];
-                int count;
-                while ((count = input.read(buffer)) != -1) {
-                    output.write(buffer, 0, count);
-                }
+    /**
+     * 初始化 TextToSpeech 并开始播放动态语音。
+     * 优先使用中文语音，不可用则回退到系统默认语言。
+     */
+    private void initTtsAndSpeak() {
+        if (destroyed) return;
+
+        textToSpeech = new TextToSpeech(this, status -> {
+            if (destroyed) {
+                shutdownTts();
+                return;
             }
-            startAudioPlayback(bundledSpeechFile);
-        } catch (Exception exception) {
-            releaseMediaPlayer();
-        }
+
+            if (status == TextToSpeech.SUCCESS) {
+                // 优先使用简体中文
+                int result = textToSpeech.setLanguage(Locale.SIMPLIFIED_CHINESE);
+                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    // 中文语音数据不可用，回退到系统默认语言
+                    textToSpeech.setLanguage(Locale.getDefault());
+                }
+                ttsReady = true;
+
+                // 设置音频属性：闹钟用途、语音类型
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    textToSpeech.setAudioAttributes(new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ALARM)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build());
+                }
+
+                textToSpeech.setSpeechRate(TTS_SPEECH_RATE);
+                textToSpeech.setPitch(TTS_PITCH);
+
+                // 设置播报完成监听
+                textToSpeech.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                    @Override
+                    public void onStart(String utteranceId) {
+                    }
+
+                    @Override
+                    public void onDone(String utteranceId) {
+                        if (!destroyed && currentSpeechText != null) {
+                            playbackHandler.postDelayed(replaySpeech, SPEECH_REPEAT_DELAY_MILLIS);
+                        }
+                    }
+
+                    @Override
+                    public void onError(String utteranceId) {
+                        // 错误时停止，不重试
+                    }
+                });
+
+                speakCurrentText();
+            } else {
+                Log.w(TAG, "TTS init failed with status: " + status);
+                shutdownTts();
+            }
+        });
     }
 
-    private void startAudioPlayback(File audioFile) {
-        if (destroyed || mediaPlayer != null || audioFile == null || !audioFile.isFile()) {
+    /**
+     * 使用 TTS 播报当前日程的语音文案。
+     */
+    private void speakCurrentText() {
+        if (!ttsReady || textToSpeech == null || destroyed || currentSpeechText == null) {
             return;
         }
-        try {
-            MediaPlayer player = new MediaPlayer();
-            player.setAudioAttributes(new AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ALARM)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build());
-            player.setDataSource(audioFile.getAbsolutePath());
-            player.setVolume(1.0f, 1.0f);
-            player.setOnCompletionListener(completed ->
-                    playbackHandler.postDelayed(replaySpeech, SPEECH_REPEAT_DELAY_MILLIS));
-            player.setOnErrorListener((failed, what, extra) -> {
-                releaseMediaPlayer();
-                return true;
-            });
-            player.prepare();
-            mediaPlayer = player;
-            player.start();
-        } catch (Exception exception) {
-            releaseMediaPlayer();
+
+        // 生成唯一 utteranceId 以支持同时播报多条
+        currentUtteranceId = "alarm_" + UUID.randomUUID().toString();
+
+        Bundle params = new Bundle();
+        params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, android.media.AudioManager.STREAM_ALARM);
+
+        int result = textToSpeech.speak(
+                currentSpeechText,
+                TextToSpeech.QUEUE_FLUSH,
+                params,
+                currentUtteranceId
+        );
+
+        if (result == TextToSpeech.ERROR) {
+            Log.w(TAG, "TTS speak failed");
+            shutdownTts();
         }
     }
 
-    private void replaySpeech() {
-        if (destroyed || mediaPlayer == null) {
+    /**
+     * 延迟后重新播报语音（循环提醒）。
+     */
+    private void scheduleTtsReplay() {
+        if (destroyed || currentSpeechText == null) {
             return;
         }
-        try {
-            mediaPlayer.seekTo(0);
-            mediaPlayer.start();
-        } catch (IllegalStateException ignored) {
-            releaseMediaPlayer();
-        }
+        speakCurrentText();
     }
 
-    private void releaseMediaPlayer() {
+    /**
+     * 释放 TTS 资源。
+     */
+    private void shutdownTts() {
         playbackHandler.removeCallbacks(replaySpeech);
-        if (mediaPlayer == null) {
-            return;
+        if (textToSpeech != null) {
+            try {
+                textToSpeech.stop();
+                textToSpeech.shutdown();
+            } catch (Exception ignored) {
+            }
+            textToSpeech = null;
         }
-        mediaPlayer.setOnCompletionListener(null);
-        mediaPlayer.setOnErrorListener(null);
-        try {
-            mediaPlayer.stop();
-        } catch (IllegalStateException ignored) {
-            // 播放器可能已结束或失败。
-        }
-        mediaPlayer.release();
-        mediaPlayer = null;
-    }
-
-    private void deleteCachedSpeechFile() {
-        if (bundledSpeechFile != null) {
-            bundledSpeechFile.delete();
-        }
+        ttsReady = false;
     }
 
     private void removeFromSavedAlarms() {

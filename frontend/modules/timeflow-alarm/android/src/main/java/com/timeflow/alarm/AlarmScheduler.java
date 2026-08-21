@@ -29,6 +29,7 @@ public final class AlarmScheduler {
         public final long triggerAtMillis;
         public final int requestCode;
         public final String title;
+        public final String speechText;
         public final boolean legacy;
 
         AlarmRecord(
@@ -37,6 +38,7 @@ public final class AlarmScheduler {
                 long triggerAtMillis,
                 int requestCode,
                 String title,
+                String speechText,
                 boolean legacy
         ) {
             this.alarmId = alarmId;
@@ -44,6 +46,7 @@ public final class AlarmScheduler {
             this.triggerAtMillis = triggerAtMillis;
             this.requestCode = requestCode;
             this.title = title;
+            this.speechText = speechText == null ? "" : speechText;
             this.legacy = legacy;
         }
     }
@@ -52,7 +55,8 @@ public final class AlarmScheduler {
             Context context,
             long triggerAtMillis,
             String title,
-            String scheduleId
+            String scheduleId,
+            String speechText
     ) {
         if (triggerAtMillis <= System.currentTimeMillis()) {
             throw new IllegalArgumentException("trigger_in_past");
@@ -80,6 +84,7 @@ public final class AlarmScheduler {
                 triggerAtMillis,
                 nextRequestCode(alarms),
                 title == null ? "" : title,
+                speechText == null ? "" : speechText,
                 false
         );
 
@@ -90,10 +95,16 @@ public final class AlarmScheduler {
         return alarmId;
     }
 
-    /** @deprecated 请改用 {@link #schedule(Context, long, String, String)}。 */
+    /** @deprecated 请改用 {@link #schedule(Context, long, String, String, String)}。 */
     @Deprecated
     public static String schedule(Context context, long triggerAtMillis, String title) {
-        return schedule(context, triggerAtMillis, title, "");
+        return schedule(context, triggerAtMillis, title, "", "");
+    }
+
+    /** @deprecated 请改用 {@link #schedule(Context, long, String, String, String)}。 */
+    @Deprecated
+    public static String schedule(Context context, long triggerAtMillis, String title, String scheduleId) {
+        return schedule(context, triggerAtMillis, title, scheduleId, "");
     }
 
     /**
@@ -233,6 +244,7 @@ public final class AlarmScheduler {
                         triggerAt,
                         requestCode,
                         object.optString("title", ""),
+                        object.optString("speech_text", ""),
                         legacy
                 ));
             }
@@ -324,6 +336,7 @@ public final class AlarmScheduler {
         object.put("trigger_at", alarm.triggerAtMillis);
         object.put("request_code", alarm.requestCode);
         object.put("title", alarm.title);
+        object.put("speech_text", alarm.speechText);
         object.put("legacy", alarm.legacy);
         return object;
     }
@@ -338,7 +351,8 @@ public final class AlarmScheduler {
                 .putExtra(AlarmContract.EXTRA_ALARM_ID, record.alarmId)
                 .putExtra(AlarmContract.EXTRA_SCHEDULE_ID, record.scheduleId)
                 .putExtra(AlarmContract.EXTRA_REQUEST_CODE, record.requestCode)
-                .putExtra(AlarmContract.EXTRA_TITLE, record.title);
+                .putExtra(AlarmContract.EXTRA_TITLE, record.title)
+                .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, record.speechText);
         if (!record.legacy) {
             intent.setData(alarmUri(record.alarmId));
         }

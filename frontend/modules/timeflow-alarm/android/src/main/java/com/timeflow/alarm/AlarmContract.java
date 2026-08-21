@@ -10,6 +10,7 @@ final class AlarmContract {
     static final String EXTRA_REQUEST_CODE = "request_code";
     static final String EXTRA_TITLE = "alarm_title";
     static final String EXTRA_SCHEDULE_ID = "schedule_id";
+    static final String EXTRA_SPEECH_TEXT = "speech_text";
     static final String EXTRA_EVENT_TYPE = "event_type";
     static final String EVENT_FIRED = "fired";
     static final String EVENT_DISMISSED = "dismissed";
@@ -41,12 +42,14 @@ final class AlarmContract {
         final String alarmId;
         final String scheduleId;
         final String title;
+        final String speechText;
         final int requestCode;
 
-        private ExtractedExtras(String alarmId, String scheduleId, String title, int requestCode) {
+        private ExtractedExtras(String alarmId, String scheduleId, String title, String speechText, int requestCode) {
             this.alarmId = alarmId;
             this.scheduleId = scheduleId;
             this.title = title;
+            this.speechText = speechText;
             this.requestCode = requestCode;
         }
 
@@ -55,6 +58,7 @@ final class AlarmContract {
             String alarmId = intent == null ? null : intent.getStringExtra(EXTRA_ALARM_ID);
             String scheduleId = intent == null ? null : intent.getStringExtra(EXTRA_SCHEDULE_ID);
             String title = intent == null ? null : intent.getStringExtra(EXTRA_TITLE);
+            String speechText = intent == null ? null : intent.getStringExtra(EXTRA_SPEECH_TEXT);
             if (alarmId == null || alarmId.isEmpty()) {
                 alarmId = "legacy-" + requestCode;
             }
@@ -64,7 +68,10 @@ final class AlarmContract {
             if (title == null || title.isEmpty()) {
                 title = "日程提醒";
             }
-            return new ExtractedExtras(alarmId, scheduleId, title, requestCode);
+            if (speechText == null || speechText.isEmpty()) {
+                speechText = ReminderSpeechFormatter.format(title, System.currentTimeMillis());
+            }
+            return new ExtractedExtras(alarmId, scheduleId, title, speechText, requestCode);
         }
     }
 }
