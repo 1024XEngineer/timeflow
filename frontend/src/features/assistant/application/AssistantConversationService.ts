@@ -14,7 +14,7 @@ const SAMPLE_RATE_HZ = 16000;
 const CHANNELS = 1;
 // 共享连接的握手超时（AuthenticatedWebSocketClient 内部固定 5s）已经不归这里管；
 // 这个只是给定位单独留的预算，拿不到就不带，不能让 connect() 本身被定位拖住。
-const LOCATION_TIMEOUT_MS = 2000;
+const LOCATION_TIMEOUT_MS = 500;
 
 /**
  * 一次"按住说话"编排的真实实现，按 AGENTS.md 第 6 节的时序把 transport / capture /

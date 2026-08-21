@@ -3,9 +3,14 @@ import * as Location from 'expo-location';
 import type { LocationSample } from '../../features/reminder/domain';
 
 import type { LocationProvider } from './LocationProvider';
+import { getNativeLastKnownLocationSample } from './NativeLocationFallback';
 
 const LAST_KNOWN_MAX_AGE_MS = 60_000;
 const LAST_KNOWN_REQUIRED_ACCURACY_METERS = 200;
+
+type ExpoLocationProviderOptions = {
+  nativeFallback?: () => Promise<LocationSample | null>;
+};
 
 /**
  * 真实定位实现。语音握手优先使用短时间内的缓存位置，避免等待 GPS 冷启动；同时
@@ -14,6 +19,8 @@ const LAST_KNOWN_REQUIRED_ACCURACY_METERS = 200;
  */
 export class ExpoLocationProvider implements LocationProvider {
   private freshSampleInFlight: Promise<LocationSample | null> | null = null;
+
+  constructor(private readonly options: ExpoLocationProviderOptions = {}) {}
 
   async getCurrentSample(): Promise<LocationSample | null> {
     // Permission prompting is centralized in the authenticated startup flow.
@@ -31,6 +38,12 @@ export class ExpoLocationProvider implements LocationProvider {
       return cached;
     }
 
+    const nativeSample = await this.getNativeCachedSample();
+    if (nativeSample !== null) {
+      void this.getFreshSample();
+      return nativeSample;
+    }
+
     return this.getFreshSample();
   }
 
@@ -43,6 +56,18 @@ export class ExpoLocationProvider implements LocationProvider {
       return position === null ? null : toSample(position);
     } catch (error) {
       console.warn('[location-search] failed to read cached location', {
+        errorType: error instanceof Error ? error.name : typeof error,
+      });
+      return null;
+    }
+  }
+
+  private async getNativeCachedSample(): Promise<LocationSample | null> {
+    const nativeFallback = this.options.nativeFallback ?? getNativeLastKnownLocationSample;
+    try {
+      return await nativeFallback();
+    } catch (error) {
+      console.warn('[location-search] failed to read native cached location', {
         errorType: error instanceof Error ? error.name : typeof error,
       });
       return null;

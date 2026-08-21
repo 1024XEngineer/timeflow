@@ -12,6 +12,7 @@
     "@irvingouj/expo-audio-stream": "3.1.0",
     "expo": "~57.0.7",
     "expo-audio": "~57.0.3",
+    "expo-dev-client": "~57.0.13",
     "expo-location": "~57.0.9",
     "expo-notifications": "~57.0.10",
     "expo-secure-store": "~57.0.1",

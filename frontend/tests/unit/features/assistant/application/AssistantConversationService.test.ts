@@ -26,6 +26,11 @@ async function flushAsync(iterations = 20): Promise<void> {
   }
 }
 
+async function advanceAndFlush(ms: number): Promise<void> {
+  jest.advanceTimersByTime(ms);
+  await flushAsync();
+}
+
 function createFakeConnection() {
   const messageHandlers = new Set<(message: AssistantServerMessage) => void>();
   const audioHandlers = new Set<(chunk: ArrayBuffer) => void>();
@@ -86,6 +91,7 @@ function createDeps(overrides: {
   applyCommandResult?: () => Promise<void>;
   applyCategoryUpdate?: () => Promise<boolean>;
   connection?: VoiceTransportConnection;
+  getCurrentSample?: LocationProvider['getCurrentSample'];
   requestPermission?: () => Promise<boolean>;
   startCapture?: () => Promise<void>;
 }) {
@@ -104,7 +110,7 @@ function createDeps(overrides: {
     stop: jest.fn(async () => undefined),
   };
   const location: LocationProvider = {
-    getCurrentSample: jest.fn(async () => null),
+    getCurrentSample: jest.fn(overrides.getCurrentSample ?? (async () => null)),
   };
   const localScheduleWriter: LocalScheduleWriterPort = {
     applyCommandResult: jest.fn(overrides.applyCommandResult ?? (async () => undefined)),
@@ -130,6 +136,34 @@ async function completeStreamStart(
 }
 
 describe('AssistantConversationService', () => {
+  it('does not hold the push-to-talk button on a slow location sample', async () => {
+    jest.useFakeTimers();
+    try {
+      const fake = createFakeConnection();
+      const deps = createDeps({
+        connection: fake.connection,
+        getCurrentSample: () => new Promise(() => undefined),
+      });
+      const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+      const turn = service.startTurn();
+      await advanceAndFlush(499);
+      expect(deps.transport.connect).not.toHaveBeenCalled();
+
+      await advanceAndFlush(1);
+      expect(deps.transport.connect).toHaveBeenCalledWith(null);
+
+      fake.emitMessage({
+        ok: true,
+        payload: { conversation_id: 'conv_001', stream_id: 'stream_001' },
+        type: 'voice.stream.started',
+      } as AssistantServerMessage);
+      await turn;
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('never sends voice.stream.start when the microphone permission is denied', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({
