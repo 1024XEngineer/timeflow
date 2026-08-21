@@ -98,7 +98,13 @@ export function ScheduleCalendarScreen({
                 {selectedLabel}
               </Text>
               <View style={styles.accountActions} testID="schedule-account-actions">
-                <View accessibilityLabel={`当前用户 ${displayUsername}`} style={styles.userPill}>
+                <Pressable
+                  accessibilityLabel={`当前用户 ${displayUsername}，点击查看权限设置`}
+                  accessibilityRole="button"
+                  hitSlop={6}
+                  onPress={onOpenPermissions}
+                  style={({ pressed }) => [styles.userPill, pressed && styles.userPillPressed]}
+                >
                   <View style={styles.avatar}>
                     <Text style={styles.avatarText}>{avatarInitial}</Text>
                   </View>
@@ -110,18 +116,6 @@ export function ScheduleCalendarScreen({
                   >
                     {displayUsername}
                   </Text>
-                </View>
-                <Pressable
-                  accessibilityLabel="权限设置"
-                  accessibilityRole="button"
-                  hitSlop={6}
-                  onPress={onOpenPermissions}
-                  style={({ pressed }) => [
-                    styles.permissionsButton,
-                    pressed && styles.permissionsButtonPressed,
-                  ]}
-                >
-                  <Text style={styles.permissionsButtonText}>权限</Text>
                 </Pressable>
                 <Pressable
                   accessibilityLabel="退出登录"
@@ -253,7 +247,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     justifyContent: 'flex-end',
     marginLeft: 'auto',
-    maxWidth: 280,
+    maxWidth: 240,
     minWidth: 0,
   },
   agenda: { paddingHorizontal: spacing.md, paddingTop: spacing.xl },
@@ -316,19 +310,6 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
     paddingTop: spacing.lg,
   },
-  permissionsButton: {
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: 18,
-    borderWidth: 1,
-    flexShrink: 0,
-    height: 36,
-    justifyContent: 'center',
-    paddingHorizontal: spacing.sm,
-  },
-  permissionsButtonPressed: { opacity: 0.62 },
-  permissionsButtonText: { color: colors.text, fontSize: 12, fontWeight: '700' },
   retry: {
     backgroundColor: colors.text,
     borderRadius: 12,
@@ -382,5 +363,6 @@ const styles = StyleSheet.create({
     paddingRight: 10,
     paddingVertical: 3,
   },
+  userPillPressed: { opacity: 0.62 },
   username: { color: colors.text, flexShrink: 1, fontSize: 13, fontWeight: '700', minWidth: 0 },
 });

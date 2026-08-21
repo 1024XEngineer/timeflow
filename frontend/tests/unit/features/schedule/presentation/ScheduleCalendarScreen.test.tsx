@@ -252,10 +252,30 @@ describe('ScheduleCalendarScreen location schedules', () => {
     ).toMatchObject({ flexShrink: 1, minWidth: 0 });
     expect(
       StyleSheet.flatten(screen.getByTestId('schedule-account-actions').props.style),
-    ).toMatchObject({ marginLeft: 'auto', maxWidth: 280, minWidth: 0 });
+    ).toMatchObject({ marginLeft: 'auto', maxWidth: 240, minWidth: 0 });
 
     fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
     expect(onSignOut).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens permissions when the user pill is pressed', async () => {
+    const service = createService();
+    const onOpenPermissions = jest.fn();
+    render(
+      <ScheduleCalendarScreen
+        accountId="account-a"
+        onOpenPermissions={onOpenPermissions}
+        onSignOut={() => {}}
+        service={service}
+        timezone="Asia/Shanghai"
+        username="Sarah"
+      />,
+    );
+
+    await waitFor(() => expect(service.getSchedulesByRange).toHaveBeenCalled());
+    fireEvent.press(screen.getByLabelText('当前用户 Sarah，点击查看权限设置'));
+
+    expect(onOpenPermissions).toHaveBeenCalledTimes(1);
   });
 
   it('shows a location section that stays visible after selecting a day and changing month', async () => {
