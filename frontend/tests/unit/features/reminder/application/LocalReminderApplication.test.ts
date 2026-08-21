@@ -449,7 +449,7 @@ describe('LocalReminderApplication', () => {
       });
     });
 
-    it('keeps confirmation local and releases delivery after cloud sync fails', async () => {
+    it('reports foreground sync failure after persisting confirmation and releasing delivery', async () => {
       const schedule = fixtureSchedule({ id: 's1' });
       const deps = createDeps({
         schedules: new FakeScheduleReader([schedule]),
@@ -468,13 +468,9 @@ describe('LocalReminderApplication', () => {
         triggered_at: '2026-08-18T10:00:00.000Z',
       });
 
-      await expect(app.confirm('s1', '2026-08-18T10:05:00.000Z')).resolves.toMatchObject({
-        accepted: true,
-        disposition: {
-          state: 'confirmed',
-          sync_status: 'pending',
-        },
-      });
+      await expect(app.confirm('s1', '2026-08-18T10:05:00.000Z')).rejects.toThrow(
+        'network unavailable',
+      );
       await expect(deps.state.read('s1')).resolves.toMatchObject({
         reminder_disposition_state: 'confirmed',
         sync_status: 'pending',

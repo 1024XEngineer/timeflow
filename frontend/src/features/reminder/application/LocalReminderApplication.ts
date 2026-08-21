@@ -177,11 +177,11 @@ export class LocalReminderApplication implements ReminderApplicationPort {
       }
 
       this.unsubscribePresenter = this.dependencies.presenter.onAction((event) => {
-        void this.handlePresentationAction(event.schedule_id, event.action);
+        void this.handlePresentationAction(event.schedule_id, event.action).catch(() => undefined);
       });
       this.unsubscribeAlarms =
         this.dependencies.alarms.subscribe?.((event) => {
-          void this.handleNativeAlarmEvent(event);
+          void this.handleNativeAlarmEvent(event).catch(() => undefined);
         }) ?? null;
 
       // IntervalTimeListener 不在 start 时同步打点；先挂上 listener id 再 rebuild。
@@ -403,6 +403,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     scheduleId: string,
     confirmedAt: string,
     generation: number,
+    tolerateSyncFailure = false,
   ): Promise<ReminderApplicationResult> {
     if (!this.isLive(generation)) {
       return { accepted: false, schedule_id: scheduleId, disposition: null };
@@ -435,7 +436,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         return { accepted: false, schedule_id: scheduleId, disposition: null };
       }
 
-      const synced = await this.syncConfirmedDisposition(disposition);
+      const synced = await this.syncConfirmedDisposition(disposition, tolerateSyncFailure);
       return { accepted: true, schedule_id: scheduleId, disposition: synced };
     } finally {
       this.activeDeliveries.delete(scheduleId);
@@ -451,17 +452,21 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     ) {
       return;
     }
-    await this.syncConfirmedDisposition({
-      schedule_id: schedule.id,
-      state: 'confirmed',
-      updated_at: runtime.disposition_updated_at,
-      snoozed_until: null,
-      sync_status: 'pending',
-    });
+    await this.syncConfirmedDisposition(
+      {
+        schedule_id: schedule.id,
+        state: 'confirmed',
+        updated_at: runtime.disposition_updated_at,
+        snoozed_until: null,
+        sync_status: 'pending',
+      },
+      true,
+    );
   }
 
   private async syncConfirmedDisposition(
     disposition: ReminderConfirmedDisposition,
+    tolerateFailure = false,
   ): Promise<ReminderConfirmedDisposition> {
     try {
       const sync = await this.dependencies.dispositionSync.submitConfirmed(disposition);
@@ -477,7 +482,8 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         await this.patchRuntime(disposition.schedule_id, { ...runtime, sync_status: 'synced' });
       }
       return synced;
-    } catch {
+    } catch (error) {
+      if (!tolerateFailure) throw error;
       return disposition;
     }
   }
@@ -820,7 +826,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
 
     for (const row of rows) {
       if (row.state === 'confirmed') {
-        await this.confirmInternal(row.schedule_id, row.updated_at, generation);
+        await this.confirmInternal(row.schedule_id, row.updated_at, generation, true);
         continue;
       }
       if (row.state === 'snoozed') {
