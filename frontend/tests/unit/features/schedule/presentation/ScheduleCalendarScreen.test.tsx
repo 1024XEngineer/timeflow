@@ -333,7 +333,14 @@ describe('ScheduleCalendarScreen location schedules', () => {
         ScheduleCalendarReadService['getLocationSchedules']
       >
     ).mockResolvedValue([]);
-    const occurrenceStart = new Date().toISOString();
+    // 用 selectedDate 所在的日历日（本地取值，与组件默认 selectedDate 的算法一致）
+    // 加显式 +08:00 偏移锚定，避免真实 UTC 时刻落在 16:00-24:00 时 Shanghai 已跨入
+    // 下一天、而 selectedDate 仍是当天，导致注入的日程被分到未选中的那一天。
+    const now = new Date();
+    const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+      now.getDate(),
+    ).padStart(2, '0')}`;
+    const occurrenceStart = new Date(`${todayKey}T12:00:00+08:00`).toISOString();
     const initialOccurrence = {
       scheduleId: 'time-a',
       scheduleCategory: 'time' as const,
