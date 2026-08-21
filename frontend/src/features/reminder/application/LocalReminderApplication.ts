@@ -361,6 +361,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
           trigger_at: triggerAt,
           title: schedule.title,
           exact: true,
+          ...alarmRingChannels(schedule),
         };
       })
       .filter((request): request is NonNullable<typeof request> => request != null);
@@ -498,6 +499,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
           trigger_at: snoozedUntil,
           title: schedule.title,
           exact: true,
+          ...alarmRingChannels(schedule),
         });
         if (!this.isLive(generation)) {
           if (receipt.scheduled) {
@@ -976,6 +978,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
       trigger_at: triggerAt,
       title: schedule.title,
       exact: true,
+      ...alarmRingChannels(schedule),
     });
     void this.reportPermissionGaps(schedule.id, [
       'exact_alarm',
@@ -1050,6 +1053,14 @@ function toDeliveryRequest(
     strength: schedule.reminder?.reminder_strength ?? 'medium',
     trigger,
   };
+}
+
+/** 原生闹钟响铃时要不要震动/出声/弹全屏止铃界面，跟 JS 侧通道开关同一份强度换算表。 */
+function alarmRingChannels(
+  schedule: LocalReminderSchedule,
+): { vibrate: boolean; sound: boolean; full_screen: boolean } {
+  const plan = resolveStrengthDeliveryPlan(schedule.reminder?.reminder_strength ?? 'medium');
+  return { vibrate: plan.useVibration, sound: plan.useAudio, full_screen: plan.usePopup };
 }
 
 function toTimeReason(schedule: LocalReminderSchedule): ReminderTriggerReason {

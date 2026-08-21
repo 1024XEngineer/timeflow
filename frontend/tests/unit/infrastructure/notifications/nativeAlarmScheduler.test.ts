@@ -62,6 +62,9 @@ type NativeAlarmMock = {
       triggerAtMillis: number,
       title?: string | null,
       scheduleId?: string | null,
+      vibrate?: boolean,
+      sound?: boolean,
+      fullScreen?: boolean,
     ) => Promise<{ alarmId: string }>
   >;
   cancel: jest.MockedFunction<(alarmId: string) => Promise<boolean>>;
@@ -96,6 +99,9 @@ function request(overrides: Partial<AlarmScheduleRequest> = {}): AlarmScheduleRe
     trigger_at: FUTURE,
     title: '晨会',
     exact: true,
+    vibrate: true,
+    sound: true,
+    full_screen: true,
     ...overrides,
   };
 }
@@ -232,7 +238,29 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
       schedule_id: 'schedule-1',
       scheduled: true,
     });
-    expect(native.schedule).toHaveBeenCalledWith(Date.parse(FUTURE), '晨会', 'schedule-1');
+    expect(native.schedule).toHaveBeenCalledWith(
+      Date.parse(FUTURE),
+      '晨会',
+      'schedule-1',
+      true,
+      true,
+      true,
+    );
+  });
+
+  it('forwards vibrate/sound/full_screen through to the native bridge', async () => {
+    const scheduler = new NativeAlarmScheduler();
+    await scheduler.schedule(
+      request({ vibrate: false, sound: false, full_screen: false }),
+    );
+    expect(native.schedule).toHaveBeenCalledWith(
+      Date.parse(FUTURE),
+      '晨会',
+      'schedule-1',
+      false,
+      false,
+      false,
+    );
   });
 
   it('maps a native schedule rejection to unscheduled', async () => {
@@ -317,12 +345,23 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
     ]);
     expect(native.cancelAll).toHaveBeenCalledTimes(1);
     expect(native.schedule).toHaveBeenCalledTimes(2);
-    expect(native.schedule).toHaveBeenNthCalledWith(1, Date.parse(FUTURE), '晨会', 'ok');
+    expect(native.schedule).toHaveBeenNthCalledWith(
+      1,
+      Date.parse(FUTURE),
+      '晨会',
+      'ok',
+      true,
+      true,
+      true,
+    );
     expect(native.schedule).toHaveBeenNthCalledWith(
       2,
       Date.parse('2026-08-13T10:00:00.000Z'),
       '午会',
       'later',
+      true,
+      true,
+      true,
     );
   });
 

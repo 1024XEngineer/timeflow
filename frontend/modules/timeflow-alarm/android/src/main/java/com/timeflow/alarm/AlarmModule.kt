@@ -47,6 +47,9 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
     triggerAtMillis: Double,
     title: String?,
     scheduleId: String?,
+    vibrate: Boolean,
+    sound: Boolean,
+    fullScreen: Boolean,
     promise: Promise,
   ) {
     try {
@@ -56,6 +59,9 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
         triggerAtMillis.toLong(),
         title ?: "日程提醒",
         scheduleId ?: "",
+        vibrate,
+        sound,
+        fullScreen,
       )
       Log.i(NAME, "scheduled alarmId=$alarmId")
       val result: WritableMap = Arguments.createMap()

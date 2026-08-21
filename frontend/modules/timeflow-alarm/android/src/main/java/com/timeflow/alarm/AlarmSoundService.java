@@ -17,6 +17,9 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.provider.Settings;
 import android.util.Log;
 import android.view.Gravity;
@@ -46,6 +49,9 @@ public final class AlarmSoundService extends Service {
     String alarmId;
     String scheduleId;
     String alarmTitle;
+    private boolean vibrateEnabled;
+    private boolean soundEnabled;
+    private boolean fullScreenEnabled;
     private int requestCode;
     /** 已经通知过 JS "fired" 的 alarmId 集合；service 实例可能被多个不同闹钟复用。 */
     final Set<String> firedNotifiedAlarmIds = new HashSet<>();
@@ -86,9 +92,12 @@ public final class AlarmSoundService extends Service {
         alarmId = extras.alarmId;
         scheduleId = extras.scheduleId;
         alarmTitle = extras.title;
+        vibrateEnabled = extras.vibrate;
+        soundEnabled = extras.sound;
+        fullScreenEnabled = extras.fullScreen;
 
         createNotificationChannel();
-        Notification notification = buildNotification(alarmId, alarmTitle);
+        Notification notification = buildNotification(alarmId, alarmTitle, fullScreenEnabled);
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(
@@ -103,8 +112,16 @@ public final class AlarmSoundService extends Service {
             if (firedNotifiedAlarmIds.add(alarmId)) {
                 AlarmNativeBridge.notifyFired(this, scheduleId, alarmId, alarmTitle);
             }
-            showAlarmOverlay(alarmTitle);
-            if (mediaPlayer == null) {
+            // 换成下一条闹钟之前先清掉上一条的震动状态，避免 vibrate=false 的这条
+            // 顶上来时，还在响上一条闹钟启动的那次震动。
+            stopVibration();
+            if (vibrateEnabled) {
+                startVibration();
+            }
+            if (fullScreenEnabled) {
+                showAlarmOverlay(alarmTitle);
+            }
+            if (soundEnabled && mediaPlayer == null) {
                 startBundledSpeech();
             }
         } catch (RuntimeException exception) {
@@ -132,6 +149,7 @@ public final class AlarmSoundService extends Service {
         playbackHandler.removeCallbacksAndMessages(null);
         removeAlarmOverlay();
         releaseMediaPlayer();
+        stopVibration();
         deleteCachedSpeechFile();
         NotificationManager manager =
                 (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
@@ -155,13 +173,19 @@ public final class AlarmSoundService extends Service {
             String alarmId,
             String scheduleId,
             int requestCode,
-            String title
+            String title,
+            boolean vibrate,
+            boolean sound,
+            boolean fullScreen
     ) {
         Intent intent = new Intent(context, AlarmSoundService.class)
                 .putExtra(AlarmContract.EXTRA_ALARM_ID, alarmId)
                 .putExtra(AlarmContract.EXTRA_SCHEDULE_ID, scheduleId)
                 .putExtra(AlarmContract.EXTRA_REQUEST_CODE, requestCode)
-                .putExtra(AlarmContract.EXTRA_TITLE, title);
+                .putExtra(AlarmContract.EXTRA_TITLE, title)
+                .putExtra(AlarmContract.EXTRA_VIBRATE, vibrate)
+                .putExtra(AlarmContract.EXTRA_SOUND, sound)
+                .putExtra(AlarmContract.EXTRA_FULL_SCREEN, fullScreen);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent);
         } else {
@@ -169,24 +193,27 @@ public final class AlarmSoundService extends Service {
         }
     }
 
-    private Notification buildNotification(String alarmId, String title) {
+    private Notification buildNotification(String alarmId, String title, boolean fullScreen) {
         Intent ringIntent = new Intent(this, RingActivity.class)
                 .setData(alarmUri(alarmId))
                 .putExtra(AlarmContract.EXTRA_ALARM_ID, alarmId)
                 .putExtra(AlarmContract.EXTRA_SCHEDULE_ID, scheduleId)
                 .putExtra(AlarmContract.EXTRA_REQUEST_CODE, requestCode)
                 .putExtra(AlarmContract.EXTRA_TITLE, title)
+                .putExtra(AlarmContract.EXTRA_VIBRATE, vibrateEnabled)
+                .putExtra(AlarmContract.EXTRA_SOUND, soundEnabled)
+                .putExtra(AlarmContract.EXTRA_FULL_SCREEN, fullScreen)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                         | Intent.FLAG_ACTIVITY_MULTIPLE_TASK
                         | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
-        PendingIntent fullScreenIntent = PendingIntent.getActivity(
+        PendingIntent ringPendingIntent = PendingIntent.getActivity(
                 this,
                 requestCode,
                 ringIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE,
                 pendingIntentOptions()
         );
-        return new Notification.Builder(this, AlarmContract.CHANNEL_ID)
+        Notification.Builder builder = new Notification.Builder(this, AlarmContract.CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
                 .setContentTitle(title)
                 .setContentText("点击停止提醒")
@@ -195,8 +222,12 @@ public final class AlarmSoundService extends Service {
                 .setPriority(Notification.PRIORITY_MAX)
                 .setOngoing(true)
                 .setAutoCancel(false)
-                .setFullScreenIntent(fullScreenIntent, true)
-                .build();
+                // 弱强度也要能点通知手动打开止铃界面，只是不强制弹出。
+                .setContentIntent(ringPendingIntent);
+        if (fullScreen) {
+            builder.setFullScreenIntent(ringPendingIntent, true);
+        }
+        return builder.build();
     }
 
     private Uri alarmUri(String value) {
@@ -236,7 +267,9 @@ public final class AlarmSoundService extends Service {
                 NotificationManager.IMPORTANCE_HIGH
         );
         channel.setDescription("日程闹钟提醒");
-        channel.enableVibration(true);
+        // 震动改成 startVibration()/stopVibration() 手动控制，好按 vibrateEnabled 逐条开关；
+        // 渠道级震动创建后改不了，留 true 就没法让某条闹钟不震。
+        channel.enableVibration(false);
         channel.setSound(null, null);
         manager.createNotificationChannel(channel);
     }
@@ -261,6 +294,9 @@ public final class AlarmSoundService extends Service {
         String targetAlarmId = alarmId;
         String targetScheduleId = scheduleId;
         String targetTitle = title;
+        boolean targetVibrate = vibrateEnabled;
+        boolean targetSound = soundEnabled;
+        boolean targetFullScreen = fullScreenEnabled;
 
         View content = AlarmRingUi.build(
                 this,
@@ -269,7 +305,15 @@ public final class AlarmSoundService extends Service {
                     long triggerAt = System.currentTimeMillis()
                             + AlarmContract.SNOOZE_MINUTES * 60_000L;
                     try {
-                        AlarmScheduler.schedule(this, triggerAt, targetTitle, targetScheduleId);
+                        AlarmScheduler.schedule(
+                                this,
+                                triggerAt,
+                                targetTitle,
+                                targetScheduleId,
+                                targetVibrate,
+                                targetSound,
+                                targetFullScreen
+                        );
                     } catch (RuntimeException ignored) {
                         // ignore
                     }
@@ -424,6 +468,37 @@ public final class AlarmSoundService extends Service {
 
     private void removeFromSavedAlarms() {
         AlarmScheduler.removeAlarmRecord(this, alarmId, requestCode);
+    }
+
+    /** 震动 / 间隔（毫秒），跟 JS 侧 ReactNativeVibration 的 REPEAT_PATTERN 保持一致。 */
+    private static final long[] VIBRATION_PATTERN = {0L, 700L, 350L, 700L};
+
+    private void startVibration() {
+        Vibrator vibrator = obtainVibrator();
+        if (vibrator == null || !vibrator.hasVibrator()) {
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(VibrationEffect.createWaveform(VIBRATION_PATTERN, 0));
+        } else {
+            vibrator.vibrate(VIBRATION_PATTERN, 0);
+        }
+    }
+
+    private void stopVibration() {
+        Vibrator vibrator = obtainVibrator();
+        if (vibrator != null) {
+            vibrator.cancel();
+        }
+    }
+
+    private Vibrator obtainVibrator() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            VibratorManager manager =
+                    (VibratorManager) getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+            return manager == null ? null : manager.getDefaultVibrator();
+        }
+        return (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
     }
 
 }

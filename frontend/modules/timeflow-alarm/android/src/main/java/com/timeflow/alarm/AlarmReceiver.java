@@ -26,7 +26,19 @@ public final class AlarmReceiver extends BroadcastReceiver {
                 .putExtra(AlarmContract.EXTRA_ALARM_ID, alarmId)
                 .putExtra(AlarmContract.EXTRA_SCHEDULE_ID, scheduleId)
                 .putExtra(AlarmContract.EXTRA_REQUEST_CODE, requestCode)
-                .putExtra(AlarmContract.EXTRA_TITLE, title);
+                .putExtra(AlarmContract.EXTRA_TITLE, title)
+                .putExtra(
+                        AlarmContract.EXTRA_VIBRATE,
+                        intent.getBooleanExtra(AlarmContract.EXTRA_VIBRATE, true)
+                )
+                .putExtra(
+                        AlarmContract.EXTRA_SOUND,
+                        intent.getBooleanExtra(AlarmContract.EXTRA_SOUND, true)
+                )
+                .putExtra(
+                        AlarmContract.EXTRA_FULL_SCREEN,
+                        intent.getBooleanExtra(AlarmContract.EXTRA_FULL_SCREEN, true)
+                );
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(serviceIntent);
         } else {
