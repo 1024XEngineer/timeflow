@@ -8,8 +8,15 @@ from typing import Protocol
 
 from timeflow.business.calendar import ScheduleAgentService
 from timeflow.intelligence.conversation.llm import ToolDefinition
-from timeflow.intelligence.conversation.schedule_tools import build_schedule_tools
-from timeflow.intelligence.location import LocationSearchContext, LocationSearchService
+from timeflow.intelligence.conversation.schedule_tools import (
+    ScheduleResultObserver,
+    build_schedule_tools,
+)
+from timeflow.intelligence.location import (
+    ClientLocation,
+    LocationSearchContext,
+    LocationSearchService,
+)
 
 
 class Tool(Protocol):
@@ -45,12 +52,12 @@ class ToolRegistry:
 
 
 @dataclass(frozen=True, slots=True)
-class _RequestUserInputTool:
+class _DialogueControlTool:
     definition: ToolDefinition
 
     async def execute(self, arguments: Mapping[str, object]) -> str:
         del arguments
-        raise RuntimeError("request_user_input is handled by Agent")
+        raise RuntimeError(f"{self.definition.name} is handled by Agent")
 
 
 def request_user_input_definition() -> ToolDefinition:
@@ -58,8 +65,9 @@ def request_user_input_definition() -> ToolDefinition:
     return ToolDefinition(
         name="request_user_input",
         description=(
-            "Ask the user for missing information, disambiguation, recurrence scope, "
-            "or confirmation before continuing."
+            "Ask exactly one short, natural-language question for the single most important "
+            "missing field, disambiguation, recurrence scope, or confirmation. Never bundle "
+            "multiple fields, choices, examples, or explanations into one question."
         ),
         parameters={
             "type": "object",
@@ -72,28 +80,52 @@ def request_user_input_definition() -> ToolDefinition:
                         "recurrence_scope",
                         "confirmation",
                     ],
+                    "description": (
+                        "missing_field 缺必要信息；ambiguous_target 匹配到多条日程；"
+                        "recurrence_scope 周期日程范围不明；confirmation 删除等不可逆操作前需用户确认"
+                    ),
                 },
-                "speech_text": {"type": "string"},
-                "required_response": {"type": "string"},
-                "candidates": {"type": "array", "items": {"type": "string"}},
+                "speech_text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "要问用户的话，一句口语，例如「这个会是哪天的？」",
+                },
+                "required_response": {
+                    "type": ["string", "null"],
+                    "description": "希望用户补充的字段名，例如 start_time、location",
+                },
+                "candidates": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "匹配到多条日程时的候选，供客户端展示；ambiguous_target 必填",
+                },
             },
-            "required": [
-                "question_kind",
-                "speech_text",
-                "required_response",
-                "candidates",
-            ],
+            "required": ["question_kind", "speech_text"],
             "additionalProperties": False,
         },
+    )
+
+
+def end_conversation_definition() -> ToolDefinition:
+    """Return the client-visible continuous-conversation termination tool."""
+    return ToolDefinition(
+        name="end_conversation",
+        description=(
+            "Call when the user explicitly wants to end the current voice conversation. "
+            "A brief farewell may be spoken before calling; do not continue afterward."
+        ),
+        parameters={"type": "object", "properties": {}, "additionalProperties": False},
     )
 
 
 def build_agent_tool_registry(
     schedule_service: ScheduleAgentService,
     account_id: str,
+    observer: ScheduleResultObserver | None = None,
     *,
     location_service: LocationSearchService | None = None,
     location_context: LocationSearchContext | None = None,
+    client_location: ClientLocation | None = None,
 ) -> ToolRegistry:
     """Build the authenticated PR 2 tool registry."""
     return ToolRegistry(
@@ -101,10 +133,13 @@ def build_agent_tool_registry(
             *build_schedule_tools(
                 schedule_service,
                 account_id,
+                observer,
                 location_service=location_service,
                 location_context=location_context,
+                client_location=client_location,
             ),
-            _RequestUserInputTool(request_user_input_definition()),
+            _DialogueControlTool(request_user_input_definition()),
+            _DialogueControlTool(end_conversation_definition()),
         ]
     )
 
@@ -113,5 +148,6 @@ __all__ = [
     "Tool",
     "ToolRegistry",
     "build_agent_tool_registry",
+    "end_conversation_definition",
     "request_user_input_definition",
 ]

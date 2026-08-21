@@ -1,6 +1,11 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
 import { createAppServices } from '../../../src/app/composition/createAppServices';
+import {
+  ReminderDispositionHttpSync,
+  SqliteLocalScheduleReader,
+  SqliteReminderStateStore,
+} from '../../../src/features/reminder';
 import { FakeAuthSessionStore } from '../../fakes/FakeAuthSessionStore';
 
 describe('createAppServices', () => {
@@ -23,6 +28,11 @@ describe('createAppServices', () => {
 
     expect(services.protectedClient).toBe(services.auth.protectedClient);
     expect(services.webSocketClient).toBe(services.auth.webSocketClient);
+    expect(services.reminderPorts.schedules).toBe(services.schedules);
+    expect(services.reminderPorts.state).toBe(services.reminderState);
+    expect(services.reminderPorts.dispositionSync).toBeInstanceOf(ReminderDispositionHttpSync);
+    expect(services.schedules).toBeInstanceOf(SqliteLocalScheduleReader);
+    expect(services.reminderState).toBeInstanceOf(SqliteReminderStateStore);
     expect(services.scheduleView.getSnapshot()).toEqual({
       accountId: null,
       occurrences: [],

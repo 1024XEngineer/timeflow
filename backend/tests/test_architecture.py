@@ -160,7 +160,18 @@ def test_asr_public_contract_is_provider_neutral() -> None:
         else:  # pragma: no cover - assertion branch only runs on regression
             raise AssertionError(f"{dataclass_type.__name__} must be frozen")
 
-    assert set(get_args(asr.AsrEvent)) == {asr.TranscriptPreview, asr.TranscriptCompleted}
+    for speech_marker in (asr.SpeechStarted, asr.SpeechStopped):
+        assert is_dataclass(speech_marker)
+        assert speech_marker.__slots__ == ()
+        assert [field.name for field in fields(speech_marker)] == []
+        assert speech_marker.__dataclass_params__.frozen is True
+
+    assert set(get_args(asr.AsrEvent)) == {
+        asr.TranscriptPreview,
+        asr.TranscriptCompleted,
+        asr.SpeechStarted,
+        asr.SpeechStopped,
+    }
     assert asr.AsrPort.stream.__annotations__ == {
         "audio_chunks": "AsyncIterable[bytes]",
         "return": "AsyncIterator[AsrEvent]",
@@ -247,3 +258,11 @@ def test_tts_public_contract_is_provider_neutral() -> None:
         "finish-task",
     }
     assert not any(term in source for term in provider_specific_terms)
+
+
+def test_conversation_package_exports_agent_session_end() -> None:
+    """AgentSessionEnd is yielded by the serial Agent and must be importable publicly."""
+    import timeflow.intelligence.conversation as conversation
+
+    assert conversation.AgentSessionEnd in get_args(conversation.AgentEvent)
+    assert "AgentSessionEnd" in conversation.__all__

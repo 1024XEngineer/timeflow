@@ -282,6 +282,40 @@ describe('AssistantContinuousConversationService', () => {
     ]);
   });
 
+  it('attaches a late reply to the turn it answers, not whichever turn is now last', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_1',
+      payload: { duration_ms: 800, language: 'zh', transcript: '明天几点开会' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    // 用户没等 req_1 的回复就开口问了下一句，新一轮先落地成了 turns 里最后一条。
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_2',
+      payload: { duration_ms: 500, language: 'zh', transcript: '谁参加' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    // req_1 的回复这时候才迟到到达。
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_1',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '明天下午三点' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getTurns()).toEqual([
+      { id: 'req_1', replyText: '明天下午三点', transcript: '明天几点开会' },
+      { id: 'req_2', replyText: null, transcript: '谁参加' },
+    ]);
+  });
+
   it.each([
     ['missing_field', '你是想订哪一天的会议室？'],
     ['ambiguous_target', '你是指三楼小会议室还是五楼大会议室？'],
@@ -448,10 +482,128 @@ describe('AssistantContinuousConversationService', () => {
     disposeService(service);
   });
 
+  it('keeps applying queued command results even if a subscriber listener throws', async () => {
+    // markScheduleDataChanged() synchronously notifies every subscriber; a listener
+    // that throws (e.g. a buggy re-render) rejects applyCommandResultLocally()'s
+    // promise. queueCommandResult() must neutralize that with .catch(() => {})
+    // chained in the same statement (same idiom as chainPlayback) -- deferring the
+    // catch to a later call leaves the rejection unhandled for a few microtask
+    // ticks, which crashes the process outright (reproduced while writing this
+    // test, before adding the immediate .catch()).
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+    await startListening(fake, service);
+
+    // handleMessage's own setState() notifies once synchronously before
+    // applyCommandResultLocally's markScheduleDataChanged() notifies again
+    // asynchronously; only the second one is the one queueCommandResult's chain
+    // needs to survive.
+    let notifyCount = 0;
+    const unsubscribe = service.subscribe(() => {
+      notifyCount += 1;
+      if (notifyCount === 2) {
+        throw new Error('listener boom');
+      }
+    });
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_1',
+      payload: { operation: 'create_schedule', schedule: { id: 'a' }, status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+    unsubscribe();
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_2',
+      payload: { operation: 'create_schedule', schedule: { id: 'b' }, status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getLastAppliedCommand()).toEqual(
+      expect.objectContaining({ operation: 'create_schedule', schedule: { id: 'b' } }),
+    );
+    disposeService(service);
+  });
+
+  it('serializes local writes so a batch of back-to-back command results cannot race', async () => {
+    // Regression test for a batch create/delete race: the model can call several
+    // tools inside one turn, so voice.command.result messages can arrive only
+    // milliseconds apart (observed as low as 12ms in production logs). Each write
+    // opens its own withExclusiveTransactionAsync() on the real SQLite adapter --
+    // running two at once opens two native connections that fight over the same
+    // exclusive lock ("database is locked"), and the loser's write is silently
+    // dropped even though the cloud already committed it. queueCommandResult()
+    // must serialize these instead of firing them concurrently.
+    const fake = createFakeConnection();
+    const order: string[] = [];
+    let resolveFirst: (() => void) | undefined;
+    let inFlight = 0;
+    let overlapped = false;
+    let callCount = 0;
+    const deps = createDeps({
+      applyCommandResult: async () => {
+        callCount += 1;
+        inFlight += 1;
+        if (inFlight > 1) overlapped = true;
+        if (callCount === 1) {
+          order.push('first-start');
+          await new Promise<void>((resolve) => {
+            resolveFirst = resolve;
+          });
+          order.push('first-end');
+        } else {
+          order.push('second-start');
+          order.push('second-end');
+        }
+        inFlight -= 1;
+      },
+      connection: fake.connection,
+    });
+    const service = createService(deps);
+    await startListening(fake, service);
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_1',
+      payload: { operation: 'create_schedule', schedule: { id: 'a' }, status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_2',
+      payload: { operation: 'create_schedule', schedule: { id: 'b' }, status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    // The second write must not have started yet -- the first is still stuck
+    // mid-transaction, waiting on resolveFirst.
+    expect(order).toEqual(['first-start']);
+    expect(overlapped).toBe(false);
+
+    resolveFirst?.();
+    await flushAsync();
+
+    expect(order).toEqual(['first-start', 'first-end', 'second-start', 'second-end']);
+    expect(overlapped).toBe(false);
+    expect(fake.sent).toContainEqual(
+      expect.objectContaining({ message_id: 'msg_1', type: 'message.ack' }),
+    );
+    expect(fake.sent).toContainEqual(
+      expect.objectContaining({ message_id: 'msg_2', type: 'message.ack' }),
+    );
+    disposeService(service);
+  });
+
   it('patches an asynchronous category update while the call remains active', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
     const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    expect(service.getScheduleDataRevision()).toBe(0);
 
     await startListening(fake, service);
     fake.emitMessage({
@@ -465,6 +617,7 @@ describe('AssistantContinuousConversationService', () => {
       'schedule_001',
       'work',
     );
+    expect(service.getScheduleDataRevision()).toBe(1);
     expect(service.getState()).toMatchObject({ phase: 'listening' });
     service.dispose();
   });
@@ -724,6 +877,171 @@ describe('AssistantContinuousConversationService', () => {
     await flushAsync();
 
     expect(calls).toEqual(['startStream', 'pushChunk']);
+    disposeService(service);
+  });
+
+  it('stops immediately and drops queued chunks when TTS is canceled', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+    const calls: string[] = [];
+    let resolveFirst: () => void = () => {};
+    (deps.playback.pushChunk as jest.Mock)
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            calls.push('push-1');
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(async () => {
+        calls.push('push-2');
+      });
+    (deps.playback.stop as jest.Mock).mockImplementation(async () => {
+      calls.push('stop');
+    });
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      payload: {
+        format: 'pcm_s16le',
+        purpose: 'reply',
+        sample_rate_hz: 24000,
+        speech_text: '',
+      },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+    fake.emitAudioFrame(new ArrayBuffer(4));
+    fake.emitAudioFrame(new ArrayBuffer(4));
+    await flushAsync();
+
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.canceled',
+    } as AssistantServerMessage);
+    expect(calls).toEqual(['push-1', 'stop']);
+
+    resolveFirst();
+    await flushAsync();
+
+    // push-2 已经排在链上，但代次已经变了，必须被丢掉而不是补喂给播放器。
+    expect(calls).toEqual(['push-1', 'stop']);
+    expect(service.getState()).toEqual({ conversationId: 'conv_001', phase: 'interrupted' });
+    disposeService(service);
+  });
+
+  it('ignores the canceled stream end that arrives after interruption', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      payload: {
+        format: 'pcm_s16le',
+        purpose: 'reply',
+        sample_rate_hz: 24000,
+        speech_text: '',
+      },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.canceled',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.end',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(deps.playback.endStream).not.toHaveBeenCalled();
+    expect(service.getState()).toEqual({ conversationId: 'conv_001', phase: 'interrupted' });
+    disposeService(service);
+  });
+
+  it('does not stop a newer TTS when a late cancellation belongs to the old audio', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    const startMessage = (audioId: string): AssistantServerMessage =>
+      ({
+        audio_id: audioId,
+        conversation_id: 'conv_001',
+        payload: {
+          format: 'pcm_s16le',
+          purpose: 'reply',
+          sample_rate_hz: 24000,
+          speech_text: '',
+        },
+        type: 'voice.tts.start',
+      }) as AssistantServerMessage;
+
+    fake.emitMessage(startMessage('audio_001'));
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.end',
+    } as AssistantServerMessage);
+    fake.emitMessage(startMessage('audio_002'));
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.canceled',
+    } as AssistantServerMessage);
+    // 兼容尚未升级的后端：旧实现把这种晚到的取消发成空 id，不能把新流停掉。
+    fake.emitMessage({
+      audio_id: '',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.canceled',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(deps.playback.stop).not.toHaveBeenCalled();
+    expect(service.getState()).toEqual({ conversationId: 'conv_001', phase: 'speaking' });
+    disposeService(service);
+  });
+
+  it('dismissReply() clears the reply bubble and stops playback immediately', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      payload: {
+        format: 'pcm_s16le',
+        purpose: 'reply',
+        sample_rate_hz: 24000,
+        speech_text: '回复内容',
+      },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '回复内容' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getReplyText()).toBe('回复内容');
+
+    await service.dismissReply();
+
+    expect(service.getReplyText()).toBeNull();
+    expect(deps.playback.stop).toHaveBeenCalledTimes(1);
     disposeService(service);
   });
 

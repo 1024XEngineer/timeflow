@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Animated, Easing, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { FLOATING_VOICE_BAR_HEIGHT } from '../../../shared/ui/floatingVoiceBarLayout';
 import { colors, spacing } from '../../../shared/ui/theme';
 
 const WAVE_BAR_HEIGHTS = [10, 16, 22, 16, 10] as const;
@@ -101,12 +102,10 @@ function normalizeLevel(dbfs: number | null): number {
 const styles = StyleSheet.create({
   bar: {
     alignItems: 'center',
-    backgroundColor: colors.input,
-    borderColor: colors.border,
-    borderRadius: 14,
-    borderWidth: 1,
+    backgroundColor: colors.text,
+    borderRadius: 999,
     flex: 1,
-    height: 52,
+    height: FLOATING_VOICE_BAR_HEIGHT,
     justifyContent: 'center',
   },
   barActive: {
@@ -119,12 +118,12 @@ const styles = StyleSheet.create({
     opacity: 0.86,
   },
   label: {
-    color: colors.text,
+    color: colors.onPrimary,
     fontSize: 14,
     fontWeight: '600',
   },
   labelDisabled: {
-    color: colors.mutedText,
+    color: colors.onPrimary,
   },
   wave: {
     alignItems: 'center',

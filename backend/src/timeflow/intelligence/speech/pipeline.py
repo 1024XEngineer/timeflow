@@ -100,10 +100,14 @@ class SpeechPipeline:
         queue: asyncio.Queue[SpeechSegment | _EndOfSegments] = asyncio.Queue(
             maxsize=self._segment_queue_size
         )
-        first_segment_ready = asyncio.Event()
+        # Fires as soon as the first non-empty text or question arrives, before the
+        # segmenter has necessarily produced a complete segment. The TTS stream is
+        # started on this signal so its WebSocket connect + handshake overlaps the
+        # remaining segmentation instead of serialising after the first segment.
+        speech_expected = asyncio.Event()
         metadata = _StreamMetadata()
         producer = asyncio.create_task(
-            self._produce_segments(events, queue, first_segment_ready, metadata)
+            self._produce_segments(events, queue, speech_expected, metadata)
         )
         tts_stream: AsyncIterator[TtsAudioChunk | TtsCompleted] | None = None
 
@@ -119,7 +123,7 @@ class SpeechPipeline:
                     queue.task_done()
 
         try:
-            await self._wait_for_first_segment(first_segment_ready, producer)
+            await self._wait_for_speech(speech_expected, producer)
             if metadata.purpose is None:
                 await producer
                 return
@@ -171,7 +175,7 @@ class SpeechPipeline:
         self,
         events: AsyncIterable[AgentEvent],
         queue: asyncio.Queue[SpeechSegment | _EndOfSegments],
-        first_segment_ready: asyncio.Event,
+        speech_expected: asyncio.Event,
         metadata: _StreamMetadata,
     ) -> None:
         segmenter = TextSegmenter(
@@ -180,31 +184,38 @@ class SpeechPipeline:
         )
         next_index = 0
 
+        def note_purpose(purpose: SpeechPurpose) -> None:
+            """Record the turn's purpose and signal that speech is coming."""
+            if metadata.purpose is None:
+                metadata.purpose = purpose
+                speech_expected.set()
+            elif metadata.purpose != purpose:
+                raise ValueError("One speech turn cannot mix question and reply text")
+
         async def submit(text: str, purpose: SpeechPurpose) -> None:
             nonlocal next_index
             normalized = text.strip()
             if not normalized:
                 return
-            if metadata.purpose is None:
-                metadata.purpose = purpose
-                if purpose == "dialogue_question":
-                    metadata.speech_text = normalized
-            elif metadata.purpose != purpose:
-                raise ValueError("One speech turn cannot mix question and reply text")
             await queue.put(SpeechSegment(next_index, normalized, purpose))
             next_index += 1
-            first_segment_ready.set()
 
         cancelled = False
         try:
             async for event in events:
                 if isinstance(event, AgentTextDelta):
+                    if event.text.strip():
+                        note_purpose("command_result")
                     for segment in segmenter.push(event.text):
                         await submit(segment, "command_result")
                 elif isinstance(event, AgentQuestion):
                     if metadata.purpose is not None or segmenter.flush() is not None:
                         raise ValueError("One speech turn cannot mix question and reply text")
-                    await submit(event.speech_text, "dialogue_question")
+                    normalized = event.speech_text.strip()
+                    if normalized:
+                        note_purpose("dialogue_question")
+                        metadata.speech_text = normalized
+                        await submit(event.speech_text, "dialogue_question")
                     return
                 elif isinstance(event, AgentCompleted):
                     if remainder := segmenter.flush():
@@ -221,14 +232,14 @@ class SpeechPipeline:
         finally:
             if not cancelled:
                 await queue.put(_END_OF_SEGMENTS)
-                first_segment_ready.set()
+                speech_expected.set()
 
     @staticmethod
-    async def _wait_for_first_segment(
-        first_segment_ready: asyncio.Event,
+    async def _wait_for_speech(
+        speech_expected: asyncio.Event,
         producer: asyncio.Task[None],
     ) -> None:
-        waiter = asyncio.create_task(first_segment_ready.wait())
+        waiter = asyncio.create_task(speech_expected.wait())
         try:
             done, _ = await asyncio.wait(
                 {waiter, producer},

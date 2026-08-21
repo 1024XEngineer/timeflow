@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from itertools import count
 from types import TracebackType
+from typing import cast
 
 import pytest
 
@@ -71,6 +72,7 @@ class _Repository:
         self,
         *,
         account_id: str,
+        category: ScheduleCategory | None = None,
         include_deleted: bool = False,
     ) -> tuple[ScheduleSnapshot, ...]:
         return tuple(
@@ -80,6 +82,7 @@ class _Repository:
                 key=lambda item: (item.start_time or item.created_at, item.id),
             )
             if snapshot.account_id == account_id
+            and (category is None or snapshot.category is category)
             and (include_deleted or snapshot.status is ScheduleStatus.ACTIVE)
         )
 
@@ -89,10 +92,12 @@ class _Repository:
         account_id: str,
         starts_at_or_after: datetime | None,
         starts_before: datetime | None,
+        category: ScheduleCategory | None = None,
         include_deleted: bool = False,
     ) -> tuple[ScheduleSnapshot, ...]:
         schedules = self.list_schedules(
             account_id=account_id,
+            category=category,
             include_deleted=include_deleted,
         )
         return tuple(
@@ -1068,12 +1073,83 @@ def test_find_schedules_filters_without_leaking_other_accounts_or_deleted_rows()
     assert with_deleted.schedules[0].status is ScheduleStatus.DELETED
 
 
+def test_find_schedules_filters_category_and_combines_it_with_a_time_window() -> None:
+    service, store = _service()
+    template = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(title="本周工作", start_time=datetime(2026, 8, 12, 7, tzinfo=UTC)),
+    ).schedules[0]
+    work_in_window = replace(template, category=ScheduleCategory.WORK)
+    work_outside_window = replace(
+        template,
+        id="work-outside-window",
+        title="下周工作",
+        start_time=datetime(2026, 8, 19, 7, tzinfo=UTC),
+        category=ScheduleCategory.WORK,
+    )
+    second_work_in_window = replace(
+        template,
+        id="second-work-in-window",
+        title="本周工作复盘",
+        start_time=datetime(2026, 8, 15, 7, tzinfo=UTC),
+        category=ScheduleCategory.WORK,
+    )
+    study_in_window = replace(
+        template,
+        id="study-in-window",
+        title="本周学习",
+        start_time=datetime(2026, 8, 13, 7, tzinfo=UTC),
+        category=ScheduleCategory.STUDY,
+    )
+    unclassified_in_window = replace(
+        template,
+        id="unclassified-in-window",
+        title="待分类",
+        start_time=datetime(2026, 8, 14, 7, tzinfo=UTC),
+        category=None,
+    )
+    store.schedules.update(
+        {
+            work_in_window.id: work_in_window,
+            work_outside_window.id: work_outside_window,
+            second_work_in_window.id: second_work_in_window,
+            study_in_window.id: study_in_window,
+            unclassified_in_window.id: unclassified_in_window,
+        }
+    )
+
+    work_matches = service.find_schedules(
+        account_id="account-a",
+        query=FindSchedulesQuery(
+            category=ScheduleCategory.WORK,
+            starts_at_or_after=datetime(2026, 8, 11, tzinfo=UTC),
+            starts_before=datetime(2026, 8, 18, tzinfo=UTC),
+        ),
+    )
+    all_matches = service.find_schedules(
+        account_id="account-a",
+        query=FindSchedulesQuery(
+            starts_at_or_after=datetime(2026, 8, 11, tzinfo=UTC),
+            starts_before=datetime(2026, 8, 18, tzinfo=UTC),
+        ),
+    )
+
+    assert work_matches.schedules == (work_in_window, second_work_in_window)
+    assert all_matches.schedules == (
+        work_in_window,
+        study_in_window,
+        unclassified_in_window,
+        second_work_in_window,
+    )
+
+
 @pytest.mark.parametrize(
     ("query", "field"),
     [
         (FindSchedulesQuery(schedule_id=" "), "schedule_id"),
         (FindSchedulesQuery(title=" "), "title"),
         (FindSchedulesQuery(location_name=" "), "location_name"),
+        (FindSchedulesQuery(category=cast(ScheduleCategory, "unsupported")), "category"),
         (FindSchedulesQuery(starts_at_or_after=datetime(2026, 8, 12)), "starts_at_or_after"),
         (
             FindSchedulesQuery(

@@ -30,6 +30,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
   private connection: VoiceTransportConnection | null = null;
   private state: ConversationTurnState = { phase: 'idle' };
   private lastAppliedCommand: AppliedCommand | null = null;
+  private scheduleDataRevision = 0;
   private readonly listeners = new Set<(state: ConversationTurnState) => void>();
 
   private conversationId: string | null = null;
@@ -51,6 +52,10 @@ export class AssistantConversationService implements AssistantApplicationPort {
   private pendingStartTurn: Promise<void> | null = null;
   /** Category events can arrive before the command result creates their local row. */
   private readonly pendingCategoryUpdates = new Map<string, ScheduleCategory>();
+  /** 串起每条 voice.command.result 的本地落库，见 AssistantContinuousConversationService
+   * 里同名字段的注释——一次按住说话也可能在一句话里触发多个工具调用（批量新建/
+   * 删除），不排队会让两个 applyCommandResultLocally() 并发抢同一个 SQLite 连接。 */
+  private commandResultChain: Promise<void> = Promise.resolve();
   private disposed = false;
 
   constructor(
@@ -69,6 +74,10 @@ export class AssistantConversationService implements AssistantApplicationPort {
 
   getLastAppliedCommand(): AppliedCommand | null {
     return this.lastAppliedCommand;
+  }
+
+  getScheduleDataRevision(): number {
+    return this.scheduleDataRevision;
   }
 
   getReplyText(): string | null {
@@ -243,7 +252,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
           status: message.payload.status,
         };
         // 状态立刻回到 idle，不等写库；message.ack 必须等写库成功才发（AGENTS.md §6）。
-        void this.applyCommandResultLocally(command, message.message_id);
+        this.queueCommandResult(command, message.message_id);
         this.setState({ phase: 'idle' });
         return;
       }
@@ -281,6 +290,17 @@ export class AssistantConversationService implements AssistantApplicationPort {
     }
   }
 
+  /** .catch(() => {}) 必须紧跟在同一条语句里同步接上——迟一拍再接（比如靠下一次
+   * queueCommandResult 调用里的第二个 then 参数兜底）这段窗口期这个被拒绝的
+   * promise 没有任何 handler，Node 的 unhandled rejection 检测在下一次调用到达前
+   * 就已经判定"没人接"，直接把整个进程带崩——不是理论风险，用一个会抛的 state
+   * 订阅者复现过。 */
+  private queueCommandResult(command: AppliedCommand, messageId: string): void {
+    this.commandResultChain = this.commandResultChain
+      .then(() => this.applyCommandResultLocally(command, messageId))
+      .catch(() => {});
+  }
+
   private async applyCommandResultLocally(
     command: AppliedCommand,
     messageId: string,
@@ -293,7 +313,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
       return;
     }
     this.lastAppliedCommand = command;
-    this.notifyListeners();
+    this.markScheduleDataChanged();
     this.connection?.send({ message_id: messageId, status: 'applied', type: 'message.ack' });
     const schedules = command.schedules ?? (command.schedule ? [command.schedule] : []);
     await this.applyPendingCategoryUpdates(
@@ -314,6 +334,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
       if (this.disposed) return;
       if (applied === true && this.pendingCategoryUpdates.get(key) === category) {
         this.pendingCategoryUpdates.delete(key);
+        this.markScheduleDataChanged();
       }
     } catch {
       if (!this.disposed) this.pendingCategoryUpdates.set(key, category);
@@ -332,7 +353,10 @@ export class AssistantConversationService implements AssistantApplicationPort {
           category,
         );
         if (this.disposed) return;
-        if (applied === true) this.pendingCategoryUpdates.delete(key);
+        if (applied === true) {
+          this.pendingCategoryUpdates.delete(key);
+          this.markScheduleDataChanged();
+        }
       } catch {
         // Keep the latest pending value for a later authoritative local write.
       }
@@ -343,6 +367,11 @@ export class AssistantConversationService implements AssistantApplicationPort {
     return `${this.options.accountId}\u0000${scheduleId}`;
   }
 
+  private markScheduleDataChanged(): void {
+    this.scheduleDataRevision += 1;
+    this.notifyListeners();
+  }
+
   private handleAudioFrame(chunk: ArrayBuffer): void {
     if (this.currentAudioId === null) {
       return;
@@ -351,6 +380,9 @@ export class AssistantConversationService implements AssistantApplicationPort {
   }
 
   private handleClose(event: { code: number; reason: string }): void {
+    // 必须真的执行：切到连续对话时共享 WS 会因 voiceMode 不同断开重连，只置空的话
+    // 旧服务仍订阅着新连接的 TTS/PCM，同一句话会被两个服务重复送进播放器。
+    this.unsubscribeConnection?.();
     this.connection = null;
     this.unsubscribeConnection = null;
     const message = event.reason || `连接已断开（${event.code}）`;

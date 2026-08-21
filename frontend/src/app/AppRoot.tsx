@@ -9,6 +9,15 @@ import { ExpoAudioPlayback } from '../features/assistant/data/audio/ExpoAudioPla
 import { AuthenticatedVoiceTransport } from '../features/assistant/data/websocket/AuthenticatedVoiceTransport';
 import { LocalScheduleWriter } from '../features/assistant/data/local/LocalScheduleWriter';
 import { useAuth } from '../features/auth/presentation/AuthProvider';
+import type {
+  AlertDialogPort,
+  DeviceCapabilityPort,
+  DevicePermission,
+  ReminderApplicationPort,
+  SqliteLocalScheduleReader,
+  SqliteReminderStateStore,
+} from '../features/reminder';
+import { PermissionOnboardingScreen } from '../features/reminder';
 import { SqliteScheduleClientService } from '../features/schedule/application';
 import type { ScheduleLocalRepository } from '../features/schedule/data';
 import { RNAppStateProvider } from '../infrastructure/appState/RNAppStateProvider';
@@ -26,6 +35,9 @@ import { createScheduleSnapshotPreparation } from './composition/createScheduleS
 export function AppRoot({ services: providedServices }: { services?: AppServices }) {
   const services = useMemo(() => providedServices ?? createAppServices(), [providedServices]);
   const controller = services.auth.controller;
+  const handlePermissionsUpdated = useCallback(() => {
+    void services.reminder.rebuild();
+  }, [services]);
   return (
     <AppProviders
       authController={controller}
@@ -33,7 +45,13 @@ export function AppRoot({ services: providedServices }: { services?: AppServices
       services={services}
     >
       <AuthRoute
+        alertDialog={services.alertDialog}
+        device={services.reminderPorts.device}
+        onPermissionsUpdated={handlePermissionsUpdated}
         protectedClient={services.protectedClient}
+        reminder={services.reminder}
+        reminderState={services.reminderState}
+        scheduleReader={services.schedules}
         webSocketClient={services.webSocketClient}
       />
     </AppProviders>
@@ -41,10 +59,22 @@ export function AppRoot({ services: providedServices }: { services?: AppServices
 }
 
 function AuthRoute({
+  alertDialog,
+  device,
+  onPermissionsUpdated,
   protectedClient,
+  reminder,
+  reminderState,
+  scheduleReader,
   webSocketClient,
 }: {
+  readonly alertDialog: AlertDialogPort;
+  readonly device: DeviceCapabilityPort;
+  readonly onPermissionsUpdated: () => void;
   readonly protectedClient: ApiRequest;
+  readonly reminder: ReminderApplicationPort;
+  readonly reminderState: SqliteReminderStateStore;
+  readonly scheduleReader: SqliteLocalScheduleReader;
   readonly webSocketClient: AuthenticatedWebSocketClient;
 }) {
   const { retryInitialization, viewState } = useAuth();
@@ -76,8 +106,14 @@ function AuthRoute({
   return (
     <AuthenticatedScheduleRoute
       accountId={viewState.accountId}
+      alertDialog={alertDialog}
+      device={device}
       key={viewState.accountId}
+      onPermissionsUpdated={onPermissionsUpdated}
       protectedClient={protectedClient}
+      reminder={reminder}
+      reminderState={reminderState}
+      scheduleReader={scheduleReader}
       username={viewState.username}
       webSocketClient={webSocketClient}
     />
@@ -97,12 +133,24 @@ type ScheduleLoadState =
 
 function AuthenticatedScheduleRoute({
   accountId,
+  alertDialog,
+  device,
+  onPermissionsUpdated,
   protectedClient,
+  reminder,
+  reminderState,
+  scheduleReader,
   username,
   webSocketClient,
 }: {
   readonly accountId: string;
+  readonly alertDialog: AlertDialogPort;
+  readonly device: DeviceCapabilityPort;
+  readonly onPermissionsUpdated: () => void;
   readonly protectedClient: ApiRequest;
+  readonly reminder: ReminderApplicationPort;
+  readonly reminderState: SqliteReminderStateStore;
+  readonly scheduleReader: SqliteLocalScheduleReader;
   readonly username: string;
   readonly webSocketClient: AuthenticatedWebSocketClient;
 }) {
@@ -110,6 +158,30 @@ function AuthenticatedScheduleRoute({
   const [loadState, setLoadState] = useState<ScheduleLoadState>();
   const [retryToken, setRetryToken] = useState(0);
   const [isSigningOut, setIsSigningOut] = useState(false);
+  const [permissionGate, setPermissionGate] = useState<'checking' | 'gated' | 'clear'>('checking');
+  const [highlightPermission, setHighlightPermission] = useState<DevicePermission | null>(null);
+
+  // 只有通知是硬性门槛：没给就先留在权限页，其余权限允许先跳过，用到对应功能
+  // 时再单独引导（见 useReminderPermissionNudge 和麦克风被拒的弹窗）。
+  useEffect(() => {
+    let active = true;
+    void device.getStatus().then((status) => {
+      if (active) setPermissionGate(status.permissions.notifications ? 'clear' : 'gated');
+    });
+    return () => {
+      active = false;
+    };
+  }, [device]);
+
+  const handleRequestPermission = useCallback((permission?: DevicePermission) => {
+    setHighlightPermission(permission ?? null);
+    setPermissionGate('gated');
+  }, []);
+
+  const handlePermissionsContinue = useCallback(() => {
+    setPermissionGate('clear');
+    setHighlightPermission(null);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -158,6 +230,21 @@ function AuthenticatedScheduleRoute({
     [currentLoadState],
   );
 
+  // The reminder runtime starts as soon as authentication succeeds, before SQLite may be ready.
+  // Bind its stable adapters to the active account/repository, then refresh the running engine.
+  useEffect(() => {
+    if (currentLoadState?.status !== 'ready') {
+      return;
+    }
+    reminderState.attach(currentLoadState.repository, accountId);
+    scheduleReader.attach(currentLoadState.repository, accountId);
+    void scheduleReader.refresh();
+    return () => {
+      scheduleReader.detach();
+      reminderState.detach();
+    };
+  }, [accountId, currentLoadState, reminderState, scheduleReader]);
+
   // 语音这条连接复用应用唯一的 AuthenticatedWebSocketClient——握手、鉴权失效、
   // 断线通知都由它统一处理，这里不再单独持有 access_token/device_id/wsUrl。
   // 按住说话和免提通话共用同一批 capture/playback/location/appState 端口
@@ -174,11 +261,11 @@ function AuthenticatedScheduleRoute({
     return {
       appState: new RNAppStateProvider(),
       capture: new ExpoAudioCapture(),
-      localScheduleWriter: new LocalScheduleWriter(currentLoadState.repository),
+      localScheduleWriter: new LocalScheduleWriter(currentLoadState.repository, scheduleReader),
       location: new ExpoLocationProvider(),
       playback: new ExpoAudioPlayback(),
     };
-  }, [currentLoadState]);
+  }, [currentLoadState, scheduleReader]);
 
   const pushToTalkApplication = useMemo(() => {
     if (assistantDependencies === null) {
@@ -222,16 +309,32 @@ function AuthenticatedScheduleRoute({
       scheduleService &&
       pushToTalkApplication &&
       continuousApplication ? (
-        <HomeScreen
-          accountId={accountId}
-          continuousApplication={continuousApplication}
-          isSigningOut={isSigningOut}
-          onSignOut={handleSignOut}
-          pushToTalkApplication={pushToTalkApplication}
-          scheduleService={scheduleService}
-          timezone={Intl.DateTimeFormat().resolvedOptions().timeZone}
-          username={username}
-        />
+        permissionGate === 'gated' ? (
+          <PermissionOnboardingScreen
+            device={device}
+            highlightPermission={highlightPermission}
+            onContinue={handlePermissionsContinue}
+            onPermissionsUpdated={onPermissionsUpdated}
+          />
+        ) : permissionGate === 'checking' ? (
+          <View style={styles.authenticatedScreen}>
+            <Text style={styles.title}>正在检查权限</Text>
+          </View>
+        ) : (
+          <HomeScreen
+            accountId={accountId}
+            alertDialog={alertDialog}
+            continuousApplication={continuousApplication}
+            isSigningOut={isSigningOut}
+            onRequestPermission={handleRequestPermission}
+            onSignOut={handleSignOut}
+            pushToTalkApplication={pushToTalkApplication}
+            reminder={reminder}
+            scheduleService={scheduleService}
+            timezone={Intl.DateTimeFormat().resolvedOptions().timeZone}
+            username={username}
+          />
+        )
       ) : (
         <View style={styles.authenticatedScreen}>
           <Text style={styles.title}>

@@ -65,6 +65,7 @@ def test_agent_tool_definitions_have_unique_expected_names() -> None:
         "schedule_delete",
         "location_search",
         "request_user_input",
+        "end_conversation",
     )
     assert len(names) == len(set(names))
 
@@ -78,8 +79,6 @@ def test_request_user_input_definition_has_strict_control_schema() -> None:
     assert definition.parameters["required"] == [
         "question_kind",
         "speech_text",
-        "required_response",
-        "candidates",
     ]
     assert definition.parameters["additionalProperties"] is False
     assert isinstance(properties, dict)

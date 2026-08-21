@@ -6,6 +6,7 @@ import json
 import pytest
 
 from timeflow.intelligence.location import (
+    ClientLocation,
     Coordinate,
     CurrentArea,
     LocationConfigurationError,
@@ -13,6 +14,7 @@ from timeflow.intelligence.location import (
     LocationProtocolError,
     LocationSearchContext,
     ProviderLocationCandidate,
+    build_lazy_location_search_tool,
     build_location_search_tool,
     location_search_definition,
 )
@@ -172,5 +174,58 @@ def test_tool_result_never_contains_the_hidden_current_coordinate() -> None:
 
         assert "31.22846" not in result
         assert "121.47822" not in result
+
+    asyncio.run(scenario())
+
+
+class FlakyReversePort(SearchPort):
+    """Fail the first reverse call, then succeed -- for retry-after-outage coverage."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self.reverse_calls = 0
+
+    async def reverse(self, coordinate: Coordinate) -> CurrentArea:
+        self.reverse_calls += 1
+        if self.reverse_calls == 1:
+            raise LocationConnectionError("provider briefly unreachable")
+        return CurrentArea("上海市", "上海市")
+
+
+def test_lazy_tool_retries_a_failed_prepare() -> None:
+    """A prepare() failure is not cached, so the next call retries and succeeds."""
+
+    async def scenario() -> None:
+        port = FlakyReversePort(tuple(_candidate(index) for index in range(1, 2)))
+        service = LocationSearchService(port)
+        tool = build_lazy_location_search_tool(
+            service, ClientLocation(Coordinate(31.22846, 121.47822, "wgs84"))
+        )
+
+        first = json.loads(await tool.execute({"query": "虹桥"}))
+        second = json.loads(await tool.execute({"query": "虹桥"}))
+
+        assert first == {"status": "provider_unavailable", "candidates": []}
+        assert second["status"] == "ok"
+        assert port.reverse_calls == 2
+
+    asyncio.run(scenario())
+
+
+def test_lazy_tool_caches_a_successful_prepare() -> None:
+    """A successful prepare() is cached, so a later call does not re-prepare."""
+
+    async def scenario() -> None:
+        port = FlakyReversePort(tuple(_candidate(index) for index in range(1, 2)))
+        port.reverse_calls = 1  # skip the scripted first-call failure: reverse succeeds now
+        service = LocationSearchService(port)
+        tool = build_lazy_location_search_tool(
+            service, ClientLocation(Coordinate(31.22846, 121.47822, "wgs84"))
+        )
+
+        assert json.loads(await tool.execute({"query": "虹桥"}))["status"] == "ok"
+        assert json.loads(await tool.execute({"query": "静安"}))["status"] == "ok"
+
+        assert port.reverse_calls == 2
 
     asyncio.run(scenario())

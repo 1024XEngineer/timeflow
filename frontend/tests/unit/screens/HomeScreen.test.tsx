@@ -9,16 +9,27 @@ import type {
 import type { ScheduleCalendarReadService } from '../../../src/features/schedule/application';
 import { HomeScreen } from '../../../src/screens/HomeScreen';
 
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ bottom: 0, left: 0, right: 0, top: 0 }),
+}));
+
 jest.mock('../../../src/features/assistant/presentation/AssistantVoiceOverlay', () => ({
   AssistantVoiceOverlay: () => null,
 }));
 
 class FakeAssistantApplication implements AssistantApplicationPort {
   private command: AppliedCommand | null = null;
+  private scheduleDataRevision = 0;
   private readonly listeners = new Set<(state: ConversationTurnState) => void>();
 
   apply(command: AppliedCommand) {
     this.command = command;
+    this.scheduleDataRevision += 1;
+    for (const listener of this.listeners) listener({ phase: 'idle' });
+  }
+
+  applyCategoryUpdate() {
+    this.scheduleDataRevision += 1;
     for (const listener of this.listeners) listener({ phase: 'idle' });
   }
 
@@ -26,6 +37,7 @@ class FakeAssistantApplication implements AssistantApplicationPort {
   dispose = () => {};
   endTurn = async () => {};
   getLastAppliedCommand = () => this.command;
+  getScheduleDataRevision = () => this.scheduleDataRevision;
   getReplyText = () => null;
   getMessages = () => [];
   getSoundLevel = () => null;
@@ -56,9 +68,12 @@ describe('HomeScreen calendar refresh', () => {
       <HomeScreen
         accountId="account-a"
         continuousApplication={continuousApplication}
+        alertDialog={{ show: async () => {} }}
         isSigningOut={false}
+        onRequestPermission={() => {}}
         onSignOut={async () => {}}
         pushToTalkApplication={pushToTalkApplication}
+        reminder={{ onPermissionBlocked: () => () => {} } as never}
         scheduleService={scheduleService}
         timezone="Asia/Shanghai"
         username="Sarah"
@@ -81,6 +96,13 @@ describe('HomeScreen calendar refresh', () => {
 
     await waitFor(() => expect(scheduleService.getSchedulesByRange).toHaveBeenCalledTimes(3));
     await waitFor(() => expect(scheduleService.getLocationSchedules).toHaveBeenCalledTimes(3));
+
+    act(() => {
+      pushToTalkApplication.applyCategoryUpdate();
+    });
+
+    await waitFor(() => expect(scheduleService.getSchedulesByRange).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(scheduleService.getLocationSchedules).toHaveBeenCalledTimes(4));
     expect(scheduleService.getSchedulesByRange).toHaveBeenLastCalledWith(
       expect.objectContaining({ accountId: 'account-a' }),
     );

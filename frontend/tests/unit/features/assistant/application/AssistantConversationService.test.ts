@@ -68,6 +68,9 @@ function createFakeConnection() {
   return {
     closeCalls,
     connection,
+    emitAudioFrame: (chunk: ArrayBuffer) => {
+      for (const handler of audioHandlers) handler(chunk);
+    },
     emitClose: (event: { code: number; reason: string }) => {
       for (const handler of closeHandlers) handler(event);
     },
@@ -146,7 +149,6 @@ describe('AssistantConversationService', () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
     const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
-
     const turn = service.startTurn();
     await flushAsync();
     fake.emitMessage({
@@ -163,13 +165,40 @@ describe('AssistantConversationService', () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
     const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
-
     const turn = service.startTurn();
     await flushAsync();
     fake.emitClose({ code: 1006, reason: '' });
 
     await expect(turn).resolves.toBeUndefined();
     expect(service.getState()).toEqual({ message: '连接已断开（1006）', phase: 'error' });
+  });
+
+  it('unsubscribes the old push-to-talk listeners after a mode-switch disconnect', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    await completeStreamStart(fake, service.startTurn());
+    // AuthenticatedWebSocketClient 切到 continuous 时会关掉当前这条 push_to_talk 连接。
+    fake.emitClose({ code: 1000, reason: '' });
+    expect(fake.unsubscribeCalls).toEqual({ audio: 1, close: 1, message: 1 });
+
+    // 新连接上的 TTS：旧服务不能再收到，否则会和连续对话服务重叠播放。
+    fake.emitMessage({
+      audio_id: 'audio_002',
+      conversation_id: 'conv_002',
+      payload: {
+        format: 'pcm_s16le',
+        purpose: 'reply',
+        sample_rate_hz: 24000,
+        speech_text: '',
+      },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    fake.emitAudioFrame(new ArrayBuffer(4));
+
+    expect(deps.playback.startStream).not.toHaveBeenCalled();
+    expect(deps.playback.pushChunk).not.toHaveBeenCalled();
   });
 
   it('endTurn does not hang waiting on a startTurn that never got voice.stream.started', async () => {
@@ -263,10 +292,129 @@ describe('AssistantConversationService', () => {
     expect(service.getLastAppliedCommand()).toBeNull();
   });
 
+  it('keeps applying queued command results even if a subscriber listener throws', async () => {
+    // markScheduleDataChanged() synchronously notifies every subscriber; a listener
+    // that throws (e.g. a buggy re-render) rejects applyCommandResultLocally()'s
+    // promise. queueCommandResult() must neutralize that with .catch(() => {})
+    // chained in the same statement (same idiom as
+    // AssistantContinuousConversationService/chainPlayback) -- deferring the catch
+    // leaves the rejection unhandled for a few microtask ticks, which crashes the
+    // process outright (reproduced while writing this test, before adding the
+    // immediate .catch()).
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    const turn = service.startTurn();
+    await completeStreamStart(fake, turn);
+    // handleMessage's own setState() notifies once synchronously before
+    // applyCommandResultLocally's markScheduleDataChanged() notifies again
+    // asynchronously; only the second one is the one queueCommandResult's chain
+    // needs to survive.
+    let notifyCount = 0;
+    const unsubscribe = service.subscribe(() => {
+      notifyCount += 1;
+      if (notifyCount === 2) {
+        throw new Error('listener boom');
+      }
+    });
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_1',
+      payload: { operation: 'create_schedule', schedule: { id: 'a' }, status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+    unsubscribe();
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_2',
+      payload: { operation: 'create_schedule', schedule: { id: 'b' }, status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getLastAppliedCommand()).toEqual(
+      expect.objectContaining({ operation: 'create_schedule', schedule: { id: 'b' } }),
+    );
+  });
+
+  it('serializes local writes so a batch of back-to-back command results cannot race', async () => {
+    // Regression test: a single utterance can make the model call several tools in
+    // one turn, so voice.command.result messages can arrive only milliseconds
+    // apart. Each write opens its own withExclusiveTransactionAsync() on the real
+    // SQLite adapter -- running two at once opens two native connections that
+    // fight over the same exclusive lock ("database is locked"), and the loser's
+    // write is silently dropped even though the cloud already committed it.
+    // queueCommandResult() must serialize these instead of firing them
+    // concurrently.
+    const fake = createFakeConnection();
+    const order: string[] = [];
+    let resolveFirst: (() => void) | undefined;
+    let inFlight = 0;
+    let overlapped = false;
+    let callCount = 0;
+    const deps = createDeps({
+      applyCommandResult: async () => {
+        callCount += 1;
+        inFlight += 1;
+        if (inFlight > 1) overlapped = true;
+        if (callCount === 1) {
+          order.push('first-start');
+          await new Promise<void>((resolve) => {
+            resolveFirst = resolve;
+          });
+          order.push('first-end');
+        } else {
+          order.push('second-start');
+          order.push('second-end');
+        }
+        inFlight -= 1;
+      },
+      connection: fake.connection,
+    });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    const turn = service.startTurn();
+    await completeStreamStart(fake, turn);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_1',
+      payload: { operation: 'create_schedule', schedule: { id: 'a' }, status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_2',
+      payload: { operation: 'create_schedule', schedule: { id: 'b' }, status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    // The second write must not have started yet -- the first is still stuck
+    // mid-transaction, waiting on resolveFirst.
+    expect(order).toEqual(['first-start']);
+    expect(overlapped).toBe(false);
+
+    resolveFirst?.();
+    await flushAsync();
+
+    expect(order).toEqual(['first-start', 'first-end', 'second-start', 'second-end']);
+    expect(overlapped).toBe(false);
+    expect(fake.sent).toContainEqual(
+      expect.objectContaining({ message_id: 'msg_1', type: 'message.ack' }),
+    );
+    expect(fake.sent).toContainEqual(
+      expect.objectContaining({ message_id: 'msg_2', type: 'message.ack' }),
+    );
+  });
+
   it('patches an asynchronous category update without requiring a revision change', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
     const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+    expect(service.getScheduleDataRevision()).toBe(0);
 
     const turn = service.startTurn();
     await completeStreamStart(fake, turn);
@@ -281,6 +429,7 @@ describe('AssistantConversationService', () => {
       'schedule_001',
       'work',
     );
+    expect(service.getScheduleDataRevision()).toBe(1);
   });
 
   it('buffers a category event that arrives before the command result', async () => {

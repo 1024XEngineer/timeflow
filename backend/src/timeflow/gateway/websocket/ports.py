@@ -2,7 +2,7 @@
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Literal, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,4 +82,17 @@ class AudioSink(Protocol):
 
     async def consume(self, chunks: AsyncIterator[bytes], stream: StreamContext) -> None:
         """Drain the chunk stream; returning means this stream is finished."""
+        ...
+
+
+@runtime_checkable
+class AudioSessionLifecycle(Protocol):
+    """Optional session-level lifecycle supported by stateful audio sinks."""
+
+    async def interrupt(self, session_id: str, reason: str) -> None:
+        """Stop output and provider work for the current turn."""
+        ...
+
+    async def close_session(self, session_id: str) -> None:
+        """Release all session-scoped state after disconnect."""
         ...

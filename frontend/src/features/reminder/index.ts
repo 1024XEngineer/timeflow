@@ -18,9 +18,27 @@ export type {
   ReminderTrigger,
   ReminderTriggerReason,
   ReminderType,
+  GeofenceTransition,
+  GeofenceWatchMode,
+  StrengthDeliveryPlan,
 } from './domain';
-export { DEFAULT_SNOOZE_MINUTES } from './domain';
+export {
+  DEFAULT_SNOOZE_MINUTES,
+  distanceMeters,
+  evaluateGeofence,
+  isSnoozeActive,
+  isSnoozeExpired,
+  isTimeWindowReached,
+  resolveEffectiveTriggerAt,
+  resolveGeofenceCenter,
+  resolveSnoozeUntil,
+  resolveStrengthDeliveryPlan,
+  resolveTimeTriggerAt,
+  resolveWatchMode,
+} from './domain';
 export type {
+  AlarmNativeDisposition,
+  AlarmNativeEvent,
   AlarmScheduleReceipt,
   AlarmScheduleRequest,
   AlarmSchedulerPort,
@@ -34,9 +52,15 @@ export type {
   LocalTimeTick,
   LocationMonitorEvent,
   LocationMonitorPort,
+  LocationRebuildTarget,
   LocationWatchHandle,
   LocationWatchMode,
   LocationWatchRequest,
+  OemGuidance,
+  OemManufacturer,
+  AlertDialogButton,
+  AlertDialogPort,
+  AlertDialogRequest,
   PopupPort,
   PopupReceipt,
   PopupRequest,
@@ -47,6 +71,7 @@ export type {
   ReminderDeliveryPort,
   ReminderDispositionSyncPort,
   ReminderDispositionSyncReceipt,
+  ReminderPermissionBlockedEvent,
   ReminderPresentationAction,
   ReminderPresentationReceipt,
   ReminderPresenterPort,
@@ -64,11 +89,18 @@ export type {
 } from './application';
 export { LocalReminderApplication } from './application';
 export {
-  MockLocalScheduleReader,
-  MockReminderApplication,
-  MockReminderDispositionSync,
-  MockReminderStateStore,
-  MOCK_REMINDER_SCHEDULES,
+  LocalReminderDelivery,
+  LocalReminderDispositionSync,
+  LocalReminderRecovery,
   MemoryReminderStateStore,
+  NoopPopup,
+  SqliteLocalScheduleReader,
+  SqliteReminderStateStore,
 } from './data/local';
-export { MockReminderPresenter, useReminderPermissionsOnLaunch } from './presentation';
+export { ReminderDispositionHttpSync, ReminderDispositionSyncResponseError } from './data/http';
+export {
+  AlertReminderPresenter,
+  PermissionOnboardingScreen,
+  useReminderPermissionNudge,
+} from './presentation';
+export type { ReminderActionHandler, ReminderViewModel } from './presentation';

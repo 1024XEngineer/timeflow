@@ -18,6 +18,7 @@ import { MemoryReminderStateStore } from '../../../../../src/features/reminder/d
 import type {
   LocalReminderSchedule,
   ReminderRuntimeState,
+  ReminderStrength,
 } from '../../../../../src/features/reminder/domain';
 
 /** 事件订阅回调是 fire-and-forget（void handleNativeAlarmEvent(event)），背后
@@ -162,10 +163,18 @@ function createDeps(
           battery_optimization: true,
           location_foreground: true,
           location_background: true,
+          microphone: true,
         },
         background_execution: true,
+        oemGuidance: {
+          manufacturer: null,
+          autostartGuided: false,
+          backgroundPopupGuided: false,
+          lastOverlayFailed: false,
+        },
       })),
       onAppActive: jest.fn(() => () => {}),
+      openOemSettings: jest.fn(async () => true),
       openSettings: jest.fn(async () => true),
       requestPermission: jest.fn(async () => true),
     },
@@ -246,7 +255,7 @@ describe('LocalReminderApplication', () => {
       expect(ackOrder).toBeGreaterThan(submitOrder as number);
     });
 
-    it('does not ack anything when persisting one row in the batch fails', async () => {
+    it('acks locally persisted rows when cloud sync remains pending', async () => {
       const rows: AlarmNativeDisposition[] = [
         {
           schedule_id: 's1',
@@ -273,8 +282,13 @@ describe('LocalReminderApplication', () => {
       });
       const app = new LocalReminderApplication(deps);
 
-      await expect(app.start()).rejects.toThrow('sync failed');
-      expect(alarms.ackNativeDispositions).not.toHaveBeenCalled();
+      await app.start();
+
+      expect(alarms.ackNativeDispositions).toHaveBeenCalledWith(['s1', 's2']);
+      await expect(deps.state.read('s2')).resolves.toMatchObject({
+        reminder_disposition_state: 'confirmed',
+        sync_status: 'pending',
+      });
     });
 
     it('does nothing when the native buffer has no pending rows', async () => {
@@ -433,6 +447,69 @@ describe('LocalReminderApplication', () => {
       await expect(deps.state.read('s1')).resolves.toMatchObject({
         reminder_disposition_state: 'confirmed',
         next_trigger_at: null,
+      });
+    });
+
+    it('reports foreground sync failure after persisting confirmation and releasing delivery', async () => {
+      const schedule = fixtureSchedule({ id: 's1' });
+      const deps = createDeps({
+        schedules: new FakeScheduleReader([schedule]),
+        dispositionSync: {
+          submitConfirmed: jest.fn(async () => {
+            throw new Error('network unavailable');
+          }),
+        },
+      });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      await app.deliver({
+        reminder_id: 'r1',
+        schedule_id: 's1',
+        reason: 'at_time',
+        triggered_at: '2026-08-18T10:00:00.000Z',
+      });
+
+      await expect(app.confirm('s1', '2026-08-18T10:05:00.000Z')).rejects.toThrow(
+        'network unavailable',
+      );
+      await expect(deps.state.read('s1')).resolves.toMatchObject({
+        reminder_disposition_state: 'confirmed',
+        sync_status: 'pending',
+      });
+
+      await deps.state.write('s1', {
+        ...emptyRuntime(),
+        next_trigger_at: '2026-08-18T10:10:00.000Z',
+      });
+      await app.handleTime({ observed_at: '2026-08-18T10:10:00.000Z' });
+
+      expect(deps.vibration.vibrate).toHaveBeenCalledTimes(2);
+    });
+
+    it('retries a persisted pending confirmation during startup rebuild', async () => {
+      const pendingRuntime: ReminderRuntimeState = {
+        ...emptyRuntime(),
+        reminder_disposition_state: 'confirmed',
+        disposition_updated_at: '2026-08-18T10:05:00.000Z',
+        sync_status: 'pending',
+      };
+      const schedule = fixtureSchedule({ id: 's1', runtime: pendingRuntime });
+      const deps = createDeps({ schedules: new FakeScheduleReader([schedule]) });
+      await deps.state.write('s1', pendingRuntime);
+      const app = new LocalReminderApplication(deps);
+
+      await app.start();
+
+      expect(deps.dispositionSync.submitConfirmed).toHaveBeenCalledWith({
+        schedule_id: 's1',
+        state: 'confirmed',
+        updated_at: '2026-08-18T10:05:00.000Z',
+        snoozed_until: null,
+        sync_status: 'pending',
+      });
+      await expect(deps.state.read('s1')).resolves.toMatchObject({
+        reminder_disposition_state: 'confirmed',
+        sync_status: 'synced',
       });
     });
 
@@ -726,6 +803,41 @@ describe('LocalReminderApplication', () => {
     });
   });
 
+  describe('native alarm ring channels by strength', () => {
+    // 全屏三档都要弹（静音也要让用户看得见），vibrate/sound 才按强度递进：
+    // 低=都不要、中=只震动、高=震动+出声。
+    const cases: [ReminderStrength, { vibrate: boolean; sound: boolean; full_screen: boolean }][] =
+      [
+        ['low', { vibrate: false, sound: false, full_screen: true }],
+        ['medium', { vibrate: true, sound: false, full_screen: true }],
+        ['high', { vibrate: true, sound: true, full_screen: true }],
+      ];
+    it.each(cases)('%s strength schedules the native alarm with %j', async (strength, expected) => {
+      const schedule = fixtureSchedule({
+        id: 's1',
+        reminder: {
+          reminder_type: 'at_time',
+          reminder_trigger_at: '2026-08-18T10:00:00.000Z',
+          reminder_offset_minutes: null,
+          reminder_strength: strength,
+        },
+      });
+      const { alarms, scheduleCalls } = createFakeAlarms();
+      const deps = createDeps({ alarms, schedules: new FakeScheduleReader([schedule]) });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      // start() 的 rebuild 已经把这条日程排过一次；重置掉，只看接下来这次
+      // register() 调用实际传给原生的 vibrate/sound/full_screen。
+      scheduleCalls.length = 0;
+
+      const registration = await app.register(schedule);
+
+      expect(registration.alarm_id).not.toBeNull();
+      expect(scheduleCalls).toHaveLength(1);
+      expect(scheduleCalls[0]).toMatchObject(expected);
+    });
+  });
+
   describe('native alarm events (dismissed/snoozed) routed through subscribe', () => {
     it('routes a native "snoozed" event to snooze() and "dismissed" to confirm()', async () => {
       const schedule = fixtureSchedule({ id: 's1' });
@@ -771,6 +883,170 @@ describe('LocalReminderApplication', () => {
 
       await app.stop();
       expect(listenerRef.current).toBeNull();
+    });
+  });
+
+  describe('permission gap reporting', () => {
+    function statusWith(
+      overrides: Partial<
+        Record<'exact_alarm' | 'overlay' | 'location_foreground' | 'location_background', boolean>
+      >,
+    ) {
+      return {
+        platform: 'android' as const,
+        supported: true,
+        permissions: {
+          notifications: true,
+          exact_alarm: true,
+          overlay: true,
+          full_screen: true,
+          battery_optimization: true,
+          location_foreground: true,
+          location_background: true,
+          microphone: true,
+          ...overrides,
+        },
+        background_execution: true,
+        oemGuidance: {
+          manufacturer: null,
+          autostartGuided: false,
+          backgroundPopupGuided: false,
+          lastOverlayFailed: false,
+        },
+      };
+    }
+
+    it('notifies onPermissionBlocked with the permissions a newly-registered time schedule is missing', async () => {
+      const schedule = fixtureSchedule({ id: 's1' });
+      const deps = createDeps({
+        device: {
+          getStatus: jest.fn(async () => statusWith({ exact_alarm: false, overlay: false })),
+          onAppActive: jest.fn(() => () => {}),
+          openOemSettings: jest.fn(async () => true),
+          openSettings: jest.fn(async () => true),
+          requestPermission: jest.fn(async () => true),
+        },
+        schedules: new FakeScheduleReader([schedule]),
+      });
+      const app = new LocalReminderApplication(deps);
+      const listener = jest.fn();
+      app.onPermissionBlocked(listener);
+      await app.start();
+
+      await app.register(schedule);
+      await flushAsync();
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith({
+        schedule_id: 's1',
+        missing: ['exact_alarm', 'overlay'],
+      });
+    });
+
+    it('does not notify when a time schedule has every permission it needs', async () => {
+      const schedule = fixtureSchedule({ id: 's1' });
+      const deps = createDeps({ schedules: new FakeScheduleReader([schedule]) });
+      const app = new LocalReminderApplication(deps);
+      const listener = jest.fn();
+      app.onPermissionBlocked(listener);
+      await app.start();
+
+      await app.register(schedule);
+      await flushAsync();
+
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it('notifies with missing location permissions after registering a location schedule', async () => {
+      const schedule = fixtureSchedule({
+        id: 's1',
+        schedule_type: 'location',
+        latitude: 31.2304,
+        longitude: 121.4737,
+        reminder: {
+          reminder_type: 'arrive_location',
+          reminder_trigger_at: null,
+          reminder_offset_minutes: null,
+          reminder_strength: 'medium',
+        },
+      });
+      const deps = createDeps({
+        device: {
+          getStatus: jest.fn(async () => statusWith({ location_background: false })),
+          onAppActive: jest.fn(() => () => {}),
+          openOemSettings: jest.fn(async () => true),
+          openSettings: jest.fn(async () => true),
+          requestPermission: jest.fn(async () => true),
+        },
+        schedules: new FakeScheduleReader([schedule]),
+      });
+      const app = new LocalReminderApplication(deps);
+      const listener = jest.fn();
+      app.onPermissionBlocked(listener);
+      await app.start();
+
+      await app.register(schedule);
+      await flushAsync();
+
+      expect(listener).toHaveBeenCalledWith({
+        schedule_id: 's1',
+        missing: ['location_background'],
+      });
+    });
+
+    it('does not re-notify for the same schedule during a bulk rebuild', async () => {
+      const schedule = fixtureSchedule({ id: 's1' });
+      const deps = createDeps({
+        device: {
+          getStatus: jest.fn(async () => statusWith({ exact_alarm: false })),
+          onAppActive: jest.fn(() => () => {}),
+          openOemSettings: jest.fn(async () => true),
+          openSettings: jest.fn(async () => true),
+          requestPermission: jest.fn(async () => true),
+        },
+        schedules: new FakeScheduleReader([schedule]),
+      });
+      const app = new LocalReminderApplication(deps);
+      const listener = jest.fn();
+      app.onPermissionBlocked(listener);
+      await app.start();
+
+      await app.register(schedule);
+      await flushAsync();
+      expect(listener).toHaveBeenCalledTimes(1);
+
+      await app.rebuild();
+      await flushAsync();
+
+      // rebuild() re-arms via the batch alarms/location.rebuild() ports, not
+      // scheduleAlarmFor/watchLocationSchedule, so it must not fire again --
+      // otherwise every rebuild (e.g. one triggered by granting some other
+      // permission) would re-prompt for schedules already reported once.
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it('stops notifying once unsubscribed', async () => {
+      const schedule = fixtureSchedule({ id: 's1' });
+      const deps = createDeps({
+        device: {
+          getStatus: jest.fn(async () => statusWith({ exact_alarm: false })),
+          onAppActive: jest.fn(() => () => {}),
+          openOemSettings: jest.fn(async () => true),
+          openSettings: jest.fn(async () => true),
+          requestPermission: jest.fn(async () => true),
+        },
+        schedules: new FakeScheduleReader([schedule]),
+      });
+      const app = new LocalReminderApplication(deps);
+      const listener = jest.fn();
+      const unsubscribe = app.onPermissionBlocked(listener);
+      unsubscribe();
+      await app.start();
+
+      await app.register(schedule);
+      await flushAsync();
+
+      expect(listener).not.toHaveBeenCalled();
     });
   });
 });

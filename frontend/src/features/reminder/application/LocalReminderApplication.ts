@@ -3,11 +3,13 @@ import type {
   ReminderApplicationPort,
   ReminderApplicationResult,
   ReminderConfirmedDisposition,
+  ReminderPermissionBlockedEvent,
   ReminderSnoozeRequest,
   LocationMonitorEvent,
   LocationWatchHandle,
   AlarmScheduleReceipt,
   AlarmNativeEvent,
+  DevicePermission,
 } from './interfaces';
 import type {
   DeliveryChannel,
@@ -60,6 +62,9 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   /** 原生已响铃、由原生 UI 承接展示的日程；JS 不再叠加弹窗/TTS。 */
   private readonly nativePresented = new Set<string>();
   private readonly inFlight = new Set<Promise<unknown>>();
+  private readonly permissionBlockedListeners = new Set<
+    (event: ReminderPermissionBlockedEvent) => void
+  >();
   private opChain: Promise<void> = Promise.resolve();
   /** 每次 stop / 失败回滚自增；停机前开始的工作持有旧世代，重启后仍视为已取消。 */
   private generation = 0;
@@ -84,6 +89,13 @@ export class LocalReminderApplication implements ReminderApplicationPort {
 
   async rebuild(): Promise<readonly ReminderRegistration[]> {
     return this.enqueueRebuild();
+  }
+
+  onPermissionBlocked(listener: (event: ReminderPermissionBlockedEvent) => void): () => void {
+    this.permissionBlockedListeners.add(listener);
+    return () => {
+      this.permissionBlockedListeners.delete(listener);
+    };
   }
 
   async handleTime(tick: { observed_at: string }): Promise<void> {
@@ -165,11 +177,11 @@ export class LocalReminderApplication implements ReminderApplicationPort {
       }
 
       this.unsubscribePresenter = this.dependencies.presenter.onAction((event) => {
-        void this.handlePresentationAction(event.schedule_id, event.action);
+        void this.handlePresentationAction(event.schedule_id, event.action).catch(() => undefined);
       });
       this.unsubscribeAlarms =
         this.dependencies.alarms.subscribe?.((event) => {
-          void this.handleNativeAlarmEvent(event);
+          void this.handleNativeAlarmEvent(event).catch(() => undefined);
         }) ?? null;
 
       // IntervalTimeListener 不在 start 时同步打点；先挂上 listener id 再 rebuild。
@@ -288,6 +300,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     const schedules = await this.dependencies.schedules.listReminderSchedules();
     const active: LocalReminderSchedule[] = [];
     for (const raw of schedules) {
+      await this.retryPendingConfirmation(raw);
       const merged = await this.withStoredRuntime(raw);
       if (this.isSchedulable(merged)) {
         active.push(merged);
@@ -349,6 +362,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
           trigger_at: triggerAt,
           title: schedule.title,
           exact: true,
+          ...alarmRingChannels(schedule),
         };
       })
       .filter((request): request is NonNullable<typeof request> => request != null);
@@ -390,53 +404,89 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     scheduleId: string,
     confirmedAt: string,
     generation: number,
+    tolerateSyncFailure = false,
   ): Promise<ReminderApplicationResult> {
     if (!this.isLive(generation)) {
       return { accepted: false, schedule_id: scheduleId, disposition: null };
     }
-    await this.teardownDelivery(scheduleId);
+    try {
+      await this.teardownDelivery(scheduleId);
 
-    const disposition: ReminderConfirmedDisposition = {
-      schedule_id: scheduleId,
-      state: 'confirmed',
-      updated_at: confirmedAt,
-      snoozed_until: null,
-      sync_status: 'pending',
-    };
-    await this.dependencies.state.setDisposition(scheduleId, disposition);
+      const disposition: ReminderConfirmedDisposition = {
+        schedule_id: scheduleId,
+        state: 'confirmed',
+        updated_at: confirmedAt,
+        snoozed_until: null,
+        sync_status: 'pending',
+      };
+      await this.dependencies.state.setDisposition(scheduleId, disposition);
 
-    const current = (await this.readRuntime(scheduleId)) ?? emptyRuntime();
-    await this.patchRuntime(scheduleId, {
-      ...current,
-      reminder_disposition_state: 'confirmed',
-      snoozed_until: null,
-      next_trigger_at: null,
-      disposition_updated_at: confirmedAt,
-      sync_status: 'pending',
-    });
+      const current = (await this.readRuntime(scheduleId)) ?? emptyRuntime();
+      await this.patchRuntime(scheduleId, {
+        ...current,
+        reminder_disposition_state: 'confirmed',
+        snoozed_until: null,
+        next_trigger_at: null,
+        disposition_updated_at: confirmedAt,
+        sync_status: 'pending',
+      });
 
-    await this.dropRegistration(scheduleId);
+      await this.dropRegistration(scheduleId);
 
-    if (!this.isLive(generation)) {
-      this.activeDeliveries.delete(scheduleId);
-      return { accepted: false, schedule_id: scheduleId, disposition: null };
-    }
-
-    const sync = await this.dependencies.dispositionSync.submitConfirmed(disposition);
-    const synced: ReminderDisposition = {
-      ...disposition,
-      sync_status: sync.accepted ? 'synced' : 'pending',
-    };
-    if (sync.accepted) {
-      await this.dependencies.state.setDisposition(scheduleId, synced);
-      const runtime = await this.readRuntime(scheduleId);
-      if (runtime != null) {
-        await this.patchRuntime(scheduleId, { ...runtime, sync_status: 'synced' });
+      if (!this.isLive(generation)) {
+        return { accepted: false, schedule_id: scheduleId, disposition: null };
       }
-    }
 
-    this.activeDeliveries.delete(scheduleId);
-    return { accepted: true, schedule_id: scheduleId, disposition: synced };
+      const synced = await this.syncConfirmedDisposition(disposition, tolerateSyncFailure);
+      return { accepted: true, schedule_id: scheduleId, disposition: synced };
+    } finally {
+      this.activeDeliveries.delete(scheduleId);
+    }
+  }
+
+  private async retryPendingConfirmation(schedule: LocalReminderSchedule): Promise<void> {
+    const runtime = schedule.runtime;
+    if (
+      runtime.reminder_disposition_state !== 'confirmed' ||
+      runtime.sync_status !== 'pending' ||
+      runtime.disposition_updated_at == null
+    ) {
+      return;
+    }
+    await this.syncConfirmedDisposition(
+      {
+        schedule_id: schedule.id,
+        state: 'confirmed',
+        updated_at: runtime.disposition_updated_at,
+        snoozed_until: null,
+        sync_status: 'pending',
+      },
+      true,
+    );
+  }
+
+  private async syncConfirmedDisposition(
+    disposition: ReminderConfirmedDisposition,
+    tolerateFailure = false,
+  ): Promise<ReminderConfirmedDisposition> {
+    try {
+      const sync = await this.dependencies.dispositionSync.submitConfirmed(disposition);
+      if (!sync.accepted || sync.schedule_id !== disposition.schedule_id) return disposition;
+
+      const synced: ReminderConfirmedDisposition = {
+        ...disposition,
+        sync_status: 'synced',
+      };
+      await this.dependencies.state.setDisposition(disposition.schedule_id, synced);
+      const runtime = await this.readRuntime(disposition.schedule_id);
+      if (runtime != null) {
+        await this.patchRuntime(disposition.schedule_id, { ...runtime, sync_status: 'synced' });
+      }
+      return synced;
+    } catch (error) {
+      if (!tolerateFailure) throw error;
+      return disposition;
+    }
   }
 
   private async snoozeInternal(
@@ -486,6 +536,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
           trigger_at: snoozedUntil,
           title: schedule.title,
           exact: true,
+          ...alarmRingChannels(schedule),
         });
         if (!this.isLive(generation)) {
           if (receipt.scheduled) {
@@ -777,7 +828,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
 
     for (const row of rows) {
       if (row.state === 'confirmed') {
-        await this.confirmInternal(row.schedule_id, row.updated_at, generation);
+        await this.confirmInternal(row.schedule_id, row.updated_at, generation, true);
         continue;
       }
       if (row.state === 'snoozed') {
@@ -938,7 +989,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     const mode = resolveWatchMode(schedule);
     const center = resolveGeofenceCenter(schedule, mode);
     if (center == null) return null;
-    return this.dependencies.location.watch(
+    const handle = await this.dependencies.location.watch(
       {
         schedule_id: schedule.id,
         center,
@@ -950,6 +1001,8 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         void this.handleLocationMonitorEvent(event);
       },
     );
+    void this.reportPermissionGaps(schedule.id, ['location_foreground', 'location_background']);
+    return handle;
   }
 
   private async scheduleAlarmFor(
@@ -957,12 +1010,38 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   ): Promise<AlarmScheduleReceipt | null> {
     const triggerAt = resolveEffectiveTriggerAt(schedule);
     if (triggerAt == null) return null;
-    return this.dependencies.alarms.schedule({
+    const receipt = await this.dependencies.alarms.schedule({
       schedule_id: schedule.id,
       trigger_at: triggerAt,
       title: schedule.title,
       exact: true,
+      ...alarmRingChannels(schedule),
     });
+    void this.reportPermissionGaps(schedule.id, [
+      'exact_alarm',
+      'overlay',
+      'full_screen',
+      'battery_optimization',
+    ]);
+    return receipt;
+  }
+
+  /**
+   * 单条日程刚注册完，读一遍当前权限状态，把这条日程依赖、但还没给的权限报给
+   * 展示层。只在增量注册（registerInternal）路径调用，不在批量 rebuild 里调，
+   * 否则每次 rebuild（比如别的权限刚被授予触发的那次）都会给老日程重弹一遍。
+   */
+  private async reportPermissionGaps(
+    scheduleId: string,
+    permissions: readonly DevicePermission[],
+  ): Promise<void> {
+    const status = await this.dependencies.device.getStatus();
+    if (status.platform !== 'android') return;
+    const missing = permissions.filter((permission) => !status.permissions[permission]);
+    if (missing.length === 0) return;
+    for (const listener of this.permissionBlockedListeners) {
+      listener({ schedule_id: scheduleId, missing });
+    }
   }
 
   private buildTrigger(
@@ -1011,6 +1090,20 @@ function toDeliveryRequest(
     strength: schedule.reminder?.reminder_strength ?? 'medium',
     trigger,
   };
+}
+
+/**
+ * 原生闹钟响铃时要不要震动/出声/弹全屏止铃界面。全屏三档都要弹（时间型提醒
+ * 没有别的可见形式，静音也得让用户看到），vibrate/sound 复用 JS 侧的强度
+ * 换算表：低=都不要、中=只震动、高=震动+出声。
+ */
+function alarmRingChannels(schedule: LocalReminderSchedule): {
+  vibrate: boolean;
+  sound: boolean;
+  full_screen: boolean;
+} {
+  const plan = resolveStrengthDeliveryPlan(schedule.reminder?.reminder_strength ?? 'medium');
+  return { vibrate: plan.useVibration, sound: plan.useAudio, full_screen: true };
 }
 
 function toTimeReason(schedule: LocalReminderSchedule): ReminderTriggerReason {

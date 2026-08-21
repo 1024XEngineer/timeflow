@@ -19,6 +19,7 @@ from timeflow.business.calendar import (
 )
 from timeflow.business.calendar.service import ScheduleApplicationService
 from timeflow.business.health import HealthService
+from timeflow.composition import build_composed_voice_agent
 from timeflow.data.account_uow import SqlAlchemyAuthUnitOfWork
 from timeflow.data.database import build_engine, build_session_factory
 from timeflow.data.schedule_unit_of_work import SqlAlchemyScheduleUnitOfWork
@@ -39,6 +40,7 @@ from timeflow.gateway.websocket.endpoint import (
 )
 from timeflow.gateway.websocket.handlers.agent_audio import AgentAudioSink
 from timeflow.gateway.websocket.handlers.agent_result import WebSocketResultSink
+from timeflow.gateway.websocket.handlers.composed_audio import ComposedAgentAudioSink
 from timeflow.gateway.websocket.handlers.message_ack import handle_message_ack
 from timeflow.gateway.websocket.handlers.session import SessionHandshake
 from timeflow.gateway.websocket.handlers.voice_stream import VoiceStreamHandlers
@@ -115,15 +117,10 @@ def create_app(
             lambda: SqlAlchemyScheduleUnitOfWork(session_factory)
         )
 
-    # Gated on mode "1": mode "2" never reaches a live turn (see _build_agent below), so
-    # building this client for it would just leak a connection nobody ever closes -- the
-    # mode-2 branch raises before create_app() returns, so lifespan's finally never runs.
+    # Both agent modes share the same owned Tencent HTTP client and location service; the
+    # client is closed by lifespan's finally once the application shuts down.
     location_service: LocationSearchService | None = None
-    if (
-        audio_sink is None
-        and settings.voice_agent_mode == "1"
-        and settings.tencent_maps_is_configured()
-    ):
+    if audio_sink is None and settings.tencent_maps_is_configured():
         owned_http_client = httpx.AsyncClient(timeout=settings.tencent_map_timeout_seconds)
         location_service = LocationSearchService(
             TencentMapsLocationPort(
@@ -160,9 +157,20 @@ def create_app(
     if audio_sink is None:
         assert session_factory is not None
         result_sink = WebSocketResultSink(connections)
-        audio_sink = AgentAudioSink(
-            _build_agent(settings, result_sink, session_factory, location_service)
-        )
+        if settings.voice_agent_mode == "1":
+            audio_sink = AgentAudioSink(
+                _build_realtime_agent(settings, result_sink, session_factory, location_service)
+            )
+        else:
+            audio_sink = ComposedAgentAudioSink(
+                build_composed_voice_agent(
+                    settings,
+                    result_sink,
+                    session_factory=session_factory,
+                    location_service=location_service,
+                    category_event_publisher=result_sink.publish_schedule_category_updated,
+                )
+            )
 
     voice_streams = VoiceStreamHandlers(
         audio_sink,
@@ -219,25 +227,6 @@ def _build_access_token_service(settings: Settings) -> JwtAccessTokenService:
         audience=settings.jwt_audience,
         access_ttl_seconds=settings.jwt_access_ttl_seconds,
     )
-
-
-def _build_agent(
-    settings: Settings,
-    result_sink: WebSocketResultSink,
-    session_factory: sessionmaker[Session],
-    location_service: LocationSearchService | None,
-) -> Agent:
-    """Dispatch on TIMEFLOW_VOICE_AGENT_MODE to the agent backend it selects."""
-    if settings.voice_agent_mode == "1":
-        return _build_realtime_agent(settings, result_sink, session_factory, location_service)
-    if settings.voice_agent_mode == "2":
-        raise RuntimeError(
-            "TIMEFLOW_VOICE_AGENT_MODE=2 selects the LLM+ASR+TTS conversation agent, "
-            "which is not wired into the gateway yet (it does not implement the Agent "
-            "port). Set TIMEFLOW_VOICE_AGENT_MODE=1 to use the realtime agent."
-        )
-    # Settings.from_environment already rejects anything but "1" or "2".
-    raise AssertionError(f"unreachable voice_agent_mode: {settings.voice_agent_mode!r}")
 
 
 def _build_realtime_agent(

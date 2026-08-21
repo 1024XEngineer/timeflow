@@ -19,26 +19,27 @@ export function AppProviders({
   return (
     <AuthProvider controller={authController} invalidationCoordinator={invalidationCoordinator}>
       <AppServicesProvider services={services}>
-        <AuthenticatedRuntime runtime={services.runtime} />
+        <AuthenticatedRuntime services={services} />
         {children}
       </AppServicesProvider>
     </AuthProvider>
   );
 }
 
-function AuthenticatedRuntime({ runtime }: { readonly runtime: AppServices['runtime'] }) {
+function AuthenticatedRuntime({ services }: { readonly services: AppServices }) {
   const { viewState } = useAuth();
+  const isAuthenticated = viewState.status === 'authenticated';
 
   useEffect(() => {
-    if (viewState.status !== 'authenticated') {
+    if (!isAuthenticated) {
       return;
     }
 
-    void runtime.start();
+    void services.runtime.start();
     return () => {
-      void runtime.stop();
+      void services.runtime.stop();
     };
-  }, [runtime, viewState.status]);
+  }, [isAuthenticated, services]);
 
   return null;
 }

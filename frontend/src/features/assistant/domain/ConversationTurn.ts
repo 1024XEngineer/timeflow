@@ -35,6 +35,13 @@ export interface VoiceChatMessage {
   pending?: boolean;
 }
 
+/** 连续对话历史里的一轮：一次用户发言 + 对应的系统回复（可能还没到）。 */
+export interface ConversationTurnRecord {
+  readonly id: string;
+  readonly transcript: string;
+  readonly replyText: string | null;
+}
+
 export interface AppliedCommand {
   operation: string;
   status: string;

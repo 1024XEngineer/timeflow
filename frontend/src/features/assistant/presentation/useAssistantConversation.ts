@@ -14,6 +14,9 @@ export function useAssistantConversation(application: AssistantApplicationPort) 
   const [lastAppliedCommand, setLastAppliedCommand] = useState<AppliedCommand | null>(() =>
     application.getLastAppliedCommand(),
   );
+  const [scheduleDataRevision, setScheduleDataRevision] = useState(
+    () => application.getScheduleDataRevision?.() ?? 0,
+  );
   const [replyText, setReplyText] = useState<string | null>(() => application.getReplyText());
   const [messages, setMessages] = useState<readonly VoiceChatMessage[]>(() =>
     application.getMessages(),
@@ -26,6 +29,7 @@ export function useAssistantConversation(application: AssistantApplicationPort) 
     setTrackedApplication(application);
     setState(application.getState());
     setLastAppliedCommand(application.getLastAppliedCommand());
+    setScheduleDataRevision(application.getScheduleDataRevision?.() ?? 0);
     setReplyText(application.getReplyText());
     setMessages(application.getMessages());
     setSoundLevel(application.getSoundLevel());
@@ -35,6 +39,7 @@ export function useAssistantConversation(application: AssistantApplicationPort) 
     return application.subscribe((next) => {
       setState(next);
       setLastAppliedCommand(application.getLastAppliedCommand());
+      setScheduleDataRevision(application.getScheduleDataRevision?.() ?? 0);
       setReplyText(application.getReplyText());
       setMessages(application.getMessages());
       setSoundLevel(application.getSoundLevel());
@@ -47,6 +52,7 @@ export function useAssistantConversation(application: AssistantApplicationPort) 
     lastAppliedCommand,
     messages,
     replyText,
+    scheduleDataRevision,
     soundLevel,
     startTurn: () => application.startTurn(),
     state,

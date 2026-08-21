@@ -2,11 +2,12 @@ import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
 import { AppRoot } from '../../../src/app/AppRoot';
-import { createScheduleSnapshotPreparation } from '../../../src/app/composition/createScheduleSnapshotPreparation';
 import {
   createAppServices,
   type AppServices,
 } from '../../../src/app/composition/createAppServices';
+import { createScheduleSnapshotPreparation } from '../../../src/app/composition/createScheduleSnapshotPreparation';
+import { LocalScheduleWriter } from '../../../src/features/assistant/data/local/LocalScheduleWriter';
 import type {
   ScheduleSnapshotBootstrapResult,
   ScheduleSnapshotBootstrapService,
@@ -20,9 +21,19 @@ jest.mock('../../../src/infrastructure/database', () => ({
 jest.mock('../../../src/app/composition/createScheduleSnapshotPreparation', () => ({
   createScheduleSnapshotPreparation: jest.fn(),
 }));
-jest.mock('../../../src/features/schedule/data', () => ({ ScheduleLocalRepository: jest.fn() }));
+jest.mock('../../../src/features/schedule/data', () => ({
+  ScheduleLocalRepository: jest.fn().mockImplementation(() => ({
+    getSchedule: jest.fn<() => Promise<null>>().mockResolvedValue(null),
+    listSchedules: jest.fn<() => Promise<never[]>>().mockResolvedValue([]),
+  })),
+}));
 jest.mock('../../../src/features/schedule/application', () => ({
   SqliteScheduleClientService: jest.fn(),
+}));
+jest.mock('../../../src/features/assistant/data/local/LocalScheduleWriter', () => ({
+  LocalScheduleWriter: jest.fn().mockImplementation(() => ({
+    applyCommandResult: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+  })),
 }));
 jest.mock('../../../src/features/schedule/presentation/ScheduleCalendarScreen', () => ({
   ScheduleCalendarScreen: ({
@@ -90,9 +101,16 @@ beforeEach(() => {
   );
   mockedCreateScheduleSnapshotPreparation.mockReset();
   mockedCreateScheduleSnapshotPreparation.mockReturnValue({
-    repository: {},
+    // scheduleReader.refresh() (wired in AppRoot's ready-state effect) calls through to
+    // these two on whatever repository the snapshot preparation hands back, so the stub
+    // needs real methods now, not just an opaque {} -- see SqliteLocalScheduleReader.
+    repository: {
+      getSchedule: jest.fn<() => Promise<null>>().mockResolvedValue(null),
+      listSchedules: jest.fn<() => Promise<never[]>>().mockResolvedValue([]),
+    },
     bootstrap: { ensureLocalSnapshot: mockedEnsureLocalSnapshot },
   } as never);
+  jest.mocked(LocalScheduleWriter).mockClear();
 });
 
 describe('AppRoot', () => {
@@ -105,7 +123,7 @@ describe('AppRoot', () => {
       false,
       '无法恢复登录状态，请重试',
     ],
-    ['renders unauthenticated state', undefined, undefined, false, '登录或注册'],
+    ['renders unauthenticated state', undefined, undefined, false, '登录'],
     [
       'renders authenticated state',
       {
@@ -145,7 +163,7 @@ describe('AppRoot', () => {
     expect(screen.getByText('timeflow_user')).toBeTruthy();
     expect(screen.queryByText(/账号：/)).toBeNull();
     expect(screen.queryByText(/acc_001/)).toBeNull();
-    expect(screen.queryByText('登录或注册')).toBeNull();
+    expect(screen.queryByText('登录')).toBeNull();
     expect(screen.queryByText('opaque-token')).toBeNull();
   });
 
@@ -216,7 +234,7 @@ describe('AppRoot', () => {
 
     render(<AppRoot services={services} />);
 
-    expect(await screen.findByText('登录或注册')).toBeTruthy();
+    expect(await screen.findByText('登录')).toBeTruthy();
     expect(screen.queryByText('日程同步失败')).toBeNull();
   });
 
@@ -287,7 +305,7 @@ describe('AppRoot', () => {
     await screen.findByText('日程同步失败');
     fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
 
-    await waitFor(() => expect(screen.getByText('登录或注册')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('登录')).toBeTruthy());
     expect(controller.getViewState()).toEqual({ status: 'unauthenticated' });
   });
 
@@ -305,7 +323,7 @@ describe('AppRoot', () => {
     await screen.findByText('正在准备日程');
     fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
 
-    await waitFor(() => expect(screen.getByText('登录或注册')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('登录')).toBeTruthy());
     expect(controller.getViewState()).toEqual({ status: 'unauthenticated' });
   });
 
@@ -322,8 +340,123 @@ describe('AppRoot', () => {
     await screen.findByText('日程日历');
     fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
 
-    await waitFor(() => expect(screen.getByText('登录或注册')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('登录')).toBeTruthy());
     expect(controller.getViewState()).toEqual({ status: 'unauthenticated' });
+  });
+
+  it('binds the reminder SQLite adapters and detaches them on sign out', async () => {
+    const services = createController({
+      accountId: 'acc_001',
+      accessToken: 'opaque-token',
+      expiresAt: 200_000,
+      username: 'timeflow_user',
+    });
+    const attachSchedules = jest.spyOn(services.schedules, 'attach');
+    const detachSchedules = jest.spyOn(services.schedules, 'detach');
+    const refreshSchedules = jest.spyOn(services.schedules, 'refresh').mockResolvedValue(undefined);
+    const attachState = jest.spyOn(services.reminderState, 'attach');
+    const detachState = jest.spyOn(services.reminderState, 'detach');
+
+    render(<AppRoot services={services} />);
+
+    await screen.findByText('日程日历');
+    expect(attachSchedules).toHaveBeenCalledWith(expect.anything(), 'acc_001');
+    expect(attachState).toHaveBeenCalledWith(expect.anything(), 'acc_001');
+    expect(refreshSchedules).toHaveBeenCalledTimes(1);
+    expect(LocalScheduleWriter).toHaveBeenCalledWith(expect.anything(), services.schedules);
+
+    fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
+
+    await waitFor(() => expect(screen.getByText('登录')).toBeTruthy());
+    expect(detachSchedules).toHaveBeenCalledTimes(1);
+    expect(detachState).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the permission list instead of the calendar when notifications are not granted', async () => {
+    const services = createController({
+      accountId: 'acc_001',
+      accessToken: 'opaque-token',
+      expiresAt: 200_000,
+      username: 'timeflow_user',
+    });
+    jest.spyOn(services.reminderPorts.device, 'getStatus').mockResolvedValue({
+      platform: 'android',
+      supported: true,
+      permissions: {
+        notifications: false,
+        exact_alarm: true,
+        overlay: true,
+        full_screen: true,
+        battery_optimization: true,
+        location_foreground: true,
+        location_background: true,
+        microphone: true,
+      },
+      background_execution: true,
+      oemGuidance: {
+        manufacturer: null,
+        autostartGuided: false,
+        backgroundPopupGuided: false,
+        lastOverlayFailed: false,
+      },
+    });
+
+    render(<AppRoot services={services} />);
+
+    await screen.findByText('需要这些权限');
+    expect(screen.queryByText('日程日历')).toBeNull();
+    expect(screen.getByLabelText('进入 App').props.accessibilityState.disabled).toBe(true);
+  });
+
+  it('lets the user into the calendar after granting notifications from the permission list', async () => {
+    const services = createController({
+      accountId: 'acc_001',
+      accessToken: 'opaque-token',
+      expiresAt: 200_000,
+      username: 'timeflow_user',
+    });
+    let status = {
+      platform: 'android' as const,
+      supported: true,
+      permissions: {
+        notifications: false,
+        exact_alarm: true,
+        overlay: true,
+        full_screen: true,
+        battery_optimization: true,
+        location_foreground: true,
+        location_background: true,
+        microphone: true,
+      },
+      background_execution: true,
+      oemGuidance: {
+        manufacturer: null,
+        autostartGuided: false,
+        backgroundPopupGuided: false,
+        lastOverlayFailed: false,
+      },
+    };
+    jest.spyOn(services.reminderPorts.device, 'getStatus').mockImplementation(async () => status);
+    jest
+      .spyOn(services.reminderPorts.device, 'requestPermission')
+      .mockImplementation(async (permission) => {
+        status = { ...status, permissions: { ...status.permissions, [permission]: true } };
+        return true;
+      });
+    const rebuild = jest.spyOn(services.reminder, 'rebuild').mockResolvedValue([]);
+
+    render(<AppRoot services={services} />);
+
+    await screen.findByText('需要这些权限');
+    fireEvent.press(screen.getByTestId('permission-action-notifications'));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('进入 App').props.accessibilityState.disabled).toBe(false),
+    );
+    expect(rebuild).toHaveBeenCalledTimes(1);
+
+    fireEvent.press(screen.getByLabelText('进入 App'));
+    await screen.findByText('日程日历');
   });
 });
 
@@ -347,13 +480,38 @@ function createController(
       expires_in: 3600,
     }),
   })) as unknown as typeof globalThis.fetch;
-  return createAppServices({
+  const services = createAppServices({
     auth: {
       fetch,
       now: () => 100_000,
       store,
     },
   });
+  // 权限列表页只有通知是硬性门槛；测试环境里的真实 NativeDeviceCapability 读不到
+  // 原生模块会 fail closed 到全部未授予，把这里锁死到全部已授予，让这些用例继续
+  // 测它们本来要测的东西（登录态切换、SQLite 绑定），不卡在权限页上。
+  jest.spyOn(services.reminderPorts.device, 'getStatus').mockResolvedValue({
+    platform: 'android',
+    supported: true,
+    permissions: {
+      notifications: true,
+      exact_alarm: true,
+      overlay: true,
+      full_screen: true,
+      battery_optimization: true,
+      location_foreground: true,
+      location_background: true,
+      microphone: true,
+    },
+    background_execution: true,
+    oemGuidance: {
+      manufacturer: null,
+      autostartGuided: false,
+      backgroundPopupGuided: false,
+      lastOverlayFailed: false,
+    },
+  });
+  return services;
 }
 
 function createDeferred<T>() {

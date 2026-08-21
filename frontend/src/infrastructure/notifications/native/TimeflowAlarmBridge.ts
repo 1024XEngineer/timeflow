@@ -1,4 +1,4 @@
-import { NativeModules, Platform } from 'react-native';
+import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 
 export type NativeAlarmPermissionStatus = {
   exactAlarm: boolean;
@@ -6,6 +6,27 @@ export type NativeAlarmPermissionStatus = {
   fullScreen: boolean;
   notifications: boolean;
   battery: boolean;
+  /** 只有小米/华为/OPPO/vivo 四家会识别出来；其余机型/无法判断时是 null。 */
+  manufacturer: 'xiaomi' | 'huawei' | 'oppo' | 'vivo' | null;
+  /** 没有标准 API 能查真实授权状态，这三项只表示"带没带用户跳过对应设置页"。 */
+  oemAutostartGuided: boolean;
+  oemBackgroundPopupGuided: boolean;
+  oemLastOverlayFailed: boolean;
+};
+
+export type NativeAlarmEventPayload = {
+  type: 'fired' | 'dismissed' | 'snoozed';
+  scheduleId: string;
+  alarmId: string;
+  title: string;
+  atMillis: number;
+};
+
+export type NativeAlarmDispositionPayload = {
+  scheduleId: string;
+  alarmId: string;
+  state: string;
+  updatedAtMillis: number;
 };
 
 type TimeflowAlarmNative = {
@@ -13,66 +34,165 @@ type TimeflowAlarmNative = {
     triggerAtMillis: number,
     title?: string | null,
     scheduleId?: string | null,
-  ) => Promise<{ alarmId: string }>;
+    vibrate?: boolean,
+    sound?: boolean,
+    fullScreen?: boolean,
+  ) => Promise<{ alarmId: string; scheduleId?: string }>;
   cancel: (alarmId: string) => Promise<boolean>;
+  cancelAll: () => Promise<number>;
+  stopRinging: () => Promise<boolean>;
+  peekNativeDispositions: () => Promise<NativeAlarmDispositionPayload[]>;
+  ackNativeDispositions: (scheduleIds: string[]) => Promise<boolean>;
   getPermissionStatus: () => Promise<NativeAlarmPermissionStatus>;
   openPermissionSettings: (
-    kind: 'exactAlarm' | 'overlay' | 'fullScreen' | 'battery' | 'app',
+    kind:
+      'exactAlarm' | 'overlay' | 'fullScreen' | 'battery' | 'app' | 'autostart' | 'backgroundPopup',
   ) => Promise<boolean>;
   requestNotificationPermission: () => Promise<boolean>;
+  addListener?: (eventName: string) => void;
+  removeListeners?: (count: number) => void;
 };
 
-const NativeAlarm = NativeModules.TimeflowAlarm as TimeflowAlarmNative | undefined;
+const EVENT_NAME = 'TimeflowAlarmEvent';
+
+function getNativeAlarm(): TimeflowAlarmNative | undefined {
+  return NativeModules.TimeflowAlarm as TimeflowAlarmNative | undefined;
+}
 
 export function isTimeflowAlarmAvailable(): boolean {
-  return Platform.OS === 'android' && NativeAlarm != null;
+  return Platform.OS === 'android' && getNativeAlarm() != null;
 }
 
 export async function nativeScheduleAlarm(
   triggerAtMillis: number,
   title: string,
   scheduleId?: string,
+  vibrate?: boolean,
+  sound?: boolean,
+  fullScreen?: boolean,
 ): Promise<string | null> {
-  if (!isTimeflowAlarmAvailable() || NativeAlarm == null) return null;
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null) return null;
   try {
-    const result = await NativeAlarm.schedule(triggerAtMillis, title, scheduleId ?? '');
-    const alarmId = result?.alarmId;
-    if (alarmId == null || alarmId.length === 0) return null;
-    return alarmId;
-  } catch {
+    const result = await native.schedule(
+      triggerAtMillis,
+      title,
+      scheduleId ?? '',
+      vibrate ?? true,
+      sound ?? true,
+      fullScreen ?? true,
+    );
+    return result.alarmId;
+  } catch (error) {
+    // 临时诊断日志：定位"原生闹钟排不上"到底是权限拒绝、触发时间已过，
+    // 还是 JS<->原生桥接调用本身抛了异常（比如原生端还是旧签名，参数对不上）。
+    console.warn('[TimeflowAlarm] nativeScheduleAlarm failed', error);
     return null;
   }
 }
 
 export async function nativeCancelAlarm(alarmId: string | null | undefined): Promise<boolean> {
-  if (!isTimeflowAlarmAvailable() || NativeAlarm == null || !alarmId) return false;
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null || !alarmId) return false;
   try {
-    return Boolean(await NativeAlarm.cancel(alarmId));
+    return await native.cancel(alarmId);
   } catch {
     return false;
   }
 }
 
+export async function nativeCancelAllAlarms(): Promise<void> {
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null) return;
+  try {
+    await native.cancelAll();
+  } catch {
+    // 尽力全部取消，忽略失败。
+  }
+}
+
+export async function nativeStopAlarmRinging(): Promise<void> {
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null) return;
+  try {
+    await native.stopRinging();
+  } catch {
+    // 尽力停铃，忽略失败。
+  }
+}
+
+export async function nativePeekAlarmDispositions(): Promise<NativeAlarmDispositionPayload[]> {
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null) return [];
+  try {
+    return await native.peekNativeDispositions();
+  } catch {
+    return [];
+  }
+}
+
+export async function nativeAckAlarmDispositions(scheduleIds: readonly string[]): Promise<void> {
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null || scheduleIds.length === 0) return;
+  try {
+    await native.ackNativeDispositions([...scheduleIds]);
+  } catch {
+    // 确认失败就不清缓冲区，下次冷启动重新 peek 到、重放同样的幂等状态转换。
+  }
+}
+
 export async function nativeGetAlarmPermissionStatus(): Promise<NativeAlarmPermissionStatus | null> {
-  if (!isTimeflowAlarmAvailable() || NativeAlarm == null) return null;
-  return NativeAlarm.getPermissionStatus();
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null) return null;
+  try {
+    return await native.getPermissionStatus();
+  } catch {
+    return null;
+  }
 }
 
 export async function nativeOpenAlarmPermissionSettings(
-  kind: 'exactAlarm' | 'overlay' | 'fullScreen' | 'battery' | 'app',
+  kind:
+    'exactAlarm' | 'overlay' | 'fullScreen' | 'battery' | 'app' | 'autostart' | 'backgroundPopup',
 ): Promise<boolean> {
-  if (!isTimeflowAlarmAvailable() || NativeAlarm == null) return false;
-  return NativeAlarm.openPermissionSettings(kind);
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null) return false;
+  try {
+    return await native.openPermissionSettings(kind);
+  } catch {
+    return false;
+  }
 }
 
 export async function nativeRequestNotificationPermission(): Promise<boolean> {
-  if (!isTimeflowAlarmAvailable() || NativeAlarm == null) return false;
-  return NativeAlarm.requestNotificationPermission();
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null) return false;
+  try {
+    return await native.requestNotificationPermission();
+  } catch {
+    return false;
+  }
 }
 
 export async function nativeAreAlarmPermissionsGranted(): Promise<boolean> {
   const status = await nativeGetAlarmPermissionStatus();
   if (status == null) return false;
-  // 挂闹钟的最低要求：精确闹钟 + 通知；悬浮窗/全屏/电池影响展示，不阻塞调度。
   return status.exactAlarm && status.notifications;
+}
+
+export function subscribeNativeAlarmEvents(
+  listener: (event: NativeAlarmEventPayload) => void,
+): () => void {
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null) {
+    return () => undefined;
+  }
+  const emitter = new NativeEventEmitter(native as never);
+  const subscription = emitter.addListener(EVENT_NAME, (payload: NativeAlarmEventPayload) => {
+    if (payload?.type !== 'fired' && payload?.type !== 'dismissed' && payload?.type !== 'snoozed') {
+      return;
+    }
+    listener(payload);
+  });
+  return () => subscription.remove();
 }

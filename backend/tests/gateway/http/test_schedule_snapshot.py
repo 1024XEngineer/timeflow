@@ -15,6 +15,7 @@ from timeflow.business.calendar import (
     ReminderDispositionState,
     ReminderStrength,
     ReminderType,
+    ScheduleCategory,
     ScheduleKind,
     ScheduleOccurrenceOverrideSnapshot,
     ScheduleSnapshot,
@@ -62,6 +63,7 @@ def _schedule(
     schedule_id: str = "schedule-1",
     account_id: str = "account-1",
     kind: ScheduleKind = ScheduleKind.ONCE,
+    category: ScheduleCategory | None = None,
     status: ScheduleStatus = ScheduleStatus.ACTIVE,
 ) -> ScheduleSnapshot:
     return ScheduleSnapshot(
@@ -69,6 +71,7 @@ def _schedule(
         account_id=account_id,
         schedule_type=ScheduleType.TIME,
         schedule_kind=kind,
+        category=category,
         title="团队会议",
         is_all_day=False,
         start_time=NOW,
@@ -152,6 +155,23 @@ def test_snapshot_returns_active_deleted_rows_and_uses_only_the_authenticated_ac
     assert body["schedules"][0]["created_at"] == "2026-08-14T00:00:00Z"
     assert body["occurrence_overrides"] == []
     assert reader.calls == ["account-1"]
+
+
+def test_snapshot_returns_null_and_assigned_schedule_categories() -> None:
+    reader = _Reader(
+        AccountScheduleSnapshot(
+            schedules=(
+                _schedule(schedule_id="uncategorized"),
+                _schedule(schedule_id="work", category=ScheduleCategory.WORK),
+            ),
+            occurrence_overrides=(),
+        )
+    )
+
+    response = _get(_client(reader))
+
+    assert response.status_code == 200
+    assert [item["category"] for item in response.json()["schedules"]] == [None, "work"]
 
 
 def test_snapshot_returns_empty_arrays() -> None:
