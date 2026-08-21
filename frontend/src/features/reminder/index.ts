@@ -97,6 +97,7 @@ export {
   SqliteLocalScheduleReader,
   SqliteReminderStateStore,
 } from './data/local';
+export { ReminderDispositionHttpSync, ReminderDispositionSyncResponseError } from './data/http';
 export {
   AlertReminderPresenter,
   PermissionOnboardingScreen,

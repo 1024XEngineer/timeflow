@@ -44,5 +44,49 @@ export type ReminderDispositionSyncRequest = {
 export type ReminderDispositionSyncResponse = {
   schedule_id: string;
   disposition_state: Extract<ReminderDispositionState, 'confirmed'>;
-  sync_status: Extract<ReminderSyncStatus, 'synced'>;
+  updated_at: string;
 };
+
+const REMINDER_DISPOSITION_SYNC_RESPONSE_KEYS = [
+  'schedule_id',
+  'disposition_state',
+  'updated_at',
+] as const;
+
+export function parseReminderDispositionSyncResponse(
+  value: unknown,
+): ReminderDispositionSyncResponse | undefined {
+  if (!hasExactKeys(value, REMINDER_DISPOSITION_SYNC_RESPONSE_KEYS)) return undefined;
+  if (!isNonBlankString(value.schedule_id)) return undefined;
+  if (value.disposition_state !== 'confirmed') return undefined;
+  if (!isAwareTimestamp(value.updated_at)) return undefined;
+  return {
+    schedule_id: value.schedule_id,
+    disposition_state: value.disposition_state,
+    updated_at: value.updated_at,
+  };
+}
+
+function hasExactKeys<const Keys extends readonly string[]>(
+  value: unknown,
+  keys: Keys,
+): value is Record<Keys[number], unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).length === keys.length &&
+    keys.every((key) => Object.prototype.hasOwnProperty.call(record, key))
+  );
+}
+
+function isNonBlankString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isAwareTimestamp(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    /(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
+    !Number.isNaN(Date.parse(value))
+  );
+}
