@@ -71,6 +71,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
   });
 
   afterEach(() => {
+    jest.useRealTimers();
     mockBottomInset = 0;
     mockTopInset = 0;
     Platform.OS = 'ios';
@@ -333,7 +334,30 @@ describe('ScheduleCalendarScreen location schedules', () => {
         ScheduleCalendarReadService['getLocationSchedules']
       >
     ).mockResolvedValue([]);
-    const occurrenceStart = new Date().toISOString();
+    // 冻结时钟：组件内部 useScheduleCalendar 会在 render 时自己再调一次 new Date()
+    // 来定 selectedDate，若不冻结，测试这里取的 now 和渲染时取的 now 理论上可能
+    // 跨越本地午夜而不一致。冻结后两边的 new Date() 都返回同一个瞬间。
+    const now = new Date();
+    jest.useFakeTimers({
+      doNotFake: [
+        'setTimeout',
+        'clearTimeout',
+        'setInterval',
+        'clearInterval',
+        'setImmediate',
+        'clearImmediate',
+        'queueMicrotask',
+        'nextTick',
+      ],
+    });
+    jest.setSystemTime(now);
+    // 用 selectedDate 所在的日历日（本地取值，与组件默认 selectedDate 的算法一致）
+    // 加显式 +08:00 偏移锚定，避免真实 UTC 时刻落在 16:00-24:00 时 Shanghai 已跨入
+    // 下一天、而 selectedDate 仍是当天，导致注入的日程被分到未选中的那一天。
+    const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+      now.getDate(),
+    ).padStart(2, '0')}`;
+    const occurrenceStart = new Date(`${todayKey}T12:00:00+08:00`).toISOString();
     const initialOccurrence = {
       scheduleId: 'time-a',
       scheduleCategory: 'time' as const,
