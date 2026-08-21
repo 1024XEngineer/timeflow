@@ -83,7 +83,10 @@ export async function nativeScheduleAlarm(
       fullScreen ?? true,
     );
     return result.alarmId;
-  } catch {
+  } catch (error) {
+    // 临时诊断日志：定位"原生闹钟排不上"到底是权限拒绝、触发时间已过，
+    // 还是 JS<->原生桥接调用本身抛了异常（比如原生端还是旧签名，参数对不上）。
+    console.warn('[TimeflowAlarm] nativeScheduleAlarm failed', error);
     return null;
   }
 }

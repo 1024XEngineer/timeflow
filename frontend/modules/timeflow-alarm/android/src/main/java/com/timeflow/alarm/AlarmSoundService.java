@@ -67,6 +67,12 @@ public final class AlarmSoundService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         AlarmContract.ExtractedExtras extras = AlarmContract.ExtractedExtras.from(this, intent);
+        // 临时诊断日志：确认 AlarmReceiver 拉起的 startForegroundService 有没有真的
+        // 走到这里——如果 AlarmReceiver 那边"startForegroundService requested"打出来了
+        // 但这里没打印，说明系统在投递 Intent 给这个 Service 之前就把它拦下来了。
+        Log.i(TAG, "onStartCommand alarmId=" + extras.alarmId + " scheduleId=" + extras.scheduleId
+                + " vibrate=" + extras.vibrate + " sound=" + extras.sound
+                + " fullScreen=" + extras.fullScreen);
 
         if (overlayView != null) {
             // 界面被占用：先把这条闹钟从持久化列表摘掉、通知 JS 已经 fired（跟
@@ -125,6 +131,12 @@ public final class AlarmSoundService extends Service {
                 startBundledSpeech();
             }
         } catch (RuntimeException exception) {
+            // 这里原来完全静默——startForeground() 在部分厂商 ROM/系统版本上会因为
+            // 后台启动限制抛异常（比如 ForegroundServiceStartNotAllowedException），
+            // 抛出去之前这条闹钟就已经从持久化列表摘掉、也通知过 JS "fired" 了，一旦
+            // 走到这个 catch，整条链路就是"通知也没弹、声音也没放、震动也没震"，
+            // 跟用户看到的现象完全对得上，但之前没有任何日志能证实。
+            Log.w(TAG, "presentAlarm failed for alarmId=" + alarmId, exception);
             advanceOrStop();
         }
     }
