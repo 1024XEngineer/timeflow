@@ -62,6 +62,9 @@ type NativeAlarmMock = {
       triggerAtMillis: number,
       title?: string | null,
       scheduleId?: string | null,
+      vibrate?: boolean,
+      sound?: boolean,
+      fullScreen?: boolean,
       speechText?: string | null,
     ) => Promise<{ alarmId: string }>
   >;
@@ -97,6 +100,9 @@ function request(overrides: Partial<AlarmScheduleRequest> = {}): AlarmScheduleRe
     trigger_at: FUTURE,
     title: '晨会',
     exact: true,
+    vibrate: true,
+    sound: true,
+    full_screen: true,
     ...overrides,
   };
 }
@@ -233,22 +239,34 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
       schedule_id: 'schedule-1',
       scheduled: true,
     });
-    expect(native.schedule).toHaveBeenCalledWith(Date.parse(FUTURE), '晨会', 'schedule-1', '');
+    expect(native.schedule).toHaveBeenCalledWith(
+      Date.parse(FUTURE),
+      '晨会',
+      'schedule-1',
+      true,
+      true,
+      true,
+      '',
+    );
   });
 
-  it('forwards the speech text to the native module', async () => {
+  it('forwards ring channels and speech text through to the native bridge', async () => {
     const scheduler = new NativeAlarmScheduler();
-    await expect(scheduler.schedule(request({ speech_text: '晨会，时间到了。' }))).resolves.toEqual(
-      {
-        alarm_id: 'alarm-1',
-        schedule_id: 'schedule-1',
-        scheduled: true,
-      },
+    await scheduler.schedule(
+      request({
+        vibrate: false,
+        sound: false,
+        full_screen: false,
+        speech_text: '晨会，时间到了。',
+      }),
     );
     expect(native.schedule).toHaveBeenCalledWith(
       Date.parse(FUTURE),
       '晨会',
       'schedule-1',
+      false,
+      false,
+      false,
       '晨会，时间到了。',
     );
   });
@@ -335,12 +353,24 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
     ]);
     expect(native.cancelAll).toHaveBeenCalledTimes(1);
     expect(native.schedule).toHaveBeenCalledTimes(2);
-    expect(native.schedule).toHaveBeenNthCalledWith(1, Date.parse(FUTURE), '晨会', 'ok', '');
+    expect(native.schedule).toHaveBeenNthCalledWith(
+      1,
+      Date.parse(FUTURE),
+      '晨会',
+      'ok',
+      true,
+      true,
+      true,
+      '',
+    );
     expect(native.schedule).toHaveBeenNthCalledWith(
       2,
       Date.parse('2026-08-13T10:00:00.000Z'),
       '午会',
       'later',
+      true,
+      true,
+      true,
       '',
     );
   });

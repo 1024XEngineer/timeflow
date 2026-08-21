@@ -47,16 +47,26 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
     triggerAtMillis: Double,
     title: String?,
     scheduleId: String?,
+    vibrate: Boolean,
+    sound: Boolean,
+    fullScreen: Boolean,
     speechText: String?,
     promise: Promise,
   ) {
     try {
-      Log.i(NAME, "schedule triggerAtMillis=$triggerAtMillis title=$title scheduleId=$scheduleId")
+      Log.i(
+        NAME,
+        "schedule triggerAtMillis=$triggerAtMillis title=$title scheduleId=$scheduleId " +
+          "vibrate=$vibrate sound=$sound fullScreen=$fullScreen",
+      )
       val alarmId = AlarmScheduler.schedule(
         reactContext,
         triggerAtMillis.toLong(),
         title ?: "日程提醒",
         scheduleId ?: "",
+        vibrate,
+        sound,
+        fullScreen,
         speechText ?: "",
       )
       Log.i(NAME, "scheduled alarmId=$alarmId")
@@ -65,10 +75,13 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
       result.putString("scheduleId", scheduleId ?: "")
       promise.resolve(result)
     } catch (error: IllegalArgumentException) {
+      Log.w(NAME, "schedule rejected: trigger_in_past", error)
       promise.reject("TRIGGER_IN_PAST", error.message, error)
     } catch (error: SecurityException) {
+      Log.w(NAME, "schedule rejected: exact_alarm_denied", error)
       promise.reject("EXACT_ALARM_DENIED", error.message, error)
     } catch (error: Exception) {
+      Log.w(NAME, "schedule rejected: unexpected", error)
       promise.reject("SCHEDULE_FAILED", error.message, error)
     }
   }

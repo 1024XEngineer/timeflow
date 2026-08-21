@@ -18,6 +18,7 @@ import { MemoryReminderStateStore } from '../../../../../src/features/reminder/d
 import type {
   LocalReminderSchedule,
   ReminderRuntimeState,
+  ReminderStrength,
 } from '../../../../../src/features/reminder/domain';
 
 /** 事件订阅回调是 fire-and-forget（void handleNativeAlarmEvent(event)），背后
@@ -731,6 +732,44 @@ describe('LocalReminderApplication', () => {
       expect(receipt.channels).toEqual(['popup', 'vibration', 'local_sound']);
       expect(deps.audio.playTts).toHaveBeenCalledTimes(1);
       expect(deps.audio.playLocalFallback).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('native alarm ring channels by strength', () => {
+    // 全屏三档都要弹（静音也要让用户看得见），vibrate/sound 才按强度递进：
+    // 低=都不要、中=只震动、高=震动+出声。
+    const cases: [ReminderStrength, { vibrate: boolean; sound: boolean; full_screen: boolean }][] =
+      [
+        ['low', { vibrate: false, sound: false, full_screen: true }],
+        ['medium', { vibrate: true, sound: false, full_screen: true }],
+        ['high', { vibrate: true, sound: true, full_screen: true }],
+      ];
+    it.each(cases)('%s strength schedules the native alarm with %j', async (strength, expected) => {
+      const schedule = fixtureSchedule({
+        id: 's1',
+        reminder: {
+          reminder_type: 'at_time',
+          reminder_trigger_at: '2026-08-18T10:00:00.000Z',
+          reminder_offset_minutes: null,
+          reminder_strength: strength,
+        },
+      });
+      const { alarms, scheduleCalls } = createFakeAlarms();
+      const deps = createDeps({ alarms, schedules: new FakeScheduleReader([schedule]) });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      // start() 的 rebuild 已经把这条日程排过一次；重置掉，只看接下来这次
+      // register() 调用实际传给原生的 vibrate/sound/full_screen。
+      scheduleCalls.length = 0;
+
+      const registration = await app.register(schedule);
+
+      expect(registration.alarm_id).not.toBeNull();
+      expect(scheduleCalls).toHaveLength(1);
+      expect(scheduleCalls[0]).toMatchObject({
+        ...expected,
+        speech_text: '喝水提醒，时间到了。现在已经18点了。',
+      });
     });
   });
 

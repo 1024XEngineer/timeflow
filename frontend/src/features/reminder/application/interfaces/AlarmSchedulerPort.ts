@@ -3,6 +3,11 @@ export type AlarmScheduleRequest = {
   trigger_at: string;
   title: string;
   exact: boolean;
+  /** 原生响铃时是否震动/出声/弹全屏止铃界面；由提醒强度换算而来。 */
+  vibrate: boolean;
+  sound: boolean;
+  full_screen: boolean;
+  /** JS 生成的日程播报文案；原生侧仅负责按闹钟声道朗读。 */
   speech_text?: string;
 };
 

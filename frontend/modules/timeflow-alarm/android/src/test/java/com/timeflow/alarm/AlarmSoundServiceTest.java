@@ -24,7 +24,7 @@ import java.util.List;
 /**
  * 覆盖 Wintercom 在 PR #265 review 里要求的场景：两条闹钟重叠到达时都应该被展示、
  * 各自的 disposition 不能串。不覆盖悬浮窗按钮点击 -> snooze/dismiss 这条链路（需要真的
- * 构建 AlarmRingUi 的 View），也不覆盖 MediaPlayer 播放（跟系统资源强绑定，presentAlarm()
+     * 构建 AlarmRingUi 的 View），也不覆盖系统 TTS 播放（跟系统资源强绑定，presentAlarm()
  * 本身已经有 try/catch 兜底）。
  *
  * pin 住 API 34：这个模块 compileSdk 是 35，但 API 36 常量已经在生产代码里被移除

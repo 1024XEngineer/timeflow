@@ -362,6 +362,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
           trigger_at: triggerAt,
           title: schedule.title,
           exact: true,
+          ...alarmRingChannels(schedule),
           speech_text: toAlarmSpeechText(schedule, scheduledAt),
         };
       })
@@ -500,6 +501,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
           trigger_at: snoozedUntil,
           title: schedule.title,
           exact: true,
+          ...alarmRingChannels(schedule),
           speech_text: toAlarmSpeechText(schedule, snoozedUntil),
         });
         if (!this.isLive(generation)) {
@@ -980,6 +982,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
       trigger_at: triggerAt,
       title: schedule.title,
       exact: true,
+      ...alarmRingChannels(schedule),
       speech_text: toAlarmSpeechText(schedule, scheduledAt),
     });
     void this.reportPermissionGaps(schedule.id, [
@@ -1057,8 +1060,18 @@ function toDeliveryRequest(
   };
 }
 
-function toTimeReason(schedule: LocalReminderSchedule): ReminderTriggerReason {
-  return schedule.reminder?.reminder_type === 'before_start' ? 'before_start' : 'at_time';
+/**
+ * 原生闹钟响铃时要不要震动/出声/弹全屏止铃界面。全屏三档都要弹（时间型提醒
+ * 没有别的可见形式，静音也得让用户看到），vibrate/sound 复用 JS 侧的强度
+ * 换算表：低=都不要、中=只震动、高=震动+出声。
+ */
+function alarmRingChannels(schedule: LocalReminderSchedule): {
+  vibrate: boolean;
+  sound: boolean;
+  full_screen: boolean;
+} {
+  const plan = resolveStrengthDeliveryPlan(schedule.reminder?.reminder_strength ?? 'medium');
+  return { vibrate: plan.useVibration, sound: plan.useAudio, full_screen: true };
 }
 
 function toAlarmSpeechText(schedule: LocalReminderSchedule, scheduledAt: string): string {
@@ -1068,6 +1081,10 @@ function toAlarmSpeechText(schedule: LocalReminderSchedule, scheduledAt: string)
     timezone: schedule.timezone,
     isAllDay: schedule.is_all_day,
   });
+}
+
+function toTimeReason(schedule: LocalReminderSchedule): ReminderTriggerReason {
+  return schedule.reminder?.reminder_type === 'before_start' ? 'before_start' : 'at_time';
 }
 
 function toLocationReason(schedule: LocalReminderSchedule): ReminderTriggerReason {

@@ -1,7 +1,9 @@
 package com.timeflow.alarm;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
 import android.content.Intent;
@@ -36,7 +38,10 @@ public class AlarmIntentForwardingTest {
                 .putExtra(AlarmContract.EXTRA_SCHEDULE_ID, "schedule-1")
                 .putExtra(AlarmContract.EXTRA_REQUEST_CODE, 101)
                 .putExtra(AlarmContract.EXTRA_TITLE, "晨会")
-                .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, speechText);
+                .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, speechText)
+                .putExtra(AlarmContract.EXTRA_VIBRATE, false)
+                .putExtra(AlarmContract.EXTRA_SOUND, true)
+                .putExtra(AlarmContract.EXTRA_FULL_SCREEN, false);
 
         new AlarmReceiver().onReceive(context, incoming);
 
@@ -44,16 +49,32 @@ public class AlarmIntentForwardingTest {
         assertNotNull(started);
         assertEquals(AlarmSoundService.class.getName(), started.getComponent().getClassName());
         assertEquals(speechText, started.getStringExtra(AlarmContract.EXTRA_SPEECH_TEXT));
+        assertFalse(started.getBooleanExtra(AlarmContract.EXTRA_VIBRATE, true));
+        assertTrue(started.getBooleanExtra(AlarmContract.EXTRA_SOUND, false));
+        assertFalse(started.getBooleanExtra(AlarmContract.EXTRA_FULL_SCREEN, true));
     }
 
     @Test
     public void activityServiceStartForwardsSpeechText() {
         String speechText = "提交报告，时间到了。";
 
-        AlarmSoundService.start(context, "alarm-2", "schedule-2", 202, "提交报告", speechText);
+        AlarmSoundService.start(
+                context,
+                "alarm-2",
+                "schedule-2",
+                202,
+                "提交报告",
+                true,
+                false,
+                true,
+                speechText
+        );
 
         Intent started = ShadowApplication.getInstance().getNextStartedService();
         assertNotNull(started);
         assertEquals(speechText, started.getStringExtra(AlarmContract.EXTRA_SPEECH_TEXT));
+        assertTrue(started.getBooleanExtra(AlarmContract.EXTRA_VIBRATE, false));
+        assertFalse(started.getBooleanExtra(AlarmContract.EXTRA_SOUND, true));
+        assertTrue(started.getBooleanExtra(AlarmContract.EXTRA_FULL_SCREEN, false));
     }
 }

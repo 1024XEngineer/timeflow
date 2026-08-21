@@ -38,6 +38,9 @@ export class NativeAlarmScheduler implements AlarmSchedulerPort {
       triggerAtMillis,
       request.title,
       request.schedule_id,
+      request.vibrate,
+      request.sound,
+      request.full_screen,
       request.speech_text,
     );
     if (alarmId == null || alarmId.length === 0) {

@@ -11,6 +11,10 @@ final class AlarmContract {
     static final String EXTRA_TITLE = "alarm_title";
     static final String EXTRA_SCHEDULE_ID = "schedule_id";
     static final String EXTRA_SPEECH_TEXT = "speech_text";
+    /** 响铃要不要震动/出声/弹全屏止铃界面；由 JS 侧按提醒强度换算后传入，缺省一律按 true 处理。 */
+    static final String EXTRA_VIBRATE = "vibrate";
+    static final String EXTRA_SOUND = "sound";
+    static final String EXTRA_FULL_SCREEN = "full_screen";
     static final String EXTRA_EVENT_TYPE = "event_type";
     static final String EVENT_FIRED = "fired";
     static final String EVENT_DISMISSED = "dismissed";
@@ -44,13 +48,28 @@ final class AlarmContract {
         final String title;
         final String speechText;
         final int requestCode;
+        final boolean vibrate;
+        final boolean sound;
+        final boolean fullScreen;
 
-        private ExtractedExtras(String alarmId, String scheduleId, String title, String speechText, int requestCode) {
+        private ExtractedExtras(
+                String alarmId,
+                String scheduleId,
+                String title,
+                String speechText,
+                int requestCode,
+                boolean vibrate,
+                boolean sound,
+                boolean fullScreen
+        ) {
             this.alarmId = alarmId;
             this.scheduleId = scheduleId;
             this.title = title;
             this.speechText = speechText;
             this.requestCode = requestCode;
+            this.vibrate = vibrate;
+            this.sound = sound;
+            this.fullScreen = fullScreen;
         }
 
         static ExtractedExtras from(Context context, Intent intent) {
@@ -59,6 +78,10 @@ final class AlarmContract {
             String scheduleId = intent == null ? null : intent.getStringExtra(EXTRA_SCHEDULE_ID);
             String title = intent == null ? null : intent.getStringExtra(EXTRA_TITLE);
             String speechText = intent == null ? null : intent.getStringExtra(EXTRA_SPEECH_TEXT);
+            // 缺省按 true：兼容没有带这几个 extra 的旧闹钟/测试 Intent，保留改动前的全响铃行为。
+            boolean vibrate = intent == null || intent.getBooleanExtra(EXTRA_VIBRATE, true);
+            boolean sound = intent == null || intent.getBooleanExtra(EXTRA_SOUND, true);
+            boolean fullScreen = intent == null || intent.getBooleanExtra(EXTRA_FULL_SCREEN, true);
             if (alarmId == null || alarmId.isEmpty()) {
                 alarmId = "legacy-" + requestCode;
             }
@@ -71,7 +94,16 @@ final class AlarmContract {
             if (speechText == null || speechText.isEmpty()) {
                 speechText = ReminderSpeechFormatter.format(title, System.currentTimeMillis());
             }
-            return new ExtractedExtras(alarmId, scheduleId, title, speechText, requestCode);
+            return new ExtractedExtras(
+                    alarmId,
+                    scheduleId,
+                    title,
+                    speechText,
+                    requestCode,
+                    vibrate,
+                    sound,
+                    fullScreen
+            );
         }
     }
 }
