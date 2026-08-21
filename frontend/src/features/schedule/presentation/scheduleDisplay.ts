@@ -1,11 +1,50 @@
+import type { ScheduleCategory } from '../../../contracts/schedule';
 import type { ScheduleOccurrenceView } from '../application';
 
 export const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日'];
+
+export const SCHEDULE_CATEGORY_LABELS: Record<ScheduleCategory, string> = {
+  work: '工作',
+  study: '学习',
+  exercise: '运动',
+  entertainment: '娱乐',
+  social: '社交',
+  rest: '休息',
+  personal: '个人事务',
+  other: '其他',
+};
+
+export function scheduleCategoryLabel(category: ScheduleCategory | null): string | null {
+  return category === null ? null : SCHEDULE_CATEGORY_LABELS[category];
+}
 
 export function dateKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
     date.getDate(),
   ).padStart(2, '0')}`;
+}
+
+export function formatAgendaSectionTitle(selectedDate: Date, today: Date = new Date()): string {
+  if (dateKey(selectedDate) === dateKey(today)) {
+    return '今日安排';
+  }
+  return `${selectedDate.getMonth() + 1}月${selectedDate.getDate()}日的安排`;
+}
+
+export function emptyAgendaMessage(
+  selectedDate: Date,
+  today: Date = new Date(),
+): {
+  title: string;
+  detail: string | null;
+} {
+  if (dateKey(selectedDate) < dateKey(today)) {
+    return { title: '这一天是属于你的', detail: null };
+  }
+  return {
+    title: '这一天暂时没有日程',
+    detail: '留一点时间给自己，或用语音助手添加安排。',
+  };
 }
 
 export function dateKeyInTimezone(instant: string, timezone: string): string | null {

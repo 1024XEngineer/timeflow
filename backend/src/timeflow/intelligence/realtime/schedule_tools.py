@@ -18,6 +18,7 @@ from timeflow.business.calendar import (
     ReminderType,
     ScheduleAgentService,
     ScheduleBusinessError,
+    ScheduleCategory,
     ScheduleKind,
     ScheduleMutationResult,
     ScheduleType,
@@ -70,6 +71,10 @@ class ToolResult:
 
 _DATETIME_SCHEMA = {"type": ["string", "null"], "format": "date-time"}
 _NULLABLE_STRING_SCHEMA = {"type": ["string", "null"]}
+_CATEGORY_SCHEMA = {
+    "type": ["string", "null"],
+    "enum": [*(category.value for category in ScheduleCategory), None],
+}
 _REMINDER_TYPE_SCHEMA = {
     "type": ["string", "null"],
     "enum": [
@@ -142,6 +147,7 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                     "starts_at_or_after": _DATETIME_SCHEMA,
                     "starts_before": _DATETIME_SCHEMA,
                     "location_name": _NULLABLE_STRING_SCHEMA,
+                    "category": _CATEGORY_SCHEMA,
                     "include_deleted": {"type": "boolean"},
                 },
                 "additionalProperties": False,

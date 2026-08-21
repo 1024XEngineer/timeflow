@@ -146,7 +146,7 @@ def test_settings_use_qwen_asr_defaults(
     assert settings.aliyun_asr_api_key == ""
     assert settings.aliyun_asr_model == "qwen3-asr-flash-realtime"
     assert settings.aliyun_asr_language == "zh"
-    assert settings.aliyun_asr_vad_threshold == 0.0
+    assert settings.aliyun_asr_vad_threshold == 0.6
     assert settings.aliyun_asr_vad_silence_duration_ms == 400
     assert settings.aliyun_asr_connect_timeout_seconds == 10.0
     assert settings.aliyun_asr_finish_timeout_seconds == 10.0

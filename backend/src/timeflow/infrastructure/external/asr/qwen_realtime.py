@@ -21,6 +21,8 @@ from timeflow.intelligence.conversation.asr import (
     AsrPort,
     AsrProtocolError,
     AsrTranscriptionError,
+    SpeechStarted,
+    SpeechStopped,
     TranscriptCompleted,
     TranscriptPreview,
 )
@@ -134,6 +136,12 @@ def parse_server_event(message: Mapping[str, object]) -> ParsedEvent:
     if event_type == ControlEvent.SESSION_FINISHED.value:
         return ControlEvent.SESSION_FINISHED
 
+    if event_type == "input_audio_buffer.speech_started":
+        return SpeechStarted()
+
+    if event_type == "input_audio_buffer.speech_stopped":
+        return SpeechStopped()
+
     if event_type == "conversation.item.input_audio_transcription.text":
         confirmed = _string_field(message, "text")
         provisional = _string_field(message, "stash")
@@ -162,7 +170,15 @@ async def _default_connector(
     timeout: float,
 ) -> WebSocketConnection:
     """Open a provider connection using the websockets asyncio client."""
-    return await connect(url, additional_headers=dict(headers), open_timeout=timeout)
+    return await connect(
+        url,
+        additional_headers=dict(headers),
+        open_timeout=timeout,
+        # The server-VAD turn detector does not acknowledge a close frame until
+        # its idle timeout (~10s) expires. We already have the final transcript by
+        # then, so cap the closing handshake instead of blocking on it.
+        close_timeout=0.2,
+    )
 
 
 class QwenRealtimeAsr(AsrPort):
@@ -228,7 +244,15 @@ class QwenRealtimeAsr(AsrPort):
                 parsed = self._parse_raw_message(raw_message)
                 if parsed is ControlEvent.SESSION_FINISHED:
                     session_finished = True
-                elif isinstance(parsed, (TranscriptPreview, TranscriptCompleted)):
+                elif isinstance(parsed, TranscriptCompleted):
+                    yield parsed
+                    if sender.done():
+                        # The audio source is exhausted (session.finish has been sent),
+                        # so this completed transcript is the final recognition result.
+                        # Stop here instead of waiting for session.finished, which the
+                        # server-VAD turn detector delays by its idle timeout (~10s).
+                        break
+                elif isinstance(parsed, (TranscriptPreview, SpeechStarted, SpeechStopped)):
                     yield parsed
 
         except AsrError:

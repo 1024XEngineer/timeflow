@@ -12,6 +12,7 @@ from timeflow.business.calendar import (
     RecurringDeleteScope,
     ReminderStrength,
     ReminderType,
+    ScheduleCategory,
     ScheduleKind,
     ScheduleType,
 )
@@ -158,11 +159,13 @@ def test_a_query_takes_every_filter() -> None:
             "starts_at_or_after": "2026-09-08T00:00:00+08:00",
             "starts_before": "2026-09-09T00:00:00+08:00",
             "location_name": "公司",
+            "category": "work",
             "include_deleted": True,
         }
     )
     assert query.schedule_id == "sch_1"
     assert query.include_deleted is True
+    assert query.category is ScheduleCategory.WORK
     assert query.starts_at_or_after is not None
     assert query.starts_before is not None
 
@@ -176,6 +179,11 @@ def test_a_query_with_no_filters_still_maps() -> None:
 def test_a_query_field_that_is_not_a_filter_is_refused() -> None:
     with pytest.raises(ToolInputError, match="Unexpected fields: when"):
         map_find_schedules_query({"when": "tomorrow"})
+
+
+def test_an_unsupported_query_category_is_refused() -> None:
+    with pytest.raises(ToolInputError, match="category has an unsupported value"):
+        map_find_schedules_query({"category": "chores"})
 
 
 def test_an_update_carries_every_patchable_field_through() -> None:

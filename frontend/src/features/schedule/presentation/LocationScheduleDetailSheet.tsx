@@ -8,6 +8,7 @@ import {
   normalizeDetailText,
   ScheduleDetailSheet,
 } from './ScheduleDetailSheet';
+import { scheduleCategoryLabel } from './scheduleDisplay';
 
 export function LocationScheduleDetailSheet({
   schedule,
@@ -30,14 +31,11 @@ export function LocationScheduleDetailSheet({
     detailSchedule.reminderType,
     detailSchedule.reminderStrength,
   );
+  const categoryLabel = scheduleCategoryLabel(detailSchedule.category);
 
   return (
-    <ScheduleDetailSheet
-      badges={['地点日程']}
-      onClose={onClose}
-      title={detailSchedule.title}
-      visible={schedule !== null}
-    >
+    <ScheduleDetailSheet onClose={onClose} title={detailSchedule.title} visible={schedule !== null}>
+      {categoryLabel ? <DetailSection icon="◈" label="分类" primary={categoryLabel} /> : null}
       {location ? <DetailSection icon="📍" label="地点" primary={location} /> : null}
       {reminder ? (
         <DetailSection

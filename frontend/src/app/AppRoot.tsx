@@ -9,6 +9,7 @@ import { ExpoAudioPlayback } from '../features/assistant/data/audio/ExpoAudioPla
 import { AuthenticatedVoiceTransport } from '../features/assistant/data/websocket/AuthenticatedVoiceTransport';
 import { LocalScheduleWriter } from '../features/assistant/data/local/LocalScheduleWriter';
 import { useAuth } from '../features/auth/presentation/AuthProvider';
+import type { SqliteLocalScheduleReader, SqliteReminderStateStore } from '../features/reminder';
 import { SqliteScheduleClientService } from '../features/schedule/application';
 import type { ScheduleLocalRepository } from '../features/schedule/data';
 import { RNAppStateProvider } from '../infrastructure/appState/RNAppStateProvider';
@@ -34,6 +35,8 @@ export function AppRoot({ services: providedServices }: { services?: AppServices
     >
       <AuthRoute
         protectedClient={services.protectedClient}
+        reminderState={services.reminderState}
+        scheduleReader={services.schedules}
         webSocketClient={services.webSocketClient}
       />
     </AppProviders>
@@ -42,9 +45,13 @@ export function AppRoot({ services: providedServices }: { services?: AppServices
 
 function AuthRoute({
   protectedClient,
+  reminderState,
+  scheduleReader,
   webSocketClient,
 }: {
   readonly protectedClient: ApiRequest;
+  readonly reminderState: SqliteReminderStateStore;
+  readonly scheduleReader: SqliteLocalScheduleReader;
   readonly webSocketClient: AuthenticatedWebSocketClient;
 }) {
   const { retryInitialization, viewState } = useAuth();
@@ -78,6 +85,8 @@ function AuthRoute({
       accountId={viewState.accountId}
       key={viewState.accountId}
       protectedClient={protectedClient}
+      reminderState={reminderState}
+      scheduleReader={scheduleReader}
       username={viewState.username}
       webSocketClient={webSocketClient}
     />
@@ -98,11 +107,15 @@ type ScheduleLoadState =
 function AuthenticatedScheduleRoute({
   accountId,
   protectedClient,
+  reminderState,
+  scheduleReader,
   username,
   webSocketClient,
 }: {
   readonly accountId: string;
   readonly protectedClient: ApiRequest;
+  readonly reminderState: SqliteReminderStateStore;
+  readonly scheduleReader: SqliteLocalScheduleReader;
   readonly username: string;
   readonly webSocketClient: AuthenticatedWebSocketClient;
 }) {
@@ -158,6 +171,21 @@ function AuthenticatedScheduleRoute({
     [currentLoadState],
   );
 
+  // The reminder runtime starts as soon as authentication succeeds, before SQLite may be ready.
+  // Bind its stable adapters to the active account/repository, then refresh the running engine.
+  useEffect(() => {
+    if (currentLoadState?.status !== 'ready') {
+      return;
+    }
+    reminderState.attach(currentLoadState.repository, accountId);
+    scheduleReader.attach(currentLoadState.repository, accountId);
+    void scheduleReader.refresh();
+    return () => {
+      scheduleReader.detach();
+      reminderState.detach();
+    };
+  }, [accountId, currentLoadState, reminderState, scheduleReader]);
+
   // 语音这条连接复用应用唯一的 AuthenticatedWebSocketClient——握手、鉴权失效、
   // 断线通知都由它统一处理，这里不再单独持有 access_token/device_id/wsUrl。
   // 按住说话和免提通话共用同一批 capture/playback/location/appState 端口
@@ -174,11 +202,11 @@ function AuthenticatedScheduleRoute({
     return {
       appState: new RNAppStateProvider(),
       capture: new ExpoAudioCapture(),
-      localScheduleWriter: new LocalScheduleWriter(currentLoadState.repository),
+      localScheduleWriter: new LocalScheduleWriter(currentLoadState.repository, scheduleReader),
       location: new ExpoLocationProvider(),
       playback: new ExpoAudioPlayback(),
     };
-  }, [currentLoadState]);
+  }, [currentLoadState, scheduleReader]);
 
   const pushToTalkApplication = useMemo(() => {
     if (assistantDependencies === null) {

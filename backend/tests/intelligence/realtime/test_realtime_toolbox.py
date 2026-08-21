@@ -197,7 +197,20 @@ def test_schedule_create_schema_does_not_expose_category() -> None:
         "reminder_offset_minutes",
         "reminder_strength",
     }
-    assert "category" not in schemas["schedule_query"]["function"]["parameters"]["properties"]
+    assert schemas["schedule_query"]["function"]["parameters"]["properties"]["category"] == {
+        "type": ["string", "null"],
+        "enum": [
+            "work",
+            "study",
+            "exercise",
+            "entertainment",
+            "social",
+            "rest",
+            "personal",
+            "other",
+            None,
+        ],
+    }
     update_properties = schemas["schedule_update"]["function"]["parameters"]["properties"]
     assert "category" not in update_properties
     assert "category" not in update_properties["changes"]["properties"]

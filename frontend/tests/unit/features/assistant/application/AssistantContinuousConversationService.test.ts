@@ -282,6 +282,40 @@ describe('AssistantContinuousConversationService', () => {
     ]);
   });
 
+  it('attaches a late reply to the turn it answers, not whichever turn is now last', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_1',
+      payload: { duration_ms: 800, language: 'zh', transcript: '明天几点开会' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    // 用户没等 req_1 的回复就开口问了下一句，新一轮先落地成了 turns 里最后一条。
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_2',
+      payload: { duration_ms: 500, language: 'zh', transcript: '谁参加' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    // req_1 的回复这时候才迟到到达。
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_1',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '明天下午三点' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getTurns()).toEqual([
+      { id: 'req_1', replyText: '明天下午三点', transcript: '明天几点开会' },
+      { id: 'req_2', replyText: null, transcript: '谁参加' },
+    ]);
+  });
+
   it.each([
     ['missing_field', '你是想订哪一天的会议室？'],
     ['ambiguous_target', '你是指三楼小会议室还是五楼大会议室？'],
@@ -452,6 +486,7 @@ describe('AssistantContinuousConversationService', () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
     const service = new AssistantContinuousConversationService({ accountId: 'acc_001' }, deps);
+    expect(service.getScheduleDataRevision()).toBe(0);
 
     await startListening(fake, service);
     fake.emitMessage({
@@ -465,6 +500,7 @@ describe('AssistantContinuousConversationService', () => {
       'schedule_001',
       'work',
     );
+    expect(service.getScheduleDataRevision()).toBe(1);
     expect(service.getState()).toMatchObject({ phase: 'listening' });
     service.dispose();
   });
@@ -724,6 +760,171 @@ describe('AssistantContinuousConversationService', () => {
     await flushAsync();
 
     expect(calls).toEqual(['startStream', 'pushChunk']);
+    disposeService(service);
+  });
+
+  it('stops immediately and drops queued chunks when TTS is canceled', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+    const calls: string[] = [];
+    let resolveFirst: () => void = () => {};
+    (deps.playback.pushChunk as jest.Mock)
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            calls.push('push-1');
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(async () => {
+        calls.push('push-2');
+      });
+    (deps.playback.stop as jest.Mock).mockImplementation(async () => {
+      calls.push('stop');
+    });
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      payload: {
+        format: 'pcm_s16le',
+        purpose: 'reply',
+        sample_rate_hz: 24000,
+        speech_text: '',
+      },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+    fake.emitAudioFrame(new ArrayBuffer(4));
+    fake.emitAudioFrame(new ArrayBuffer(4));
+    await flushAsync();
+
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.canceled',
+    } as AssistantServerMessage);
+    expect(calls).toEqual(['push-1', 'stop']);
+
+    resolveFirst();
+    await flushAsync();
+
+    // push-2 已经排在链上，但代次已经变了，必须被丢掉而不是补喂给播放器。
+    expect(calls).toEqual(['push-1', 'stop']);
+    expect(service.getState()).toEqual({ conversationId: 'conv_001', phase: 'interrupted' });
+    disposeService(service);
+  });
+
+  it('ignores the canceled stream end that arrives after interruption', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      payload: {
+        format: 'pcm_s16le',
+        purpose: 'reply',
+        sample_rate_hz: 24000,
+        speech_text: '',
+      },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.canceled',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.end',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(deps.playback.endStream).not.toHaveBeenCalled();
+    expect(service.getState()).toEqual({ conversationId: 'conv_001', phase: 'interrupted' });
+    disposeService(service);
+  });
+
+  it('does not stop a newer TTS when a late cancellation belongs to the old audio', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    const startMessage = (audioId: string): AssistantServerMessage =>
+      ({
+        audio_id: audioId,
+        conversation_id: 'conv_001',
+        payload: {
+          format: 'pcm_s16le',
+          purpose: 'reply',
+          sample_rate_hz: 24000,
+          speech_text: '',
+        },
+        type: 'voice.tts.start',
+      }) as AssistantServerMessage;
+
+    fake.emitMessage(startMessage('audio_001'));
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.end',
+    } as AssistantServerMessage);
+    fake.emitMessage(startMessage('audio_002'));
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.canceled',
+    } as AssistantServerMessage);
+    // 兼容尚未升级的后端：旧实现把这种晚到的取消发成空 id，不能把新流停掉。
+    fake.emitMessage({
+      audio_id: '',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.canceled',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(deps.playback.stop).not.toHaveBeenCalled();
+    expect(service.getState()).toEqual({ conversationId: 'conv_001', phase: 'speaking' });
+    disposeService(service);
+  });
+
+  it('dismissReply() clears the reply bubble and stops playback immediately', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      payload: {
+        format: 'pcm_s16le',
+        purpose: 'reply',
+        sample_rate_hz: 24000,
+        speech_text: '回复内容',
+      },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '回复内容' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getReplyText()).toBe('回复内容');
+
+    await service.dismissReply();
+
+    expect(service.getReplyText()).toBeNull();
+    expect(deps.playback.stop).toHaveBeenCalledTimes(1);
     disposeService(service);
   });
 

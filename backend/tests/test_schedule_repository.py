@@ -84,6 +84,45 @@ def test_schedule_reads_are_account_scoped(session: Session) -> None:
     assert [snapshot.id for snapshot in account_schedules] == ["schedule-a"]
 
 
+def test_schedule_lists_and_time_candidates_filter_by_category(session: Session) -> None:
+    repository = ScheduleRepository(session)
+    lower = datetime(2026, 8, 17, tzinfo=UTC)
+    upper = datetime(2026, 8, 18, tzinfo=UTC)
+    for schedule in (
+        replace(
+            _schedule("work-inside", "account-a"),
+            start_time=lower,
+            category=ScheduleCategory.WORK,
+        ),
+        replace(
+            _schedule("work-outside", "account-a"),
+            start_time=upper,
+            category=ScheduleCategory.WORK,
+        ),
+        replace(
+            _schedule("study-inside", "account-a"),
+            start_time=lower,
+            category=ScheduleCategory.STUDY,
+        ),
+        replace(_schedule("unclassified-inside", "account-a"), start_time=lower),
+    ):
+        repository.add_schedule(schedule)
+
+    work_schedules = repository.list_schedules(
+        account_id="account-a",
+        category=ScheduleCategory.WORK,
+    )
+    work_candidates = repository.list_schedule_candidates(
+        account_id="account-a",
+        starts_at_or_after=lower,
+        starts_before=upper,
+        category=ScheduleCategory.WORK,
+    )
+
+    assert [schedule.id for schedule in work_schedules] == ["work-inside", "work-outside"]
+    assert [schedule.id for schedule in work_candidates] == ["work-inside"]
+
+
 def test_schedule_category_round_trips_through_the_repository(session: Session) -> None:
     repository = ScheduleRepository(session)
     schedule = replace(_schedule("schedule-a", "account-a"), category=ScheduleCategory.STUDY)

@@ -202,6 +202,58 @@ async def test_empty_turn_does_not_start_tts() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tts_starts_before_first_segment_is_complete() -> None:
+    tts_started = asyncio.Event()
+    release_boundary = asyncio.Event()
+
+    class PrewarmTts:
+        def stream(self, segments: AsyncIterable[SpeechSegment]) -> AsyncIterator[TtsEvent]:
+            return self._stream(segments)
+
+        async def _stream(self, segments: AsyncIterable[SpeechSegment]) -> AsyncIterator[TtsEvent]:
+            tts_started.set()
+            iterator = aiter(segments)
+            _ = await anext(iterator)
+            yield TtsAudioChunk(b"audio")
+            with pytest.raises(StopAsyncIteration):
+                await anext(iterator)
+            yield TtsCompleted(2)
+
+    async def events() -> AsyncIterator[object]:
+        yield AgentTextDelta("第一句")  # no strong boundary yet, no segment
+        await release_boundary.wait()
+        yield AgentTextDelta("。")
+        yield AgentCompleted(None)
+
+    pipeline = SpeechPipeline(PrewarmTts())
+    stream = pipeline.stream(events())
+
+    output: list[object] = []
+
+    async def consume() -> None:
+        async for event in stream:
+            output.append(event)
+
+    task = asyncio.create_task(consume())
+    # The TTS stream must have started (its connect would be in flight) while the
+    # first sentence is still incomplete and no segment has been produced.
+    await asyncio.wait_for(tts_started.wait(), timeout=1)
+    assert release_boundary.is_set() is False
+
+    release_boundary.set()
+    await asyncio.wait_for(task, timeout=1)
+
+    started = output[0]
+    assert isinstance(started, SpeechAudioStarted)
+    assert started.purpose == "command_result"
+    assert started.speech_text == ""
+    assert output[1:] == [
+        SpeechAudioChunk(started.audio_id, b"audio"),
+        SpeechAudioCompleted(started.audio_id, 2),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_mixed_question_and_reply_is_rejected() -> None:
     pipeline = SpeechPipeline(FakeTts())
 

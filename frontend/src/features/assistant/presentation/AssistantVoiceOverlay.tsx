@@ -2,6 +2,10 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import {
+  FLOATING_VOICE_BAR_HEIGHT,
+  floatingVoiceBarBottomOffset,
+} from '../../../shared/ui/floatingVoiceBarLayout';
 import { colors, spacing } from '../../../shared/ui/theme';
 import type { AssistantApplicationPort } from '../application/AssistantApplication';
 import type { ConversationTurnState } from '../domain/ConversationTurn';
@@ -120,11 +124,19 @@ export function AssistantVoiceOverlay({
   }
 
   return (
-    <View
-      style={[styles.container, { paddingBottom: Math.max(spacing.md, insets.bottom) }]}
-      testID="assistant-voice-overlay"
-    >
-      <View pointerEvents="box-none" style={styles.overlay}>
+    <View pointerEvents="box-none" style={StyleSheet.absoluteFill} testID="assistant-voice-overlay">
+      {ptt.replyText ? (
+        <Pressable
+          accessibilityLabel="关闭回复"
+          onPress={ptt.dismissReply}
+          style={StyleSheet.absoluteFill}
+        />
+      ) : null}
+      <View
+        pointerEvents="box-none"
+        style={[styles.overlay, { bottom: floatingVoiceBarBottomOffset(insets.bottom) }]}
+        testID="assistant-voice-controls"
+      >
         {ptt.replyText ? (
           <Pressable onPress={ptt.dismissReply} style={styles.bubble}>
             <Text style={styles.bubbleText}>{ptt.replyText}</Text>
@@ -169,14 +181,6 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     width: '100%',
   },
-  container: {
-    backgroundColor: colors.surface,
-    borderTopColor: colors.border,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
-    width: '100%',
-  },
   bubble: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
@@ -194,7 +198,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: colors.text,
     borderRadius: 999,
-    height: 52,
+    height: FLOATING_VOICE_BAR_HEIGHT,
     justifyContent: 'center',
     width: 52,
   },
@@ -206,6 +210,9 @@ const styles = StyleSheet.create({
   },
   overlay: {
     alignItems: 'center',
-    width: '100%',
+    left: 0,
+    paddingHorizontal: spacing.lg,
+    position: 'absolute',
+    right: 0,
   },
 });

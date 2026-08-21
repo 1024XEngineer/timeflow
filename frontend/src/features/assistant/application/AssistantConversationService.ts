@@ -30,6 +30,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
   private connection: VoiceTransportConnection | null = null;
   private state: ConversationTurnState = { phase: 'idle' };
   private lastAppliedCommand: AppliedCommand | null = null;
+  private scheduleDataRevision = 0;
   private readonly listeners = new Set<(state: ConversationTurnState) => void>();
 
   private conversationId: string | null = null;
@@ -69,6 +70,10 @@ export class AssistantConversationService implements AssistantApplicationPort {
 
   getLastAppliedCommand(): AppliedCommand | null {
     return this.lastAppliedCommand;
+  }
+
+  getScheduleDataRevision(): number {
+    return this.scheduleDataRevision;
   }
 
   getReplyText(): string | null {
@@ -293,7 +298,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
       return;
     }
     this.lastAppliedCommand = command;
-    this.notifyListeners();
+    this.markScheduleDataChanged();
     this.connection?.send({ message_id: messageId, status: 'applied', type: 'message.ack' });
     const schedules = command.schedules ?? (command.schedule ? [command.schedule] : []);
     await this.applyPendingCategoryUpdates(
@@ -314,6 +319,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
       if (this.disposed) return;
       if (applied === true && this.pendingCategoryUpdates.get(key) === category) {
         this.pendingCategoryUpdates.delete(key);
+        this.markScheduleDataChanged();
       }
     } catch {
       if (!this.disposed) this.pendingCategoryUpdates.set(key, category);
@@ -332,7 +338,10 @@ export class AssistantConversationService implements AssistantApplicationPort {
           category,
         );
         if (this.disposed) return;
-        if (applied === true) this.pendingCategoryUpdates.delete(key);
+        if (applied === true) {
+          this.pendingCategoryUpdates.delete(key);
+          this.markScheduleDataChanged();
+        }
       } catch {
         // Keep the latest pending value for a later authoritative local write.
       }
@@ -343,6 +352,11 @@ export class AssistantConversationService implements AssistantApplicationPort {
     return `${this.options.accountId}\u0000${scheduleId}`;
   }
 
+  private markScheduleDataChanged(): void {
+    this.scheduleDataRevision += 1;
+    this.notifyListeners();
+  }
+
   private handleAudioFrame(chunk: ArrayBuffer): void {
     if (this.currentAudioId === null) {
       return;
@@ -351,6 +365,9 @@ export class AssistantConversationService implements AssistantApplicationPort {
   }
 
   private handleClose(event: { code: number; reason: string }): void {
+    // 必须真的执行：切到连续对话时共享 WS 会因 voiceMode 不同断开重连，只置空的话
+    // 旧服务仍订阅着新连接的 TTS/PCM，同一句话会被两个服务重复送进播放器。
+    this.unsubscribeConnection?.();
     this.connection = null;
     this.unsubscribeConnection = null;
     const message = event.reason || `连接已断开（${event.code}）`;
