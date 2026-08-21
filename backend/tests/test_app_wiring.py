@@ -501,6 +501,20 @@ def test_voice_agent_mode_two_fails_closed_without_composed_credentials() -> Non
             _build_with_environment("development", voice_agent_mode="2")
 
 
+def test_voice_agent_mode_two_wires_schedule_category_event_publisher() -> None:
+    environment = _composed_environment()
+
+    with (
+        mock.patch.dict(os.environ, environment, clear=False),
+        mock.patch("timeflow.main.build_composed_voice_agent") as builder,
+    ):
+        _build_with_environment("development", voice_agent_mode="2")
+
+    result_sink = builder.call_args.args[1]
+    publisher = builder.call_args.kwargs["category_event_publisher"]
+    assert publisher == result_sink.publish_schedule_category_updated
+
+
 def test_lifespan_disposes_the_database_engine_owned_by_the_application() -> None:
     """应用关闭时释放由组合根创建的数据库引擎。"""
     engine = create_engine("sqlite+pysqlite:///:memory:")

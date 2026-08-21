@@ -168,6 +168,7 @@ def create_app(
                     result_sink,
                     session_factory=session_factory,
                     location_service=location_service,
+                    category_event_publisher=result_sink.publish_schedule_category_updated,
                 )
             )
 
