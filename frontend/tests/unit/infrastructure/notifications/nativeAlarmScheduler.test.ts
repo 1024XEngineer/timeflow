@@ -65,6 +65,7 @@ type NativeAlarmMock = {
       vibrate?: boolean,
       sound?: boolean,
       fullScreen?: boolean,
+      speechText?: string | null,
     ) => Promise<{ alarmId: string }>
   >;
   cancel: jest.MockedFunction<(alarmId: string) => Promise<boolean>>;
@@ -245,12 +246,20 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
       true,
       true,
       true,
+      '',
     );
   });
 
-  it('forwards vibrate/sound/full_screen through to the native bridge', async () => {
+  it('forwards ring channels and speech text through to the native bridge', async () => {
     const scheduler = new NativeAlarmScheduler();
-    await scheduler.schedule(request({ vibrate: false, sound: false, full_screen: false }));
+    await scheduler.schedule(
+      request({
+        vibrate: false,
+        sound: false,
+        full_screen: false,
+        speech_text: '晨会，时间到了。',
+      }),
+    );
     expect(native.schedule).toHaveBeenCalledWith(
       Date.parse(FUTURE),
       '晨会',
@@ -258,6 +267,7 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
       false,
       false,
       false,
+      '晨会，时间到了。',
     );
   });
 
@@ -351,6 +361,7 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
       true,
       true,
       true,
+      '',
     );
     expect(native.schedule).toHaveBeenNthCalledWith(
       2,
@@ -360,6 +371,7 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
       true,
       true,
       true,
+      '',
     );
   });
 

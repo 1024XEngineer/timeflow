@@ -834,7 +834,10 @@ describe('LocalReminderApplication', () => {
 
       expect(registration.alarm_id).not.toBeNull();
       expect(scheduleCalls).toHaveLength(1);
-      expect(scheduleCalls[0]).toMatchObject(expected);
+      expect(scheduleCalls[0]).toMatchObject({
+        ...expected,
+        speech_text: '喝水提醒，时间到了。现在已经18点了。',
+      });
     });
   });
 

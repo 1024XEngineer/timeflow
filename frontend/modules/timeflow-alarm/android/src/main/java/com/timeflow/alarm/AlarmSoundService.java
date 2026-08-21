@@ -11,9 +11,9 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.graphics.PixelFormat;
 import android.media.AudioAttributes;
-import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -21,28 +21,34 @@ import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
 import android.provider.Settings;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.InputStream;
 import java.util.ArrayDeque;
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Set;
+import java.util.UUID;
 
 public final class AlarmSoundService extends Service {
     private static final String TAG = "AlarmSoundService";
     private static final long SPEECH_REPEAT_DELAY_MILLIS = 1_500L;
+    private static final float TTS_SPEECH_RATE = 0.9f;
+    private static final float TTS_PITCH = 1.0f;
 
     private final Handler playbackHandler = new Handler(Looper.getMainLooper());
-    private final Runnable replaySpeech = this::replaySpeech;
+    private final Runnable replaySpeech = this::scheduleTtsReplay;
 
-    private MediaPlayer mediaPlayer;
+    private TextToSpeech textToSpeech;
+    private boolean ttsReady;
+    private int ttsGeneration;
     private boolean destroyed;
-    private File bundledSpeechFile;
+    private String currentSpeechText;
+    private String currentUtteranceId;
     private WindowManager overlayWindowManager;
     /** 包内可见（而非 private）：AlarmSoundServiceTest 需要直接读取当前展示/排队状态。 */
     View overlayView;
@@ -103,6 +109,7 @@ public final class AlarmSoundService extends Service {
         alarmId = extras.alarmId;
         scheduleId = extras.scheduleId;
         alarmTitle = extras.title;
+        currentSpeechText = extras.speechText;
         vibrateEnabled = extras.vibrate;
         soundEnabled = extras.sound;
         fullScreenEnabled = extras.fullScreen;
@@ -123,8 +130,9 @@ public final class AlarmSoundService extends Service {
             if (firedNotifiedAlarmIds.add(alarmId)) {
                 AlarmNativeBridge.notifyFired(this, scheduleId, alarmId, alarmTitle);
             }
-            // 换成下一条闹钟之前先清掉上一条的震动状态，避免 vibrate=false 的这条
-            // 顶上来时，还在响上一条闹钟启动的那次震动。
+            // 换成下一条闹钟前先清掉上一条的声音/震动状态，避免静音或不震动的
+            // 新闹钟继续沿用前一条已经启动的系统资源。
+            shutdownTts();
             stopVibration();
             if (vibrateEnabled) {
                 startVibration();
@@ -132,8 +140,8 @@ public final class AlarmSoundService extends Service {
             if (fullScreenEnabled) {
                 showAlarmOverlay(alarmTitle);
             }
-            if (soundEnabled && mediaPlayer == null) {
-                startBundledSpeech();
+            if (soundEnabled) {
+                initTtsAndSpeak();
             }
         } catch (RuntimeException exception) {
             // 这里原来完全静默——startForeground() 在部分厂商 ROM/系统版本上会因为
@@ -165,9 +173,8 @@ public final class AlarmSoundService extends Service {
         destroyed = true;
         playbackHandler.removeCallbacksAndMessages(null);
         removeAlarmOverlay();
-        releaseMediaPlayer();
+        shutdownTts();
         stopVibration();
-        deleteCachedSpeechFile();
         NotificationManager manager =
                 (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager != null) {
@@ -193,7 +200,8 @@ public final class AlarmSoundService extends Service {
             String title,
             boolean vibrate,
             boolean sound,
-            boolean fullScreen
+            boolean fullScreen,
+            String speechText
     ) {
         Intent intent = new Intent(context, AlarmSoundService.class)
                 .putExtra(AlarmContract.EXTRA_ALARM_ID, alarmId)
@@ -202,7 +210,8 @@ public final class AlarmSoundService extends Service {
                 .putExtra(AlarmContract.EXTRA_TITLE, title)
                 .putExtra(AlarmContract.EXTRA_VIBRATE, vibrate)
                 .putExtra(AlarmContract.EXTRA_SOUND, sound)
-                .putExtra(AlarmContract.EXTRA_FULL_SCREEN, fullScreen);
+                .putExtra(AlarmContract.EXTRA_FULL_SCREEN, fullScreen)
+                .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, speechText);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent);
         } else {
@@ -217,6 +226,7 @@ public final class AlarmSoundService extends Service {
                 .putExtra(AlarmContract.EXTRA_SCHEDULE_ID, scheduleId)
                 .putExtra(AlarmContract.EXTRA_REQUEST_CODE, requestCode)
                 .putExtra(AlarmContract.EXTRA_TITLE, title)
+                .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, currentSpeechText)
                 .putExtra(AlarmContract.EXTRA_VIBRATE, vibrateEnabled)
                 .putExtra(AlarmContract.EXTRA_SOUND, soundEnabled)
                 .putExtra(AlarmContract.EXTRA_FULL_SCREEN, fullScreen)
@@ -316,6 +326,7 @@ public final class AlarmSoundService extends Service {
         String targetAlarmId = alarmId;
         String targetScheduleId = scheduleId;
         String targetTitle = title;
+        String targetSpeechText = currentSpeechText;
         boolean targetVibrate = vibrateEnabled;
         boolean targetSound = soundEnabled;
         boolean targetFullScreen = fullScreenEnabled;
@@ -334,7 +345,8 @@ public final class AlarmSoundService extends Service {
                                 targetScheduleId,
                                 targetVibrate,
                                 targetSound,
-                                targetFullScreen
+                                targetFullScreen,
+                                targetSpeechText
                         );
                     } catch (RuntimeException ignored) {
                         // ignore
@@ -409,83 +421,104 @@ public final class AlarmSoundService extends Service {
         overlayWindowManager = null;
     }
 
-    private void startBundledSpeech() {
-        if (destroyed || mediaPlayer != null) {
+    /** 初始化系统 TTS，优先使用简体中文，不可用时回退到系统默认语言。 */
+    private void initTtsAndSpeak() {
+        if (destroyed || !soundEnabled || currentSpeechText == null) {
             return;
         }
-        try {
-            bundledSpeechFile = new File(getCacheDir(), "alarm_prompt_edge.mp3");
-            try (InputStream input = getAssets().open("alarm_prompt.mp3");
-                 FileOutputStream output = new FileOutputStream(bundledSpeechFile, false)) {
-                byte[] buffer = new byte[8_192];
-                int count;
-                while ((count = input.read(buffer)) != -1) {
-                    output.write(buffer, 0, count);
-                }
-            }
-            startAudioPlayback(bundledSpeechFile);
-        } catch (Exception exception) {
-            releaseMediaPlayer();
-        }
-    }
 
-    private void startAudioPlayback(File audioFile) {
-        if (destroyed || mediaPlayer != null || audioFile == null || !audioFile.isFile()) {
-            return;
-        }
-        try {
-            MediaPlayer player = new MediaPlayer();
-            player.setAudioAttributes(new AudioAttributes.Builder()
+        int generation = ++ttsGeneration;
+        textToSpeech = new TextToSpeech(this, status -> {
+            if (destroyed || generation != ttsGeneration || textToSpeech == null) {
+                return;
+            }
+            if (status != TextToSpeech.SUCCESS) {
+                Log.w(TAG, "TTS init failed with status: " + status);
+                shutdownTts();
+                return;
+            }
+
+            int languageResult = textToSpeech.setLanguage(Locale.SIMPLIFIED_CHINESE);
+            if (languageResult == TextToSpeech.LANG_MISSING_DATA
+                    || languageResult == TextToSpeech.LANG_NOT_SUPPORTED) {
+                textToSpeech.setLanguage(Locale.getDefault());
+            }
+            textToSpeech.setAudioAttributes(new AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_ALARM)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build());
-            player.setDataSource(audioFile.getAbsolutePath());
-            player.setVolume(1.0f, 1.0f);
-            player.setOnCompletionListener(completed ->
-                    playbackHandler.postDelayed(replaySpeech, SPEECH_REPEAT_DELAY_MILLIS));
-            player.setOnErrorListener((failed, what, extra) -> {
-                releaseMediaPlayer();
-                return true;
+            textToSpeech.setSpeechRate(TTS_SPEECH_RATE);
+            textToSpeech.setPitch(TTS_PITCH);
+            textToSpeech.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                @Override
+                public void onStart(String utteranceId) {
+                }
+
+                @Override
+                public void onDone(String utteranceId) {
+                    if (!destroyed
+                            && soundEnabled
+                            && generation == ttsGeneration
+                            && utteranceId.equals(currentUtteranceId)) {
+                        playbackHandler.postDelayed(replaySpeech, SPEECH_REPEAT_DELAY_MILLIS);
+                    }
+                }
+
+                @Override
+                public void onError(String utteranceId) {
+                    // 当前轮播报失败时停止循环，等待用户处理该提醒。
+                }
             });
-            player.prepare();
-            mediaPlayer = player;
-            player.start();
-        } catch (Exception exception) {
-            releaseMediaPlayer();
-        }
+            ttsReady = true;
+            speakCurrentText();
+        });
     }
 
-    private void replaySpeech() {
-        if (destroyed || mediaPlayer == null) {
+    private void speakCurrentText() {
+        if (!ttsReady
+                || textToSpeech == null
+                || destroyed
+                || !soundEnabled
+                || currentSpeechText == null) {
             return;
         }
-        try {
-            mediaPlayer.seekTo(0);
-            mediaPlayer.start();
-        } catch (IllegalStateException ignored) {
-            releaseMediaPlayer();
+
+        currentUtteranceId = "alarm_" + UUID.randomUUID();
+        Bundle params = new Bundle();
+        params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, android.media.AudioManager.STREAM_ALARM);
+        int result = textToSpeech.speak(
+                currentSpeechText,
+                TextToSpeech.QUEUE_FLUSH,
+                params,
+                currentUtteranceId
+        );
+        if (result == TextToSpeech.ERROR) {
+            Log.w(TAG, "TTS speak failed");
+            shutdownTts();
         }
     }
 
-    private void releaseMediaPlayer() {
+    private void scheduleTtsReplay() {
+        if (!destroyed && soundEnabled && currentSpeechText != null) {
+            speakCurrentText();
+        }
+    }
+
+    private void shutdownTts() {
+        ttsGeneration += 1;
         playbackHandler.removeCallbacks(replaySpeech);
-        if (mediaPlayer == null) {
+        TextToSpeech tts = textToSpeech;
+        textToSpeech = null;
+        ttsReady = false;
+        currentUtteranceId = null;
+        if (tts == null) {
             return;
         }
-        mediaPlayer.setOnCompletionListener(null);
-        mediaPlayer.setOnErrorListener(null);
         try {
-            mediaPlayer.stop();
-        } catch (IllegalStateException ignored) {
-            // 播放器可能已结束或失败。
-        }
-        mediaPlayer.release();
-        mediaPlayer = null;
-    }
-
-    private void deleteCachedSpeechFile() {
-        if (bundledSpeechFile != null) {
-            bundledSpeechFile.delete();
+            tts.stop();
+            tts.shutdown();
+        } catch (RuntimeException ignored) {
+            // 系统 TTS 进程可能已退出；停铃仍继续释放其余资源。
         }
     }
 

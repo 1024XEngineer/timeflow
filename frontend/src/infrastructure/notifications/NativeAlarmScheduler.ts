@@ -41,6 +41,7 @@ export class NativeAlarmScheduler implements AlarmSchedulerPort {
       request.vibrate,
       request.sound,
       request.full_screen,
+      request.speech_text,
     );
     if (alarmId == null || alarmId.length === 0) {
       return unscheduled(request.schedule_id);

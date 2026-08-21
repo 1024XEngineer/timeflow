@@ -50,6 +50,7 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
     vibrate: Boolean,
     sound: Boolean,
     fullScreen: Boolean,
+    speechText: String?,
     promise: Promise,
   ) {
     try {
@@ -66,6 +67,7 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
         vibrate,
         sound,
         fullScreen,
+        speechText ?: "",
       )
       Log.i(NAME, "scheduled alarmId=$alarmId")
       val result: WritableMap = Arguments.createMap()

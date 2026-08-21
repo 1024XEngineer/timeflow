@@ -29,6 +29,7 @@ public final class AlarmScheduler {
         public final long triggerAtMillis;
         public final int requestCode;
         public final String title;
+        public final String speechText;
         public final boolean legacy;
         public final boolean vibrate;
         public final boolean sound;
@@ -40,6 +41,7 @@ public final class AlarmScheduler {
                 long triggerAtMillis,
                 int requestCode,
                 String title,
+                String speechText,
                 boolean legacy,
                 boolean vibrate,
                 boolean sound,
@@ -50,6 +52,7 @@ public final class AlarmScheduler {
             this.triggerAtMillis = triggerAtMillis;
             this.requestCode = requestCode;
             this.title = title;
+            this.speechText = speechText == null ? "" : speechText;
             this.legacy = legacy;
             this.vibrate = vibrate;
             this.sound = sound;
@@ -64,7 +67,8 @@ public final class AlarmScheduler {
             String scheduleId,
             boolean vibrate,
             boolean sound,
-            boolean fullScreen
+            boolean fullScreen,
+            String speechText
     ) {
         if (triggerAtMillis <= System.currentTimeMillis()) {
             throw new IllegalArgumentException("trigger_in_past");
@@ -92,6 +96,7 @@ public final class AlarmScheduler {
                 triggerAtMillis,
                 nextRequestCode(alarms),
                 title == null ? "" : title,
+                speechText == null ? "" : speechText,
                 false,
                 vibrate,
                 sound,
@@ -105,18 +110,31 @@ public final class AlarmScheduler {
         return alarmId;
     }
 
-    /** @deprecated 请改用 {@link #schedule(Context, long, String, String, boolean, boolean, boolean)}。 */
+    /** 保留原 TTS 调度签名；未指定强度通道时沿用历史的全响铃行为。 */
+    public static String schedule(
+            Context context,
+            long triggerAtMillis,
+            String title,
+            String scheduleId,
+            String speechText
+    ) {
+        return schedule(
+                context, triggerAtMillis, title, scheduleId, true, true, true, speechText
+        );
+    }
+
+    /** @deprecated 请改用包含响铃通道和 speechText 的完整签名。 */
     @Deprecated
     public static String schedule(
             Context context, long triggerAtMillis, String title, String scheduleId
     ) {
-        return schedule(context, triggerAtMillis, title, scheduleId, true, true, true);
+        return schedule(context, triggerAtMillis, title, scheduleId, true, true, true, "");
     }
 
-    /** @deprecated 请改用 {@link #schedule(Context, long, String, String, boolean, boolean, boolean)}。 */
+    /** @deprecated 请改用包含响铃通道和 speechText 的完整签名。 */
     @Deprecated
     public static String schedule(Context context, long triggerAtMillis, String title) {
-        return schedule(context, triggerAtMillis, title, "", true, true, true);
+        return schedule(context, triggerAtMillis, title, "", true, true, true, "");
     }
 
     /**
@@ -166,6 +184,7 @@ public final class AlarmScheduler {
                 .putExtra(AlarmContract.EXTRA_ALARM_ID, record.alarmId)
                 .putExtra(AlarmContract.EXTRA_SCHEDULE_ID, record.scheduleId)
                 .putExtra(AlarmContract.EXTRA_TITLE, record.title)
+                .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, record.speechText)
                 .putExtra(AlarmContract.EXTRA_REQUEST_CODE, record.requestCode)
                 .putExtra(AlarmContract.EXTRA_VIBRATE, record.vibrate)
                 .putExtra(AlarmContract.EXTRA_SOUND, record.sound)
@@ -259,6 +278,7 @@ public final class AlarmScheduler {
                         triggerAt,
                         requestCode,
                         object.optString("title", ""),
+                        object.optString("speech_text", ""),
                         legacy,
                         object.optBoolean("vibrate", true),
                         object.optBoolean("sound", true),
@@ -353,6 +373,7 @@ public final class AlarmScheduler {
         object.put("trigger_at", alarm.triggerAtMillis);
         object.put("request_code", alarm.requestCode);
         object.put("title", alarm.title);
+        object.put("speech_text", alarm.speechText);
         object.put("legacy", alarm.legacy);
         object.put("vibrate", alarm.vibrate);
         object.put("sound", alarm.sound);
@@ -371,6 +392,7 @@ public final class AlarmScheduler {
                 .putExtra(AlarmContract.EXTRA_SCHEDULE_ID, record.scheduleId)
                 .putExtra(AlarmContract.EXTRA_REQUEST_CODE, record.requestCode)
                 .putExtra(AlarmContract.EXTRA_TITLE, record.title)
+                .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, record.speechText)
                 .putExtra(AlarmContract.EXTRA_VIBRATE, record.vibrate)
                 .putExtra(AlarmContract.EXTRA_SOUND, record.sound)
                 .putExtra(AlarmContract.EXTRA_FULL_SCREEN, record.fullScreen);

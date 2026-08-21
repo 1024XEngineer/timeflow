@@ -7,6 +7,8 @@ export type AlarmScheduleRequest = {
   vibrate: boolean;
   sound: boolean;
   full_screen: boolean;
+  /** JS 生成的日程播报文案；原生侧仅负责按闹钟声道朗读。 */
+  speech_text?: string;
 };
 
 export type AlarmScheduleReceipt = {

@@ -37,6 +37,7 @@ type TimeflowAlarmNative = {
     vibrate?: boolean,
     sound?: boolean,
     fullScreen?: boolean,
+    speechText?: string | null,
   ) => Promise<{ alarmId: string; scheduleId?: string }>;
   cancel: (alarmId: string) => Promise<boolean>;
   cancelAll: () => Promise<number>;
@@ -70,6 +71,7 @@ export async function nativeScheduleAlarm(
   vibrate?: boolean,
   sound?: boolean,
   fullScreen?: boolean,
+  speechText?: string,
 ): Promise<string | null> {
   const native = getNativeAlarm();
   if (!isTimeflowAlarmAvailable() || native == null) return null;
@@ -81,6 +83,7 @@ export async function nativeScheduleAlarm(
       vibrate ?? true,
       sound ?? true,
       fullScreen ?? true,
+      speechText ?? '',
     );
     return result.alarmId;
   } catch (error) {
