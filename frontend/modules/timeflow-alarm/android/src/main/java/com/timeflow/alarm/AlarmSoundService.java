@@ -75,6 +75,11 @@ public final class AlarmSoundService extends Service {
                 + " fullScreen=" + extras.fullScreen);
 
         if (overlayView != null) {
+            // 临时诊断日志：这行打出来就说明这条闹钟被前一条还没关掉的止铃界面
+            // 卡住了，静默进了队列，不会有任何全屏/声音/震动——不是这条闹钟本身
+            // 有问题，是前一条 alarmId 没被确认/延后/关闭。
+            Log.i(TAG, "onStartCommand alarmId=" + extras.alarmId
+                    + " queued behind currently visible alarmId=" + alarmId);
             // 界面被占用：先把这条闹钟从持久化列表摘掉、通知 JS 已经 fired（跟
             // 立刻展示的那条待遇一致，不然 JS 侧的状态跟"其实已经响了"对不上），
             // 排队等前一条处理完再展示，不在这里动 this.alarmId 等字段——那些字段
@@ -290,6 +295,11 @@ public final class AlarmSoundService extends Service {
         if (overlayView != null
                 || Build.VERSION.SDK_INT < Build.VERSION_CODES.M
                 || !Settings.canDrawOverlays(this)) {
+            // 临时诊断日志：这三个早退条件原来完全静默——尤其是 canDrawOverlays()
+            // 为 false 这种情况，之前唯一的失败日志只覆盖 addView() 抛异常那条
+            // 分支，根本走不到那里就已经 return 了，logcat 里什么痕迹都没有。
+            Log.i(TAG, "showAlarmOverlay skipped: overlayView!=null=" + (overlayView != null)
+                    + " canDrawOverlays=" + Settings.canDrawOverlays(this));
             return;
         }
 
@@ -376,6 +386,7 @@ public final class AlarmSoundService extends Service {
             overlayWindowManager.addView(content, params);
             overlayView = content;
             OemPermissionHelper.recordOverlayFailure(this, false);
+            Log.i(TAG, "showAlarmOverlay addView succeeded for alarmId=" + targetAlarmId);
         } catch (RuntimeException exception) {
             // 常见于小米"后台弹出界面"关闭、或自启动被拦导致系统对这次前台状态判定
             // 不认账——标准悬浮窗权限（上面 canDrawOverlays 那道早退）已经通过了，
