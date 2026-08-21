@@ -1,5 +1,12 @@
 import { useRef, useState } from 'react';
-import type { LayoutChangeEvent, ScrollView } from 'react-native';
+import type {
+  LayoutChangeEvent,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
+  ScrollView,
+} from 'react-native';
+
+export const PINNED_TO_BOTTOM_THRESHOLD = 80;
 
 export function contentFitsViewport(contentHeight: number, viewportHeight: number): boolean {
   if (viewportHeight <= 0) {
@@ -8,8 +15,24 @@ export function contentFitsViewport(contentHeight: number, viewportHeight: numbe
   return contentHeight <= viewportHeight + 1;
 }
 
+export function isPinnedToBottom({
+  contentHeight,
+  offsetY,
+  viewportHeight,
+  threshold = PINNED_TO_BOTTOM_THRESHOLD,
+}: {
+  contentHeight: number;
+  offsetY: number;
+  viewportHeight: number;
+  threshold?: number;
+}): boolean {
+  const distanceFromBottom = contentHeight - viewportHeight - offsetY;
+  return distanceFromBottom <= threshold;
+}
+
 export function usePinnedTranscriptScroll() {
   const transcriptRef = useRef<ScrollView>(null);
+  const pinnedRef = useRef(true);
   const viewportHeightRef = useRef(0);
   const contentHeightRef = useRef(0);
   const [fitsViewport, setFitsViewport] = useState(true);
@@ -24,16 +47,30 @@ export function usePinnedTranscriptScroll() {
     syncFits();
   };
 
+  const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    viewportHeightRef.current = layoutMeasurement.height;
+    contentHeightRef.current = contentSize.height;
+    pinnedRef.current = isPinnedToBottom({
+      contentHeight: contentSize.height,
+      offsetY: contentOffset.y,
+      viewportHeight: layoutMeasurement.height,
+    });
+  };
+
   const onContentSizeChange = (_width: number, height: number) => {
     contentHeightRef.current = height;
     syncFits();
-    transcriptRef.current?.scrollToEnd({ animated: true });
+    if (pinnedRef.current) {
+      transcriptRef.current?.scrollToEnd({ animated: true });
+    }
   };
 
   return {
     fitsViewport,
     onContentSizeChange,
     onLayout,
+    onScroll,
     transcriptRef,
   };
 }

@@ -5,6 +5,7 @@ import type {
   AppliedCommand,
   ConversationTurnRecord,
   ConversationTurnState,
+  VoiceChatMessage,
 } from '../domain/ConversationTurn';
 
 import type {
