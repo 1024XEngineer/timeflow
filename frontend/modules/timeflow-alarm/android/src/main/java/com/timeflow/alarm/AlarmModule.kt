@@ -48,7 +48,7 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
     title: String?,
     scheduleId: String?,
     vibrate: Boolean,
-    sound: Boolean,
+    soundTier: String?,
     fullScreen: Boolean,
     speechText: String?,
     promise: Promise,
@@ -57,7 +57,7 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
       Log.i(
         NAME,
         "schedule triggerAtMillis=$triggerAtMillis title=$title scheduleId=$scheduleId " +
-          "vibrate=$vibrate sound=$sound fullScreen=$fullScreen",
+          "vibrate=$vibrate soundTier=$soundTier fullScreen=$fullScreen",
       )
       val alarmId = AlarmScheduler.schedule(
         reactContext,
@@ -65,7 +65,7 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
         title ?: "日程提醒",
         scheduleId ?: "",
         vibrate,
-        sound,
+        soundTier ?: AlarmContract.SOUND_TIER_FULL,
         fullScreen,
         speechText ?: "",
       )
@@ -113,6 +113,38 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
       promise.resolve(true)
     } catch (error: Exception) {
       promise.reject("STOP_RINGING_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun presentNow(
+    alarmId: String?,
+    scheduleId: String?,
+    title: String?,
+    vibrate: Boolean,
+    soundTier: String?,
+    fullScreen: Boolean,
+    promise: Promise,
+  ) {
+    try {
+      val resolvedAlarmId = alarmId?.takeIf { it.isNotEmpty() } ?: "geofence-${System.currentTimeMillis()}"
+      val resolvedScheduleId = scheduleId ?: ""
+      val resolvedTitle = title?.takeIf { it.isNotEmpty() } ?: "日程提醒"
+      AlarmSoundService.start(
+        reactContext,
+        resolvedAlarmId,
+        resolvedScheduleId,
+        AlarmScheduler.immediateRequestCode(resolvedAlarmId),
+        resolvedTitle,
+        vibrate,
+        soundTier ?: AlarmContract.SOUND_TIER_FULL,
+        fullScreen,
+      )
+      Log.i(NAME, "presentNow requested alarmId=$resolvedAlarmId scheduleId=$resolvedScheduleId")
+      promise.resolve(true)
+    } catch (error: Exception) {
+      Log.w(NAME, "presentNow failed", error)
+      promise.reject("PRESENT_NOW_FAILED", error.message, error)
     }
   }
 

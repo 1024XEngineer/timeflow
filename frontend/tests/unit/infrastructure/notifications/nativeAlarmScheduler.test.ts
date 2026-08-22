@@ -63,7 +63,7 @@ type NativeAlarmMock = {
       title?: string | null,
       scheduleId?: string | null,
       vibrate?: boolean,
-      sound?: boolean,
+      soundTier?: string,
       fullScreen?: boolean,
       speechText?: string | null,
     ) => Promise<{ alarmId: string }>
@@ -101,7 +101,7 @@ function request(overrides: Partial<AlarmScheduleRequest> = {}): AlarmScheduleRe
     title: '晨会',
     exact: true,
     vibrate: true,
-    sound: true,
+    sound_tier: 'full',
     full_screen: true,
     ...overrides,
   };
@@ -244,30 +244,23 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
       '晨会',
       'schedule-1',
       true,
-      true,
+      'full',
       true,
       '',
     );
   });
 
-  it('forwards ring channels and speech text through to the native bridge', async () => {
+  it('forwards vibrate/sound_tier/full_screen through to the native bridge', async () => {
     const scheduler = new NativeAlarmScheduler();
-    await scheduler.schedule(
-      request({
-        vibrate: false,
-        sound: false,
-        full_screen: false,
-        speech_text: '晨会，时间到了。',
-      }),
-    );
+    await scheduler.schedule(request({ vibrate: false, sound_tier: 'none', full_screen: false }));
     expect(native.schedule).toHaveBeenCalledWith(
       Date.parse(FUTURE),
       '晨会',
       'schedule-1',
       false,
+      'none',
       false,
-      false,
-      '晨会，时间到了。',
+      '',
     );
   });
 
@@ -359,7 +352,7 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
       '晨会',
       'ok',
       true,
-      true,
+      'full',
       true,
       '',
     );
@@ -369,7 +362,7 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
       '午会',
       'later',
       true,
-      true,
+      'full',
       true,
       '',
     );

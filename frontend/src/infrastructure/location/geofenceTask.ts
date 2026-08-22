@@ -3,6 +3,10 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 import * as TaskManager from 'expo-task-manager';
 
 export const GEOFENCE_TASK_NAME = 'timeflow-geofence';
+export const GEOFENCE_DIAGNOSTIC_KEY = 'timeflow-last-geofence-diagnostic';
+export const GEOFENCE_DIAGNOSTIC_HISTORY_KEY = 'timeflow-geofence-diagnostic-history';
+const MAX_GEOFENCE_DIAGNOSTICS = 20;
+let diagnosticChain: Promise<void> = Promise.resolve();
 
 export type GeofenceTaskPayload = {
   schedule_id: string;
@@ -13,7 +17,26 @@ export type GeofenceTaskPayload = {
   observed_at: string;
 };
 
-type GeofenceTaskListener = (payload: GeofenceTaskPayload) => void;
+export type GeofenceDiagnostic = {
+  phase:
+    | 'callback_received'
+    | 'listener_completed'
+    | 'native_requested'
+    | 'notification_scheduled'
+    | 'state_updated'
+    | 'queued'
+    | 'delivery_failed'
+    | 'registration_succeeded'
+    | 'initial_location_sample'
+    | 'manual_location_read';
+  schedule_id: string;
+  event: GeofenceTaskPayload['event'] | 'registration' | 'initial_sample' | 'manual_read';
+  observed_at: string;
+  recorded_at: string;
+  detail?: string;
+};
+
+type GeofenceTaskListener = (payload: GeofenceTaskPayload) => unknown;
 
 const listeners = new Set<GeofenceTaskListener>();
 
@@ -29,6 +52,7 @@ type HeadlessScheduleRow = {
   location_name: string | null;
   schedule_type: string;
   reminder_type: string | null;
+  reminder_strength: 'low' | 'medium' | 'high' | null;
   reminder_disposition_state: string | null;
   snoozed_until: string | null;
   geofence_armed: number;
@@ -41,6 +65,96 @@ export function subscribeGeofenceTaskEvents(listener: GeofenceTaskListener): () 
   return () => {
     listeners.delete(listener);
   };
+}
+
+export async function getLastGeofenceDiagnostic(): Promise<GeofenceDiagnostic | null> {
+  const storage = await loadStorage();
+  if (storage == null) return null;
+  const raw = await storage.getItem(GEOFENCE_DIAGNOSTIC_KEY);
+  if (raw == null) return null;
+  try {
+    return JSON.parse(raw) as GeofenceDiagnostic;
+  } catch {
+    return null;
+  }
+}
+
+export async function getGeofenceDiagnostics(): Promise<readonly GeofenceDiagnostic[]> {
+  const storage = await loadStorage();
+  if (storage == null) return [];
+  const raw = await storage.getItem(GEOFENCE_DIAGNOSTIC_HISTORY_KEY);
+  if (raw == null) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as GeofenceDiagnostic[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function clearGeofenceDiagnostics(): Promise<void> {
+  return enqueueDiagnosticWrite(async () => {
+    const storage = await loadStorage();
+    if (storage == null) return;
+    await Promise.all([
+      storage.removeItem(GEOFENCE_DIAGNOSTIC_KEY),
+      storage.removeItem(GEOFENCE_DIAGNOSTIC_HISTORY_KEY),
+    ]);
+  });
+}
+
+/** 记录应用侧操作，和 defineTask 收到的真实系统围栏回调使用同一条时间线。 */
+export async function recordGeofenceDiagnostic(
+  record: Omit<GeofenceDiagnostic, 'recorded_at'>,
+): Promise<void> {
+  return enqueueDiagnosticWrite(() =>
+    persistGeofenceDiagnostic({ ...record, recorded_at: new Date().toISOString() }),
+  );
+}
+
+function enqueueDiagnosticWrite(work: () => Promise<void>): Promise<void> {
+  const run = diagnosticChain.then(work);
+  diagnosticChain = run.catch(() => undefined);
+  return run;
+}
+
+/**
+ * Development-only hook for exercising the same event path as the native task.
+ * It deliberately resolves the center from SQLite so the UI does not need to
+ * expose location coordinates just to run a local test.
+ */
+export async function simulateGeofenceEventForTesting(
+  scheduleId: string,
+  event: GeofenceTaskPayload['event'],
+): Promise<void> {
+  const database = await openHeadlessDatabase();
+  if (database == null) {
+    throw new Error('无法打开本地日程数据库');
+  }
+
+  const schedule = await database.getFirstAsync<{
+    latitude: number | null;
+    longitude: number | null;
+  }>(
+    `SELECT latitude, longitude
+       FROM local_schedules
+      WHERE id = ?
+        AND schedule_type = 'location'
+        AND status = 'active'`,
+    scheduleId,
+  );
+  if (schedule?.latitude == null || schedule.longitude == null) {
+    throw new Error('这条地点提醒没有可用的坐标');
+  }
+
+  await emit({
+    schedule_id: scheduleId,
+    event,
+    latitude: schedule.latitude,
+    longitude: schedule.longitude,
+    radius: 200,
+    observed_at: new Date().toISOString(),
+  });
 }
 
 /** 懒加载：expo-sqlite/kv-store 的默认导出是模块加载时就构造的单例，顶层 import
@@ -97,23 +211,97 @@ async function persistPendingEvent(payload: GeofenceTaskPayload): Promise<void> 
   }
 }
 
-async function emit(payload: GeofenceTaskPayload): Promise<void> {
-  if (listeners.size === 0) {
-    let delivered = false;
+async function persistGeofenceDiagnostic(record: GeofenceDiagnostic): Promise<void> {
+  const storage = await loadStorage();
+  if (storage == null) return;
+  await storage.setItem(GEOFENCE_DIAGNOSTIC_KEY, JSON.stringify(record));
+  const raw = await storage.getItem(GEOFENCE_DIAGNOSTIC_HISTORY_KEY);
+  let history: GeofenceDiagnostic[] = [];
+  if (raw != null) {
     try {
-      delivered = await deliverHeadlessGeofenceEvent(payload);
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) history = parsed as GeofenceDiagnostic[];
     } catch {
-      delivered = false;
+      // 历史记录损坏不影响当前围栏事件。
     }
-    if (!delivered) {
+  }
+  history.push(record);
+  await storage.setItem(
+    GEOFENCE_DIAGNOSTIC_HISTORY_KEY,
+    JSON.stringify(history.slice(-MAX_GEOFENCE_DIAGNOSTICS)),
+  );
+}
+
+async function emit(payload: GeofenceTaskPayload): Promise<void> {
+  await recordGeofenceDiagnostic({
+    phase: 'callback_received',
+    schedule_id: payload.schedule_id,
+    event: payload.event,
+    observed_at: payload.observed_at,
+  });
+
+  if (listeners.size === 0) {
+    let result: HeadlessDeliveryResult | false = false;
+    try {
+      result = await deliverHeadlessGeofenceEvent(payload);
+    } catch {
+      result = false;
+    }
+    if (result === 'native') {
+      await recordGeofenceDiagnostic({
+        phase: 'native_requested',
+        schedule_id: payload.schedule_id,
+        event: payload.event,
+        observed_at: payload.observed_at,
+      });
+    } else if (result === 'notification') {
+      await recordGeofenceDiagnostic({
+        phase: 'notification_scheduled',
+        schedule_id: payload.schedule_id,
+        event: payload.event,
+        observed_at: payload.observed_at,
+      });
+    } else if (result === 'state_updated') {
+      await recordGeofenceDiagnostic({
+        phase: 'state_updated',
+        schedule_id: payload.schedule_id,
+        event: payload.event,
+        observed_at: payload.observed_at,
+      });
+    } else {
       await persistPendingEvent(payload);
+      await recordGeofenceDiagnostic({
+        phase: 'queued',
+        schedule_id: payload.schedule_id,
+        event: payload.event,
+        observed_at: payload.observed_at,
+        detail: '等待应用会话恢复后重放',
+      });
     }
     return;
   }
   for (const listener of listeners) {
-    listener(payload);
+    try {
+      await listener(payload);
+      await recordGeofenceDiagnostic({
+        phase: 'listener_completed',
+        schedule_id: payload.schedule_id,
+        event: payload.event,
+        observed_at: payload.observed_at,
+      });
+    } catch (error) {
+      await recordGeofenceDiagnostic({
+        phase: 'delivery_failed',
+        schedule_id: payload.schedule_id,
+        event: payload.event,
+        observed_at: payload.observed_at,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 }
+
+type HeadlessDeliveryResult = 'native' | 'notification' | 'state_updated';
 
 /**
  * Deliver a notification while Expo has only started this headless task.
@@ -123,7 +311,9 @@ async function emit(payload: GeofenceTaskPayload): Promise<void> {
  * Returning false leaves the event in the existing pending queue for replay when the
  * normal application session starts.
  */
-async function deliverHeadlessGeofenceEvent(payload: GeofenceTaskPayload): Promise<boolean> {
+async function deliverHeadlessGeofenceEvent(
+  payload: GeofenceTaskPayload,
+): Promise<HeadlessDeliveryResult | false> {
   const database = await openHeadlessDatabase();
   if (database == null) return false;
 
@@ -141,11 +331,11 @@ async function deliverHeadlessGeofenceEvent(payload: GeofenceTaskPayload): Promi
            AND geofence_armed = 0`,
         payload.schedule_id,
       );
-      return true;
+      return 'state_updated';
     }
 
     const schedule = await database.getFirstAsync<HeadlessScheduleRow>(
-      `SELECT id, title, location_name, schedule_type, reminder_type,
+      `SELECT id, title, location_name, schedule_type, reminder_type, reminder_strength,
               reminder_disposition_state, snoozed_until, geofence_armed, status
          FROM local_schedules
         WHERE id = ?`,
@@ -162,35 +352,45 @@ async function deliverHeadlessGeofenceEvent(payload: GeofenceTaskPayload): Promi
         schedule.snoozed_until != null &&
         Date.parse(schedule.snoozed_until) > Date.parse(payload.observed_at))
     ) {
-      return true;
+      return 'state_updated';
     }
 
-    const notifications = await loadNotifications();
-    if (notifications == null) return false;
-    await ensureAndroidChannel(notifications);
-    notifications.setNotificationHandler({
-      handleNotification: async () => ({
-        shouldShowBanner: true,
-        shouldShowList: true,
-        shouldPlaySound: true,
-        shouldSetBadge: false,
-      }),
-    });
+    const strength = schedule.reminder_strength ?? 'medium';
+    const nativePresented = await presentHeadlessNativeAlarm(
+      schedule.id,
+      schedule.title || '日程提醒',
+      strength,
+    );
+    if (!nativePresented) {
+      const notifications = await loadNotifications();
+      if (notifications == null) return false;
+      await ensureAndroidChannel(notifications);
+      notifications.setNotificationHandler({
+        handleNotification: async () => ({
+          shouldShowBanner: true,
+          shouldShowList: true,
+          shouldPlaySound: true,
+          shouldSetBadge: false,
+        }),
+      });
 
-    const notificationId = `reminder-${schedule.id}`;
-    await notifications.scheduleNotificationAsync({
-      identifier: notificationId,
-      content: {
-        title: schedule.title || '日程提醒',
-        body:
-          schedule.reminder_type === 'return_to_recorded_location'
-            ? `您已回到${schedule.location_name ?? '记录地点'}附近，请及时处理。`
-            : `您已进入${schedule.location_name ?? '目标地点'}附近，请及时处理。`,
-        sound: 'default',
-        data: { schedule_id: schedule.id, reason: schedule.reminder_type ?? 'arrive_location' },
-      },
-      trigger: null,
-    });
+      const notificationId = `reminder-${schedule.id}`;
+      await notifications.scheduleNotificationAsync({
+        identifier: notificationId,
+        content: {
+          title: schedule.title || '日程提醒',
+          body:
+            schedule.reminder_type === 'return_to_recorded_location'
+              ? `您已回到${schedule.location_name ?? '记录地点'}附近，请及时处理。`
+              : `您已进入${schedule.location_name ?? '目标地点'}附近，请及时处理。`,
+          sound: 'default',
+          data: { schedule_id: schedule.id, reason: schedule.reminder_type ?? 'arrive_location' },
+        },
+        trigger: { channelId: 'timeflow-reminders' },
+      });
+    }
+
+    const deliveryResult: HeadlessDeliveryResult = nativePresented ? 'native' : 'notification';
 
     await database.runAsync(
       `UPDATE local_schedules
@@ -207,7 +407,30 @@ async function deliverHeadlessGeofenceEvent(payload: GeofenceTaskPayload): Promi
       payload.observed_at,
       schedule.id,
     );
-    return true;
+    return deliveryResult;
+  }
+}
+
+async function presentHeadlessNativeAlarm(
+  scheduleId: string,
+  title: string,
+  strength: 'low' | 'medium' | 'high',
+): Promise<boolean> {
+  try {
+    const bridge = await import('../notifications/native/TimeflowAlarmBridge');
+    const { resolveStrengthDeliveryPlan } =
+      await import('../../features/reminder/domain/strengthDelivery');
+    const plan = resolveStrengthDeliveryPlan(strength);
+    return await bridge.nativePresentAlarmNow(
+      `geofence-${scheduleId}-${Date.now()}`,
+      scheduleId,
+      title,
+      plan.useVibration,
+      plan.alarmSoundTier,
+      true,
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -237,11 +460,16 @@ async function loadNotifications(): Promise<typeof import('expo-notifications') 
 async function ensureAndroidChannel(
   notifications: typeof import('expo-notifications'),
 ): Promise<void> {
+  // 独立渠道 ID，不跟 ExpoSystemNotification.ts 的 'timeflow-reminders-quiet' 共用——
+  // 这条路径故意要出声（地点提醒 headless 兜底），渠道声音创建后不可变，两边共用
+  // 一个渠道 ID 谁先创建谁的设置就永久生效，另一边的诉求会被吃掉。显式给 sound
+  // 赋值而不是留给默认值，避免依赖未文档化的隐式行为。
   await notifications.setNotificationChannelAsync('timeflow-reminders', {
     name: '日程提醒',
     importance: notifications.AndroidImportance.DEFAULT,
     vibrationPattern: [0, 180],
     lightColor: '#D7F36A',
+    sound: 'default',
   });
 }
 

@@ -1,5 +1,7 @@
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 
+import type { AlarmSoundTier } from '../../../features/reminder/domain/strengthDelivery';
+
 export type NativeAlarmPermissionStatus = {
   exactAlarm: boolean;
   overlay: boolean;
@@ -35,13 +37,21 @@ type TimeflowAlarmNative = {
     title?: string | null,
     scheduleId?: string | null,
     vibrate?: boolean,
-    sound?: boolean,
+    soundTier?: AlarmSoundTier,
     fullScreen?: boolean,
     speechText?: string | null,
   ) => Promise<{ alarmId: string; scheduleId?: string }>;
   cancel: (alarmId: string) => Promise<boolean>;
   cancelAll: () => Promise<number>;
   stopRinging: () => Promise<boolean>;
+  presentNow: (
+    alarmId: string,
+    scheduleId: string,
+    title: string,
+    vibrate: boolean,
+    soundTier: AlarmSoundTier,
+    fullScreen: boolean,
+  ) => Promise<boolean>;
   peekNativeDispositions: () => Promise<NativeAlarmDispositionPayload[]>;
   ackNativeDispositions: (scheduleIds: string[]) => Promise<boolean>;
   getPermissionStatus: () => Promise<NativeAlarmPermissionStatus>;
@@ -69,7 +79,7 @@ export async function nativeScheduleAlarm(
   title: string,
   scheduleId?: string,
   vibrate?: boolean,
-  sound?: boolean,
+  soundTier?: AlarmSoundTier,
   fullScreen?: boolean,
   speechText?: string,
 ): Promise<string | null> {
@@ -81,7 +91,7 @@ export async function nativeScheduleAlarm(
       title,
       scheduleId ?? '',
       vibrate ?? true,
-      sound ?? true,
+      soundTier ?? 'full',
       fullScreen ?? true,
       speechText ?? '',
     );
@@ -121,6 +131,24 @@ export async function nativeStopAlarmRinging(): Promise<void> {
     await native.stopRinging();
   } catch {
     // 尽力停铃，忽略失败。
+  }
+}
+
+export async function nativePresentAlarmNow(
+  alarmId: string,
+  scheduleId: string,
+  title: string,
+  vibrate: boolean,
+  soundTier: AlarmSoundTier,
+  fullScreen: boolean,
+): Promise<boolean> {
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null) return false;
+  try {
+    return await native.presentNow(alarmId, scheduleId, title, vibrate, soundTier, fullScreen);
+  } catch (error) {
+    console.warn('[TimeflowAlarm] nativePresentAlarmNow failed', error);
+    return false;
   }
 }
 
