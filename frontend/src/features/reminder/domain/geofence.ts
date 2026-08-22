@@ -65,3 +65,35 @@ export function resolveGeofenceCenter(
 function toRadians(degrees: number): number {
   return (degrees * Math.PI) / 180;
 }
+
+/** 离最近目标 ≤ 此距离（米）时，按最密的轮询间隔查。 */
+const GUARD_POLL_NEAR_METERS = 50;
+/** 离最近目标 ≥ 此距离（米）时，按最疏的轮询间隔查。 */
+const GUARD_POLL_FAR_METERS = 2_000;
+/** 最密轮询间隔：贴近围栏边界时，尽量不错过穿越的瞬间。 */
+const GUARD_POLL_MIN_INTERVAL_MS = 15_000;
+/** 最疏轮询间隔：离目标很远时没必要频繁定位，省电。 */
+const GUARD_POLL_MAX_INTERVAL_MS = 300_000;
+
+/**
+ * 常驻前台服务里持续定位的轮询间隔：离最近的地点提醒目标越近，查得越勤；
+ * 远离目标时退到最疏间隔省电。50m 内外和 2000m 外的两个端点截断，中间线性插值。
+ * distanceMeters 为 Infinity（没有任何地点提醒在监听）时返回最疏间隔。
+ */
+export function resolveGuardPollIntervalMs(distanceToNearestTargetMeters: number): number {
+  if (
+    !Number.isFinite(distanceToNearestTargetMeters) ||
+    distanceToNearestTargetMeters >= GUARD_POLL_FAR_METERS
+  ) {
+    return GUARD_POLL_MAX_INTERVAL_MS;
+  }
+  if (distanceToNearestTargetMeters <= GUARD_POLL_NEAR_METERS) {
+    return GUARD_POLL_MIN_INTERVAL_MS;
+  }
+  const ratio =
+    (distanceToNearestTargetMeters - GUARD_POLL_NEAR_METERS) /
+    (GUARD_POLL_FAR_METERS - GUARD_POLL_NEAR_METERS);
+  return Math.round(
+    GUARD_POLL_MIN_INTERVAL_MS + ratio * (GUARD_POLL_MAX_INTERVAL_MS - GUARD_POLL_MIN_INTERVAL_MS),
+  );
+}

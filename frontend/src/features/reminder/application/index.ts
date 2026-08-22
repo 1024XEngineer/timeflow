@@ -1,4 +1,6 @@
 export { LocalReminderApplication } from './LocalReminderApplication';
+export { ReminderGuardCoordinator } from './ReminderGuardCoordinator';
+export type { ReminderGuardDependencies } from './ReminderGuardCoordinator';
 export type {
   AlarmNativeDisposition,
   AlarmNativeEvent,

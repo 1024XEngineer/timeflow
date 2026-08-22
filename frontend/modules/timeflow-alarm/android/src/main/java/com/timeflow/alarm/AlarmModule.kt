@@ -116,6 +116,25 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
+  /**
+   * 提醒守护后台任务（reminderGuardTask.ts）判断"这条时间型日程原生闹钟当初有没有
+   * 挂上"用——JS 内存里的 registrations 在守护任务可能运行的独立/headless 上下文里
+   * 拿不到，只有 AlarmScheduler 持久化的挂钟列表是跨上下文都能查的真相来源。
+   */
+  @ReactMethod
+  fun hasArmedAlarm(scheduleId: String?, promise: Promise) {
+    try {
+      if (scheduleId.isNullOrEmpty()) {
+        promise.resolve(false)
+        return
+      }
+      val armed = AlarmScheduler.loadAlarms(reactContext).any { it.scheduleId == scheduleId }
+      promise.resolve(armed)
+    } catch (error: Exception) {
+      promise.reject("HAS_ARMED_ALARM_FAILED", error.message, error)
+    }
+  }
+
   @ReactMethod
   fun presentNow(
     alarmId: String?,
