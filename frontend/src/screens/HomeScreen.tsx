@@ -64,9 +64,10 @@ export function HomeScreen({
   // 提醒确认（闹钟响铃/App 内弹窗）只写本地库，不经过语音写日程那条
   // scheduleDataRevision 路径——地点提醒确认后要从下方地点列表里消失，
   // 靠这里单独订阅触发重取，否则要等重启才会刷新。
-  useEffect(() => reminder.onScheduleConfirmed(() => setConfirmRevision((value) => value + 1)), [
-    reminder,
-  ]);
+  useEffect(
+    () => reminder.onScheduleConfirmed(() => setConfirmRevision((value) => value + 1)),
+    [reminder],
+  );
 
   // command.result 写完本地库之后 lastAppliedCommand 才会更新（见
   // AssistantConversationService.applyCommandResultLocally），所以这里发现它
