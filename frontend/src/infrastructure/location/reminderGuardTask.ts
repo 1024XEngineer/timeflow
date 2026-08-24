@@ -614,14 +614,20 @@ async function refreshGuardRegistration(
     const intervalMs = resolveNextPollIntervalMs(currentSample, targets);
 
     try {
+      // 这次调用发生在 GUARD_TASK_NAME 自己的 headless 回调里——这时候 App 进程
+      // 大概率不在前台。expo-location 原生侧只要 options 带了 foregroundService，
+      // 就会无条件检查 AppForegroundedSingleton.isForegrounded，不在前台直接抛
+      // ForegroundServiceStartNotAllowedException，把整个 guard 任务打崩。
+      // 不带 foregroundService 这条分支不查这个前台状态，只查后台定位权限
+      // （isMissingBackgroundPermissions）——产品侧现在把"始终允许"定位权限设为
+      // 必需项（假设用户已经授予），所以这里可以放心不传 foregroundService，换
+      // 纯后台任务的路径来改轮询间隔。常驻通知仍然由 ReminderGuardCoordinator.
+      // ensureLocationUpdates() 首次注册时带 foregroundService 建立，这里只是
+      // 调整间隔，不需要也不应该重新触发那条前台服务专属检查。
       await Location.startLocationUpdatesAsync(GUARD_TASK_NAME, {
         accuracy: Location.Accuracy.Balanced,
         timeInterval: intervalMs,
         distanceInterval: 0,
-        foregroundService: {
-          notificationTitle: GUARD_NOTIFICATION_TITLE,
-          notificationBody: '提醒守护运行中',
-        },
       });
     } catch (error) {
       console.warn('[guard] refresh startLocationUpdatesAsync failed', error);
