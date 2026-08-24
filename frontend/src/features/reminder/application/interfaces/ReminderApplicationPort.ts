@@ -59,4 +59,9 @@ export interface ReminderApplicationPort {
    * 重弹一遍，见调用方 registerInternal/rebuildInternal 的路径区分）。
    */
   onPermissionBlocked(listener: (event: ReminderPermissionBlockedEvent) => void): () => void;
+  /**
+   * 订阅"某条日程被确认"事件——确认只写本地 SQLite，不经过日历页读取的
+   * ScheduleClientService，日历页不知道要重取，地点提醒会一直挂着直到重启。
+   */
+  onScheduleConfirmed(listener: () => void): () => void;
 }
