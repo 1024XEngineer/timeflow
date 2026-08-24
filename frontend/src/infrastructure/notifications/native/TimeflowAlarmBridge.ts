@@ -51,6 +51,7 @@ type TimeflowAlarmNative = {
     vibrate: boolean,
     soundTier: AlarmSoundTier,
     fullScreen: boolean,
+    speechText?: string | null,
   ) => Promise<boolean>;
   hasArmedAlarm: (scheduleId: string) => Promise<boolean>;
   peekNativeDispositions: () => Promise<NativeAlarmDispositionPayload[]>;
@@ -82,7 +83,7 @@ export async function nativeScheduleAlarm(
   vibrate?: boolean,
   soundTier?: AlarmSoundTier,
   fullScreen?: boolean,
-  speechText?: string,
+  speechText?: string | null,
 ): Promise<string | null> {
   const native = getNativeAlarm();
   if (!isTimeflowAlarmAvailable() || native == null) return null;
@@ -142,11 +143,20 @@ export async function nativePresentAlarmNow(
   vibrate: boolean,
   soundTier: AlarmSoundTier,
   fullScreen: boolean,
+  speechText?: string | null,
 ): Promise<boolean> {
   const native = getNativeAlarm();
   if (!isTimeflowAlarmAvailable() || native == null) return false;
   try {
-    return await native.presentNow(alarmId, scheduleId, title, vibrate, soundTier, fullScreen);
+    return await native.presentNow(
+      alarmId,
+      scheduleId,
+      title,
+      vibrate,
+      soundTier,
+      fullScreen,
+      speechText ?? '',
+    );
   } catch (error) {
     console.warn('[TimeflowAlarm] nativePresentAlarmNow failed', error);
     return false;

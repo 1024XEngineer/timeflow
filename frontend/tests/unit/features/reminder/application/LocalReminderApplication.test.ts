@@ -1249,7 +1249,12 @@ describe('LocalReminderApplication', () => {
 
       expect(receipt.channels).toEqual(['native_full_screen']);
       expect(presentNow).toHaveBeenCalledWith(
-        expect.objectContaining({ vibrate: true, sound_tier: 'full', full_screen: true }),
+        expect.objectContaining({
+          vibrate: true,
+          sound_tier: 'full',
+          full_screen: true,
+          speech_text: '喝水提醒，时间到了。现在已经18点了。',
+        }),
       );
       expect(deps.presenter.show).not.toHaveBeenCalled();
       expect(deps.systemNotification.show).not.toHaveBeenCalled();
@@ -1334,11 +1339,24 @@ describe('LocalReminderApplication', () => {
     // 低=一声提示音不震动、中=一声提示音+震动、高=循环语音+震动。
     const cases: [
       ReminderStrength,
-      { vibrate: boolean; sound_tier: 'none' | 'ping' | 'full'; full_screen: boolean },
+      {
+        vibrate: boolean;
+        sound_tier: 'none' | 'ping' | 'full';
+        full_screen: boolean;
+        speech_text: string;
+      },
     ][] = [
-      ['low', { vibrate: false, sound_tier: 'ping', full_screen: true }],
-      ['medium', { vibrate: true, sound_tier: 'ping', full_screen: true }],
-      ['high', { vibrate: true, sound_tier: 'full', full_screen: true }],
+      ['low', { vibrate: false, sound_tier: 'ping', full_screen: true, speech_text: '' }],
+      ['medium', { vibrate: true, sound_tier: 'ping', full_screen: true, speech_text: '' }],
+      [
+        'high',
+        {
+          vibrate: true,
+          sound_tier: 'full',
+          full_screen: true,
+          speech_text: '喝水提醒，时间到了。现在已经18点了。',
+        },
+      ],
     ];
     it.each(cases)('%s strength schedules the native alarm with %j', async (strength, expected) => {
       const schedule = fixtureSchedule({
@@ -1362,10 +1380,7 @@ describe('LocalReminderApplication', () => {
 
       expect(registration.alarm_id).not.toBeNull();
       expect(scheduleCalls).toHaveLength(1);
-      expect(scheduleCalls[0]).toMatchObject({
-        ...expected,
-        speech_text: '喝水提醒，时间到了。现在已经18点了。',
-      });
+      expect(scheduleCalls[0]).toMatchObject(expected);
     });
   });
 

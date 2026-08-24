@@ -9,7 +9,7 @@ export type AlarmScheduleRequest = {
   vibrate: boolean;
   sound_tier: AlarmSoundTier;
   full_screen: boolean;
-  /** JS 生成的日程播报文案；原生侧仅负责按闹钟声道朗读。 */
+  /** 仅 high 强度非空：设备 TTS 念的文案（标题 + 播报时间）；空则原生回退打包铃。 */
   speech_text?: string;
 };
 
@@ -42,6 +42,8 @@ export type AlarmPresentationRequest = {
   vibrate: boolean;
   sound_tier: AlarmSoundTier;
   full_screen: boolean;
+  /** 仅 high 强度非空：设备 TTS 念的文案（标题 + 播报时间）；空则原生回退打包铃。 */
+  speech_text?: string;
 };
 
 export type AlarmPresentationReceipt = {

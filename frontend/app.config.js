@@ -69,7 +69,6 @@ module.exports = {
           defaultChannel: 'timeflow-reminders',
         },
       ],
-      './plugins/withTimeflowAlarm',
     ],
   },
 };

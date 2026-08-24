@@ -17,7 +17,7 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowApplication;
 
-/** 闹钟触发的各个 Android Intent handoff 都必须保留响铃通道设置。 */
+/** 闹钟触发的各个 Android Intent handoff 都必须保留 JS 生成的播报文案。 */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
 public class AlarmIntentForwardingTest {
@@ -30,12 +30,14 @@ public class AlarmIntentForwardingTest {
     }
 
     @Test
-    public void receiverForwardsRingChannelsToSoundService() {
+    public void receiverForwardsSpeechTextToSoundService() {
+        String speechText = "提醒你，晨会，别忘了";
         Intent incoming = new Intent(AlarmContract.ACTION_FIRE_ALARM)
                 .putExtra(AlarmContract.EXTRA_ALARM_ID, "alarm-1")
                 .putExtra(AlarmContract.EXTRA_SCHEDULE_ID, "schedule-1")
                 .putExtra(AlarmContract.EXTRA_REQUEST_CODE, 101)
                 .putExtra(AlarmContract.EXTRA_TITLE, "晨会")
+                .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, speechText)
                 .putExtra(AlarmContract.EXTRA_VIBRATE, false)
                 .putExtra(AlarmContract.EXTRA_SOUND_TIER, AlarmContract.SOUND_TIER_FULL)
                 .putExtra(AlarmContract.EXTRA_FULL_SCREEN, false);
@@ -45,6 +47,7 @@ public class AlarmIntentForwardingTest {
         Intent started = ShadowApplication.getInstance().getNextStartedService();
         assertNotNull(started);
         assertEquals(AlarmSoundService.class.getName(), started.getComponent().getClassName());
+        assertEquals(speechText, started.getStringExtra(AlarmContract.EXTRA_SPEECH_TEXT));
         assertFalse(started.getBooleanExtra(AlarmContract.EXTRA_VIBRATE, true));
         assertEquals(
                 AlarmContract.SOUND_TIER_FULL,
@@ -54,7 +57,9 @@ public class AlarmIntentForwardingTest {
     }
 
     @Test
-    public void activityServiceStartForwardsRingChannels() {
+    public void activityServiceStartForwardsSpeechText() {
+        String speechText = "提醒你，提交报告，别忘了";
+
         AlarmSoundService.start(
                 context,
                 "alarm-2",
@@ -63,11 +68,13 @@ public class AlarmIntentForwardingTest {
                 "提交报告",
                 true,
                 AlarmContract.SOUND_TIER_NONE,
-                true
+                true,
+                speechText
         );
 
         Intent started = ShadowApplication.getInstance().getNextStartedService();
         assertNotNull(started);
+        assertEquals(speechText, started.getStringExtra(AlarmContract.EXTRA_SPEECH_TEXT));
         assertEquals(
                 AlarmContract.SOUND_TIER_NONE,
                 started.getStringExtra(AlarmContract.EXTRA_SOUND_TIER)

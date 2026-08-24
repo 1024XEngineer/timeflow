@@ -23,7 +23,7 @@ import type {
   ReminderTrigger,
   ReminderTriggerReason,
 } from '../domain';
-import { DEFAULT_SNOOZE_MINUTES, buildReminderSpeechText } from '../domain';
+import { DEFAULT_SNOOZE_MINUTES } from '../domain';
 import {
   distanceMeters,
   evaluateGeofence,
@@ -31,7 +31,7 @@ import {
   resolveWatchMode,
 } from '../domain/geofence';
 import type { AlarmSoundTier } from '../domain/strengthDelivery';
-import { resolveStrengthDeliveryPlan } from '../domain/strengthDelivery';
+import { composeReminderSpeech, resolveStrengthDeliveryPlan } from '../domain/strengthDelivery';
 import {
   isSnoozeActive,
   isSnoozeExpired,
@@ -380,14 +380,12 @@ export class LocalReminderApplication implements ReminderApplicationPort {
       .map((schedule) => {
         const triggerAt = resolveEffectiveTriggerAt(schedule);
         if (triggerAt == null) return null;
-        const scheduledAt = schedule.start_time ?? triggerAt;
         return {
           schedule_id: schedule.id,
           trigger_at: triggerAt,
           title: schedule.title,
           exact: true,
           ...alarmRingChannels(schedule),
-          speech_text: toAlarmSpeechText(schedule, scheduledAt),
         };
       })
       .filter((request): request is NonNullable<typeof request> => request != null);
@@ -562,7 +560,6 @@ export class LocalReminderApplication implements ReminderApplicationPort {
           title: schedule.title,
           exact: true,
           ...alarmRingChannels(schedule),
-          speech_text: toAlarmSpeechText(schedule, snoozedUntil),
         });
         if (!this.isLive(generation)) {
           if (receipt.scheduled) {
@@ -743,6 +740,17 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         // presentNow 本身不可用（iOS、原生模块拿不到）时才回退到下面的 JS 通道。
         let presentedNatively = false;
         if (this.dependencies.alarms.presentNow != null) {
+          const speechText = composeReminderSpeech(schedule);
+          // 诊断用：presentNow 这条兜底路径算出来的语音文案——定位问题排查完可以删。
+          console.warn(
+            '[reminder] presentNow speech_text',
+            schedule.id,
+            schedule.title,
+            'strength=',
+            schedule.reminder?.reminder_strength,
+            'speech_text=',
+            speechText,
+          );
           const nativeReceipt = await this.dependencies.alarms.presentNow({
             alarm_id: `present-${schedule.id}-${Date.now()}`,
             schedule_id: schedule.id,
@@ -750,6 +758,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
             vibrate: plan.useVibration,
             sound_tier: plan.alarmSoundTier,
             full_screen: true,
+            speech_text: speechText,
           });
           if (nativeReceipt.presented) {
             presentedNatively = true;
@@ -1139,14 +1148,12 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   ): Promise<AlarmScheduleReceipt | null> {
     const triggerAt = resolveEffectiveTriggerAt(schedule);
     if (triggerAt == null) return null;
-    const scheduledAt = schedule.start_time ?? triggerAt;
     const receipt = await this.dependencies.alarms.schedule({
       schedule_id: schedule.id,
       trigger_at: triggerAt,
       title: schedule.title,
       exact: true,
       ...alarmRingChannels(schedule),
-      speech_text: toAlarmSpeechText(schedule, scheduledAt),
     });
     void this.reportPermissionGaps(schedule.id, [
       'exact_alarm',
@@ -1233,18 +1240,30 @@ function alarmRingChannels(schedule: LocalReminderSchedule): {
   vibrate: boolean;
   sound_tier: AlarmSoundTier;
   full_screen: boolean;
+  speech_text: string;
 } {
   const plan = resolveStrengthDeliveryPlan(schedule.reminder?.reminder_strength ?? 'medium');
-  return { vibrate: plan.useVibration, sound_tier: plan.alarmSoundTier, full_screen: true };
-}
-
-function toAlarmSpeechText(schedule: LocalReminderSchedule, scheduledAt: string): string {
-  return buildReminderSpeechText({
-    title: schedule.title,
-    scheduledAt,
-    timezone: schedule.timezone,
-    isAllDay: schedule.is_all_day,
-  });
+  const speechText = composeReminderSpeech(schedule);
+  // 诊断用：确认排闹钟这一刻算出来的强度/声音档位/语音文案到底是什么——如果
+  // strength 不是 'high' 或者 speech_text 是空串，原生那边不可能念 TTS，问题
+  // 就出在这一步而不是原生。定位问题排查完可以删。
+  console.warn(
+    '[reminder] alarmRingChannels',
+    schedule.id,
+    schedule.title,
+    'strength=',
+    schedule.reminder?.reminder_strength,
+    'sound_tier=',
+    plan.alarmSoundTier,
+    'speech_text=',
+    speechText,
+  );
+  return {
+    vibrate: plan.useVibration,
+    sound_tier: plan.alarmSoundTier,
+    full_screen: true,
+    speech_text: speechText,
+  };
 }
 
 function toTimeReason(schedule: LocalReminderSchedule): ReminderTriggerReason {

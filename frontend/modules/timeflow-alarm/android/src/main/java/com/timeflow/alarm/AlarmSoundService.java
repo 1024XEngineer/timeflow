@@ -22,6 +22,7 @@ import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
 import android.provider.Settings;
+import android.speech.tts.UtteranceProgressListener;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
@@ -40,6 +41,7 @@ public final class AlarmSoundService extends Service {
 
     private final Handler playbackHandler = new Handler(Looper.getMainLooper());
     private final Runnable replaySpeech = this::replaySpeech;
+    private final Runnable replayTts = this::replayTts;
 
     private MediaPlayer mediaPlayer;
     private Ringtone pingRingtone;
@@ -55,6 +57,8 @@ public final class AlarmSoundService extends Service {
     private String soundTier;
     private boolean fullScreenEnabled;
     private int requestCode;
+    /** 当前这条闹钟的设备 TTS 文案；非 high 或未传入时为 null/空，走打包铃。 */
+    private String speechText;
     /** 已经通知过 JS "fired" 的 alarmId 集合；service 实例可能被多个不同闹钟复用。 */
     final Set<String> firedNotifiedAlarmIds = new HashSet<>();
     /**
@@ -65,6 +69,12 @@ public final class AlarmSoundService extends Service {
      * 这条后从队首取下一条顶上，队列空了才真正 stopSelf()。
      */
     final ArrayDeque<AlarmContract.ExtractedExtras> pendingQueue = new ArrayDeque<>();
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        initTextToSpeech();
+    }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -139,6 +149,15 @@ public final class AlarmSoundService extends Service {
         vibrateEnabled = extras.vibrate;
         soundTier = extras.soundTier;
         fullScreenEnabled = extras.fullScreen;
+        speechText = extras.speechText;
+        // 诊断用：这条闹钟真正展示的这一刻，soundTier/speechText/TTS 引擎状态到底是
+        // 什么——如果 wantsSpeech()=false 或引擎没就绪，就是这两个原因之一让它
+        // 退回了打包铃。定位问题排查完可以删。
+        Log.i(TAG, "presentAlarm speech diagnostics alarmId=" + alarmId
+                + " soundTier=" + soundTier
+                + " speechText=" + speechText
+                + " wantsSpeech=" + wantsSpeech()
+                + " ttsReady=" + AlarmTtsEngine.isReady());
 
         createNotificationChannel();
         Notification notification = buildNotification(alarmId, alarmTitle, fullScreenEnabled);
@@ -164,6 +183,8 @@ public final class AlarmSoundService extends Service {
             // 那次播放/震动残留到这条本该更安静的闹钟上。
             stopVibration();
             stopPing();
+            releaseMediaPlayer();
+            stopSpeaking();
             if (vibrateEnabled) {
                 startVibration();
             }
@@ -171,7 +192,17 @@ public final class AlarmSoundService extends Service {
                 showAlarmOverlay(alarmTitle);
             }
             if (AlarmContract.SOUND_TIER_FULL.equals(soundTier) && mediaPlayer == null) {
-                startBundledSpeech();
+                if (wantsSpeech() && AlarmTtsEngine.isReady()) {
+                    speakCurrent();
+                } else {
+                    // 引擎是 AlarmModule 构造时就抢先绑定的全局单例，真响铃这一刻通常早就
+                    // 绑定好了；万一还没好（比如冷启动竞态），先响打包铃保底，
+                    // notifyWhenReady() 排一个回调，绑定成功那一刻无缝切到 TTS。
+                    startBundledSpeech();
+                    if (wantsSpeech()) {
+                        AlarmTtsEngine.notifyWhenReady(this::maybeSwitchToSpeech);
+                    }
+                }
             } else if (AlarmContract.SOUND_TIER_PING.equals(soundTier)) {
                 startPing();
             }
@@ -209,6 +240,10 @@ public final class AlarmSoundService extends Service {
         playbackHandler.removeCallbacksAndMessages(null);
         removeAlarmOverlay();
         releaseMediaPlayer();
+        // 只停这个 Service 实例正在念的这一句、摘掉它挂上去的监听器——引擎是全局单例，
+        // 不在这里 shutdown()：下一条闹钟（甚至冷启动重新拉起这个 Service）还要复用。
+        AlarmTtsEngine.stop();
+        AlarmTtsEngine.setUtteranceListener(null);
         stopVibration();
         stopPing();
         deleteCachedSpeechFile();
@@ -237,7 +272,8 @@ public final class AlarmSoundService extends Service {
             String title,
             boolean vibrate,
             String soundTier,
-            boolean fullScreen
+            boolean fullScreen,
+            String speechText
     ) {
         Intent intent = new Intent(context, AlarmSoundService.class)
                 .putExtra(AlarmContract.EXTRA_ALARM_ID, alarmId)
@@ -246,7 +282,8 @@ public final class AlarmSoundService extends Service {
                 .putExtra(AlarmContract.EXTRA_TITLE, title)
                 .putExtra(AlarmContract.EXTRA_VIBRATE, vibrate)
                 .putExtra(AlarmContract.EXTRA_SOUND_TIER, soundTier)
-                .putExtra(AlarmContract.EXTRA_FULL_SCREEN, fullScreen);
+                .putExtra(AlarmContract.EXTRA_FULL_SCREEN, fullScreen)
+                .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, speechText);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent);
         } else {
@@ -264,6 +301,7 @@ public final class AlarmSoundService extends Service {
                 .putExtra(AlarmContract.EXTRA_VIBRATE, vibrateEnabled)
                 .putExtra(AlarmContract.EXTRA_SOUND_TIER, soundTier)
                 .putExtra(AlarmContract.EXTRA_FULL_SCREEN, fullScreen)
+                .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, speechText)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                         | Intent.FLAG_ACTIVITY_MULTIPLE_TASK
                         | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
@@ -345,6 +383,7 @@ public final class AlarmSoundService extends Service {
         boolean targetVibrate = vibrateEnabled;
         String targetSoundTier = soundTier;
         boolean targetFullScreen = fullScreenEnabled;
+        String targetSpeechText = speechText;
 
         View content = AlarmRingUi.build(
                 this,
@@ -361,7 +400,7 @@ public final class AlarmSoundService extends Service {
                                 targetVibrate,
                                 targetSoundTier,
                                 targetFullScreen,
-                                ""
+                                targetSpeechText
                         );
                     } catch (RuntimeException ignored) {
                         // ignore
@@ -514,6 +553,94 @@ public final class AlarmSoundService extends Service {
         if (bundledSpeechFile != null) {
             bundledSpeechFile.delete();
         }
+    }
+
+    /**
+     * 设备 TTS 是 best-effort：不可用就走打包铃，绝不重试到崩。引擎本身是
+     * AlarmTtsEngine 持有的全局单例、在 AlarmModule 构造时就已经抢先绑定过
+     * （见该类顶部注释）——这里只是兜底再确认一次已经启动过初始化，真正的
+     * 绑定/初始化逻辑不在这个 Service 里。
+     */
+    private void initTextToSpeech() {
+        AlarmTtsEngine.ensureInitialized(this);
+    }
+
+    /** 当前这条是否该念 TTS：high 档位且有非空文案。 */
+    private boolean wantsSpeech() {
+        return AlarmContract.SOUND_TIER_FULL.equals(soundTier)
+                && speechText != null && !speechText.trim().isEmpty();
+    }
+
+    private final UtteranceProgressListener utteranceListener = new UtteranceProgressListener() {
+        @Override
+        public void onStart(String utteranceId) {
+            // 无需处理。
+        }
+
+        @Override
+        public void onDone(String utteranceId) {
+            playbackHandler.postDelayed(replayTts, SPEECH_REPEAT_DELAY_MILLIS);
+        }
+
+        @Override
+        public void onError(String utteranceId) {
+            onSpeechError();
+        }
+    };
+
+    private void speakCurrent() {
+        if (destroyed || !AlarmTtsEngine.isReady() || !wantsSpeech()) {
+            Log.i(TAG, "speakCurrent bailed destroyed=" + destroyed
+                    + " ttsReady=" + AlarmTtsEngine.isReady()
+                    + " wantsSpeech=" + wantsSpeech());
+            return;
+        }
+        AlarmTtsEngine.setUtteranceListener(utteranceListener);
+        // speak() 的返回值只代表"这句话有没有成功排进播放队列"，不代表真的念出来了——
+        // 但如果连排队都失败（返回 ERROR），后面大概率也不会有 onDone/onError 回调，
+        // 之前完全没有日志能看出这一步失败过。定位问题排查完可以删。
+        int result = AlarmTtsEngine.speak(speechText, "reminder-high");
+        Log.i(TAG, "speakCurrent queued text=" + speechText + " result=" + result);
+    }
+
+    private void replayTts() {
+        if (destroyed) {
+            return;
+        }
+        speakCurrent();
+    }
+
+    /** 引擎就绪后，若这条闹钟还在打包铃保底、且确实该念 TTS，就切过去。 */
+    private void maybeSwitchToSpeech() {
+        if (destroyed || !AlarmTtsEngine.isReady() || !wantsSpeech()) {
+            Log.i(TAG, "maybeSwitchToSpeech skipped destroyed=" + destroyed
+                    + " ttsReady=" + AlarmTtsEngine.isReady()
+                    + " wantsSpeech=" + wantsSpeech());
+            return;
+        }
+        releaseMediaPlayer();
+        speakCurrent();
+    }
+
+    /** TTS 合成失败：清掉重念回调，退回打包铃继续保底。 */
+    private void onSpeechError() {
+        Log.w(TAG, "TextToSpeech onError alarmId=" + alarmId);
+        playbackHandler.post(() -> {
+            if (destroyed || !wantsSpeech()) {
+                return;
+            }
+            playbackHandler.removeCallbacks(replayTts);
+            if (mediaPlayer == null) {
+                startBundledSpeech();
+            }
+        });
+    }
+
+    /** 停掉当前这条在念的 TTS，但不销毁引擎——引擎是全局单例，换下一条闹钟/下次
+     * 冷启动都要复用同一个已经绑定好的实例。 */
+    private void stopSpeaking() {
+        playbackHandler.removeCallbacks(replayTts);
+        AlarmTtsEngine.stop();
     }
 
     private void removeFromSavedAlarms() {

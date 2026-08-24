@@ -26,6 +26,7 @@ public final class RingActivity extends Activity {
     private boolean vibrate;
     private String soundTier;
     private boolean fullScreen;
+    private String speechText;
     private boolean dismissNotified;
 
     @Override
@@ -40,6 +41,7 @@ public final class RingActivity extends Activity {
         vibrate = extras.vibrate;
         soundTier = extras.soundTier;
         fullScreen = extras.fullScreen;
+        speechText = extras.speechText;
         makeVisibleOverLockScreen();
         matchSystemBarsToReminder();
         setContentView(buildContentView());
@@ -52,7 +54,8 @@ public final class RingActivity extends Activity {
                 alarmTitle,
                 vibrate,
                 soundTier,
-                fullScreen
+                fullScreen,
+                speechText
         );
     }
 
@@ -138,7 +141,8 @@ public final class RingActivity extends Activity {
                     + AlarmContract.SNOOZE_MINUTES * 60_000L;
             try {
                 AlarmScheduler.schedule(
-                        this, triggerAt, alarmTitle, scheduleId, vibrate, soundTier, fullScreen, ""
+                        this, triggerAt, alarmTitle, scheduleId, vibrate, soundTier,
+                        fullScreen, speechText
                 );
             } catch (RuntimeException ignored) {
                 // 尽力重新挂闹钟；即使失败也通知 JS 落 snooze 状态。
