@@ -610,4 +610,115 @@ describe('AssistantConversationService', () => {
     expect(fake.unsubscribeCalls).toEqual({ audio: 1, close: 1, message: 1 });
     expect(fake.closeCalls.count).toBe(1);
   });
+
+  it('tags every voice.stream.start with a fresh per-turn request_id', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    await completeStreamStart(fake, service.startTurn());
+    await completeStreamStart(fake, service.startTurn());
+
+    const starts = fake.sent.filter((message) => message.type === 'voice.stream.start');
+    expect(starts).toHaveLength(2);
+    expect(starts[0].request_id).toBeTruthy();
+    expect(starts[1].request_id).toBeTruthy();
+    expect(starts[1].request_id).not.toBe(starts[0].request_id);
+  });
+
+  it('drops a stale reply from the previous turn so it cannot repop the bubble', async () => {
+    // 上一轮被新一轮 voice.stream.start 打断时，execute 的 reply/tts 事件可能晚到；
+    // 不按 request_id 过滤的话，气泡被点掉后会被这条迟到回复重新弹回来，把输入条
+    // 整个挡住（AssistantVoiceOverlay 在有 replyText 时铺了一层全屏点击层）。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    // turn 1：回复到了，用户点掉气泡。计数器是模块级的，用例之间会累加，所以
+    // 轮次 id 一律从实际发出的 voice.stream.start 上取，不写死字面量。
+    await completeStreamStart(fake, service.startTurn());
+    const turn1Id = fake.sent.filter((message) => message.type === 'voice.stream.start')[0]
+      .request_id;
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: turn1Id,
+      payload: { done: true, reply_id: 'reply_1', speech_text: '第一条回复' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    await service.dismissReply();
+    expect(service.getReplyText()).toBeNull();
+
+    // turn 2：新的 stream.start 已经带上不同的 request_id（这里故意不先把新流
+    // started 发下去，复现旧事件在新一轮启动窗口里晚到的情形）。
+    const nextTurn = service.startTurn();
+    await flushAsync();
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: turn1Id,
+      payload: { done: true, reply_id: 'reply_1', speech_text: '第一条回复' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getReplyText()).toBeNull();
+
+    // 新 turn 自己的回复到了才显示。
+    const starts = fake.sent.filter((message) => message.type === 'voice.stream.start');
+    const turn2Id = starts[1].request_id;
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_2', speech_text: '第二条回复' },
+      request_id: turn2Id,
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getReplyText()).toBe('第二条回复');
+
+    await completeStreamStart(fake, nextTurn);
+  });
+
+  it('still shows a reply whose request_id is null', async () => {
+    // 后端 model_dump() 把缺省的 request_id 序列化成 null（不是省掉字段），所以
+    // null 必须当作"不知道是哪一轮"放行，否则回复永远显示不出来。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    await completeStreamStart(fake, service.startTurn());
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '没带轮次的回复' },
+      request_id: null,
+      type: 'voice.dialogue.reply',
+    } as unknown as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getReplyText()).toBe('没带轮次的回复');
+  });
+
+  it('resolves startTurn on a transport error that carries a stale request_id', async () => {
+    // 错误信封也带 request_id，而且可能是上一条流的（后端 voice_stream.py 的
+    // "A stream is already active" / "Audio frame is empty" 都会这样）。这条路径
+    // 是 startTurn() 唯一的解套机会，按轮次丢掉它会让按住说话永久卡死。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    await completeStreamStart(fake, service.startTurn());
+    const staleId = fake.sent.filter((message) => message.type === 'voice.stream.start')[0]
+      .request_id;
+    const turn = service.startTurn();
+    await flushAsync();
+    fake.emitMessage({
+      error: { code: 'X', message: 'A stream is already active for this session' },
+      ok: false,
+      request_id: staleId,
+    } as AssistantServerMessage);
+
+    await expect(turn).resolves.toBeUndefined();
+    expect(service.getState()).toEqual({
+      message: 'A stream is already active for this session',
+      phase: 'error',
+    });
+  });
 });
