@@ -186,8 +186,6 @@ describe('SqliteScheduleClientService', () => {
         locationName: '公司',
         reminderType: 'arrive_location',
         reminderStrength: 'high',
-        latitude: 31.2304,
-        longitude: 121.4737,
       },
       {
         scheduleId: 'location-snoozed',
@@ -198,8 +196,6 @@ describe('SqliteScheduleClientService', () => {
         locationName: null,
         reminderType: null,
         reminderStrength: null,
-        latitude: 31.2304,
-        longitude: 121.4737,
       },
     ]);
   });

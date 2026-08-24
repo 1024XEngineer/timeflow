@@ -90,6 +90,13 @@ if (!TaskManager.isTaskDefined(GUARD_TASK_NAME)) {
       sample?.observed_at ?? null,
     );
 
+    // headless 直查全靠这个账号 id 限定范围——local_schedules 是全应用共用的一张表，
+    // 登出不会删旧账号的行（只有单条删除日程那一条 DELETE），账号 A 登出、账号 B
+    // 登录后 A 的数据原样留在库里。前台路径（SqliteLocalScheduleReader ->
+    // scheduleLocalRepository）每次查询都显式传 accountId，这里也必须一样，不然
+    // 会把上一个登出账号的地点/时间/pending 提醒当成当前账号的处理、展示、改状态。
+    const accountId = await currentAccountId();
+
     // 数据库工作要跟主会话的读写排同一条队列（共用同一条物理连接，事务的
     // BEGIN/COMMIT 对所有调用方可见），但**不能**把 listener 分发也圈进队列：
     // listener 会一路走进 LocalReminderApplication，那边的仓储调用自己要排队，
@@ -105,12 +112,14 @@ if (!TaskManager.isTaskDefined(GUARD_TASK_NAME)) {
       for (const listener of listeners) {
         await listener(sample);
       }
+    } else if (accountId == null) {
+      console.warn('[guard] no persisted account session, skipping headless pass');
     } else {
       console.warn('[guard] no live listeners, taking headless location pass', sample);
       await withDatabaseAccess(async () => {
         const database = await openDatabase();
         if (database == null) return;
-        await runHeadlessLocationPass(database, sample);
+        await runHeadlessLocationPass(database, sample, accountId);
 
         // 时间型兜底 + 卡住扫描：只在会话没存活（App 真的被系统杀了，没有
         // LocalReminderApplication 在管）时才跑，所以就放在这个分支里。会话存活时
@@ -119,8 +128,8 @@ if (!TaskManager.isTaskDefined(GUARD_TASK_NAME)) {
         // 条日程：JS 那边已经在内存里认领、还没来得及写数据库的窗口期，这边从数据库
         // 看还是"没人认领"，两边各自独立弹一次，互不知道对方存在——这正是真机上
         // "同一条提醒弹好几遍、弹出来又被对方收尾逻辑关掉"的根源。
-        await runTimeFallbackPass(database);
-        await runStuckPendingPass(database);
+        await runTimeFallbackPass(database, accountId);
+        await runStuckPendingPass(database, accountId);
       });
     }
 
@@ -131,9 +140,21 @@ if (!TaskManager.isTaskDefined(GUARD_TASK_NAME)) {
     // 操作抢着重新注册同一个任务。
     await withDatabaseAccess(async () => {
       const database = await openDatabase();
-      if (database != null) await refreshGuardRegistration(database, sample);
+      if (database != null) await refreshGuardRegistration(database, sample, accountId);
     });
   });
+}
+
+/** headless 上下文读当前登录账号；没有持久化会话（从没登录过/已登出/token 过期）
+ * 就代表没人在用这台设备，调用方据此整段跳过，不能不加限定地扫全表。 */
+async function currentAccountId(): Promise<string | null> {
+  try {
+    const { createAuthSessionStore } = await import('../../features/auth/data');
+    const session = await createAuthSessionStore().read();
+    return session?.accountId ?? null;
+  } catch {
+    return null;
+  }
 }
 
 type HeadlessLocationRow = {
@@ -157,6 +178,7 @@ type HeadlessLocationRow = {
 async function runHeadlessLocationPass(
   database: SQLiteDatabase,
   sample: GuardTaskSample,
+  accountId: string,
 ): Promise<void> {
   // istanbul ignore next -- database only non-null with a real expo-sqlite, unreachable here.
   {
@@ -165,9 +187,11 @@ async function runHeadlessLocationPass(
               reminder_strength, location_name, reminder_disposition_state, snoozed_until,
               geofence_armed
          FROM local_schedules
-        WHERE schedule_type = 'location'
+        WHERE account_id = ?
+          AND schedule_type = 'location'
           AND status = 'active'
           AND (reminder_disposition_state IS NULL OR reminder_disposition_state = 'snoozed')`,
+      accountId,
     );
 
     for (const row of rows) {
@@ -326,7 +350,7 @@ type HeadlessTimeRow = {
  * 完全不知道这份缓冲区的存在，会把"已经响过、还没同步"误判成"从没响过"再弹一次
  * ——是这个 pass 自己制造的重复触发，不是别处竞态传导过来的。加一次 peek 堵住。
  */
-async function runTimeFallbackPass(database: SQLiteDatabase): Promise<void> {
+async function runTimeFallbackPass(database: SQLiteDatabase, accountId: string): Promise<void> {
   // istanbul ignore next -- unreachable without a real expo-sqlite.
   {
     const rows = await database.getAllAsync<HeadlessTimeRow>(
@@ -334,9 +358,11 @@ async function runTimeFallbackPass(database: SQLiteDatabase): Promise<void> {
               reminder_offset_minutes, reminder_strength, reminder_disposition_state,
               snoozed_until, next_trigger_at, start_time
          FROM local_schedules
-        WHERE schedule_type = 'time'
+        WHERE account_id = ?
+          AND schedule_type = 'time'
           AND status = 'active'
           AND (reminder_disposition_state IS NULL OR reminder_disposition_state = 'snoozed')`,
+      accountId,
     );
     if (rows.length === 0) return;
 
@@ -431,14 +457,16 @@ type StuckPendingRow = {
  * 一直卡在 pending 超过阈值，大概率是响铃页被 OEM 拦了或者被前一条挤进队列后
  * 没人记得回来处理——重新弹一次 presentNow()，给它一次补救机会。
  */
-async function runStuckPendingPass(database: SQLiteDatabase): Promise<void> {
+async function runStuckPendingPass(database: SQLiteDatabase, accountId: string): Promise<void> {
   // istanbul ignore next -- unreachable without a real expo-sqlite.
   {
     const rows = await database.getAllAsync<StuckPendingRow>(
       `SELECT id, title, reminder_strength, disposition_updated_at
          FROM local_schedules
-        WHERE status = 'active'
+        WHERE account_id = ?
+          AND status = 'active'
           AND reminder_disposition_state = 'pending'`,
+      accountId,
     );
     const now = new Date();
     const nowMs = now.getTime();
@@ -546,15 +574,24 @@ type GuardWatchRow = {
 async function refreshGuardRegistration(
   database: SQLiteDatabase,
   sample: GuardTaskSample | null,
+  accountId: string | null,
 ): Promise<void> {
   // istanbul ignore next -- unreachable without a real expo-sqlite.
   {
-    const rows = await database.getAllAsync<GuardWatchRow>(
-      `SELECT id, schedule_type, latitude, longitude
-         FROM local_schedules
-        WHERE status = 'active'
-          AND (reminder_disposition_state IS NULL OR reminder_disposition_state != 'confirmed')`,
-    );
+    // 没有持久化的登录账号时不查——跟"0 条日程"一视同仁，直接走下面的自停分支；
+    // 不能退化成不带 account_id 的全表扫描，否则会把已登出账号的数据当成当前
+    // 账号还有日程要处理，一直不停这个前台服务。
+    const rows =
+      accountId == null
+        ? []
+        : await database.getAllAsync<GuardWatchRow>(
+            `SELECT id, schedule_type, latitude, longitude
+               FROM local_schedules
+              WHERE account_id = ?
+                AND status = 'active'
+                AND (reminder_disposition_state IS NULL OR reminder_disposition_state != 'confirmed')`,
+            accountId,
+          );
 
     if (rows.length === 0) {
       try {
@@ -605,11 +642,10 @@ export function resolveNextPollIntervalMs(
   }
   let nearestBoundary = Number.POSITIVE_INFINITY;
   for (const target of targets) {
-    const dLat = target.latitude - currentSample.latitude;
-    const dLng = target.longitude - currentSample.longitude;
-    // 粗略估算就够用（只用来决定轮询密度，不用来判定进出圈），省得为了选轮询
-    // 间隔又跑一遍 Haversine——真正的进出圈判定始终走 evaluateGeofence()。
-    const approxMeters = Math.sqrt(dLat * dLat + dLng * dLng) * 111_000;
+    // 用跟 evaluateGeofence()/诊断日志同一个 distanceMeters()，不要自己按
+    // 111km/度换算——纬度越高经度 1° 对应的实际距离越短，平面近似会在高纬度
+    // 地区把距离算大，导致该加密轮询时没加密。
+    const approxMeters = distanceMeters(currentSample, target);
     // resolveGuardPollIntervalMs 现在吃的是"离围栏边界还有多远"，不是离中心点
     // 多远——这里统一减掉半径，下界截到 0（已经在圈里时就是 0，自动进最密档）。
     const boundaryMeters = Math.max(0, approxMeters - DEFAULT_GEOFENCE_RADIUS_METERS);
