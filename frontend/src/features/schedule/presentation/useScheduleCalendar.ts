@@ -55,6 +55,14 @@ export function useScheduleCalendar(
   const [locationSchedules, setLocationSchedules] = useState<readonly LocationScheduleView[]>([]);
   const [occurrencesLoading, setOccurrencesLoading] = useState(true);
   const [locationsLoading, setLocationsLoading] = useState(true);
+  // 首次加载完成后，后续重取（增删日程/语音写日程/轮询）不再把整个 agenda
+  // 卸载重挂——只在真的还没数据时才盖全屏转圈，之后都是后台悄悄换数据。渲染期间
+  // 同步翻它，不放进 useEffect（react-hooks 规则不允许在 effect 里直接
+  // setState 触发级联渲染，也不允许在渲染期间读 ref）。
+  const [initialLoadDone, setInitialLoadDone] = useState(false);
+  if (!initialLoadDone && !occurrencesLoading && !locationsLoading) {
+    setInitialLoadDone(true);
+  }
   const [occurrencesError, setOccurrencesError] = useState<string | null>(null);
   const [locationsError, setLocationsError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -215,7 +223,7 @@ export function useScheduleCalendar(
     occurrencesByDate,
     selectedOccurrences,
     locationSchedules,
-    loading: occurrencesLoading || locationsLoading,
+    loading: !initialLoadDone && (occurrencesLoading || locationsLoading),
     error: occurrencesError ?? locationsError,
     selectDate,
     changeMonth,
