@@ -147,6 +147,7 @@ if (!TaskManager.isTaskDefined(GUARD_TASK_NAME)) {
 
 /** headless 上下文读当前登录账号；没有持久化会话（从没登录过/已登出/token 过期）
  * 就代表没人在用这台设备，调用方据此整段跳过，不能不加限定地扫全表。 */
+/* istanbul ignore next -- auth/data 的动态 import 在 Jest 里抛错，成功分支走不到。 */
 async function currentAccountId(): Promise<string | null> {
   try {
     const { createAuthSessionStore } = await import('../../features/auth/data');
@@ -175,12 +176,12 @@ type HeadlessLocationRow = {
  * 地点提醒逐一比对，复用跟前台一致的 evaluateGeofence() 状态机，不是重新发明
  * 一套简化版判断逻辑。
  */
+/* istanbul ignore next -- 需要真实 expo-sqlite（openDatabase() 恒为 null）才走得到。 */
 async function runHeadlessLocationPass(
   database: SQLiteDatabase,
   sample: GuardTaskSample,
   accountId: string,
 ): Promise<void> {
-  // istanbul ignore next -- database only non-null with a real expo-sqlite, unreachable here.
   {
     const rows = await database.getAllAsync<HeadlessLocationRow>(
       `SELECT id, title, latitude, longitude, reminder_type,
@@ -350,8 +351,8 @@ type HeadlessTimeRow = {
  * 完全不知道这份缓冲区的存在，会把"已经响过、还没同步"误判成"从没响过"再弹一次
  * ——是这个 pass 自己制造的重复触发，不是别处竞态传导过来的。加一次 peek 堵住。
  */
+/* istanbul ignore next -- 需要真实 expo-sqlite 才走得到。 */
 async function runTimeFallbackPass(database: SQLiteDatabase, accountId: string): Promise<void> {
-  // istanbul ignore next -- unreachable without a real expo-sqlite.
   {
     const rows = await database.getAllAsync<HeadlessTimeRow>(
       `SELECT id, title, schedule_kind, reminder_type, reminder_trigger_at,
@@ -457,8 +458,8 @@ type StuckPendingRow = {
  * 一直卡在 pending 超过阈值，大概率是响铃页被 OEM 拦了或者被前一条挤进队列后
  * 没人记得回来处理——重新弹一次 presentNow()，给它一次补救机会。
  */
+/* istanbul ignore next -- 需要真实 expo-sqlite 才走得到。 */
 async function runStuckPendingPass(database: SQLiteDatabase, accountId: string): Promise<void> {
-  // istanbul ignore next -- unreachable without a real expo-sqlite.
   {
     const rows = await database.getAllAsync<StuckPendingRow>(
       `SELECT id, title, reminder_strength, disposition_updated_at
@@ -571,12 +572,12 @@ type GuardWatchRow = {
  * ReminderGuardCoordinator.reconcileInternal() 里 active.length === 0 时停止
  * 的逻辑保持一致。常驻通知文案是固定的"提醒守护运行中"，不做动态内容。
  */
+/* istanbul ignore next -- 需要真实 expo-sqlite 才走得到。 */
 async function refreshGuardRegistration(
   database: SQLiteDatabase,
   sample: GuardTaskSample | null,
   accountId: string | null,
 ): Promise<void> {
-  // istanbul ignore next -- unreachable without a real expo-sqlite.
   {
     // 没有持久化的登录账号时不查——跟"0 条日程"一视同仁，直接走下面的自停分支；
     // 不能退化成不带 account_id 的全表扫描，否则会把已登出账号的数据当成当前

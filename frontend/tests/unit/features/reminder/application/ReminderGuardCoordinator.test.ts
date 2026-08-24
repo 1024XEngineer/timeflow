@@ -96,6 +96,22 @@ function timeSchedule(overrides: Partial<LocalReminderSchedule> = {}): LocalRemi
   };
 }
 
+function locationSchedule(overrides: Partial<LocalReminderSchedule> = {}): LocalReminderSchedule {
+  return timeSchedule({
+    schedule_type: 'location',
+    latitude: 31.2304,
+    longitude: 121.4737,
+    location_name: '工地',
+    reminder: {
+      reminder_type: 'arrive_location',
+      reminder_trigger_at: null,
+      reminder_offset_minutes: null,
+      reminder_strength: 'medium',
+    },
+    ...overrides,
+  });
+}
+
 function createReader(schedules: LocalReminderSchedule[]) {
   const listeners = new Set<(schedules: readonly LocalReminderSchedule[]) => void>();
   return {
@@ -251,5 +267,80 @@ describe('ReminderGuardCoordinator', () => {
     });
 
     expect(handleLocation).toHaveBeenCalledTimes(1);
+  });
+
+  it('watches location schedules and resolves their geofence centers', async () => {
+    // 有地点型日程时，reconcile 会把围栏中心解析出来（lastSample 为 null 时落在最疏档），
+    // 这个"地点目标"分支此前没有用例覆盖。
+    const reader = createReader([locationSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+
+    await coordinator.start();
+
+    expect(startUpdates).toHaveBeenCalledTimes(1);
+    const [, options] = startUpdates.mock.calls[0];
+    expect(options?.timeInterval).toBe(300_000);
+  });
+
+  it('does not re-register when location updates are already running', async () => {
+    hasStarted.mockResolvedValue(true);
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+
+    await coordinator.start();
+
+    expect(startUpdates).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the local running flag when hasStartedLocationUpdatesAsync throws', async () => {
+    hasStarted.mockRejectedValue(new Error('boom'));
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+
+    await coordinator.start();
+
+    // 查原生真实状态失败 → 用本地 running（此刻 false）→ 照常注册
+    expect(startUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it('swallows a startLocationUpdatesAsync failure', async () => {
+    startUpdates.mockRejectedValue(new Error('boom'));
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+
+    await coordinator.start();
+
+    expect(startUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it('swallows a stopLocationUpdates failure', async () => {
+    const schedule = timeSchedule();
+    const reader = createReader([schedule]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+    await coordinator.start();
+    hasStarted.mockResolvedValue(true);
+
+    // 触发停止时让 hasStartedLocationUpdatesAsync 抛错 → 走 catch 吞掉
+    hasStarted.mockRejectedValue(new Error('boom'));
+    schedule.runtime = { ...schedule.runtime, reminder_disposition_state: 'confirmed' };
+    reader.emit();
+    await flushMicrotasks();
+
+    expect(stopUpdates).not.toHaveBeenCalled();
   });
 });
