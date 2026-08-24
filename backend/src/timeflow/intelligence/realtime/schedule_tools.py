@@ -21,6 +21,7 @@ from timeflow.business.calendar import (
     ScheduleCategory,
     ScheduleKind,
     ScheduleMutationResult,
+    ScheduleSnapshot,
     ScheduleType,
 )
 from timeflow.intelligence.location import (
@@ -485,17 +486,34 @@ def _mutation_result(result: ScheduleMutationResult, operation: str, tz: ZoneInf
     )
 
 
-def _for_model(schedule: Any, tz: ZoneInfo) -> dict[str, Any]:
-    """Add a spoken-language local time beside the stored instant."""
-    spoken = asdict(schedule)
-    spoken.pop("category", None)
-    spoken["starts_at_local"] = _local_text(spoken.get("start_time"), tz)
-    result = _json_value(spoken)
-    assert isinstance(result, dict)
-    return result
+def _for_model(schedule: ScheduleSnapshot, tz: ZoneInfo) -> dict[str, Any]:
+    """Serialize one schedule for the model, trimming fields it never reads.
+
+    The model references (id, revision) for updates/deletes, decides on
+    (schedule_kind, schedule_type), and speaks (title, times, recurrence,
+    location). Account scoping, status, timestamps, coordinates, reminder
+    strength/disposition, and timezone are internal noise that would bloat the
+    realtime model's context every turn.
+    """
+    return {
+        "id": schedule.id,
+        "title": schedule.title,
+        "schedule_type": schedule.schedule_type.value,
+        "schedule_kind": schedule.schedule_kind.value,
+        "is_all_day": schedule.is_all_day,
+        "start_time": _iso_or_none(schedule.start_time),
+        "end_time": _iso_or_none(schedule.end_time),
+        "recurrence_rule": schedule.recurrence_rule,
+        "location_name": schedule.location_name,
+        "reminder_type": None if schedule.reminder_type is None else schedule.reminder_type.value,
+        "reminder_trigger_at": _iso_or_none(schedule.reminder_trigger_at),
+        "reminder_offset_minutes": schedule.reminder_offset_minutes,
+        "revision": schedule.revision,
+        "starts_at_local": _local_text(schedule.start_time, tz),
+    }
 
 
-def _for_model_dict(schedule: Any, tz: ZoneInfo) -> dict[str, Any] | None:
+def _for_model_dict(schedule: ScheduleSnapshot | None, tz: ZoneInfo) -> dict[str, Any] | None:
     if schedule is None:
         return None
     return _for_model(schedule, tz)
@@ -515,6 +533,10 @@ def _override_for_client(override: Any) -> dict[str, Any]:
     """Convert ScheduleOccurrenceOverrideSnapshot to client dict, filtering out audit fields."""
     d = asdict(override)
     return {k: _json_value(v) for k, v in d.items() if k not in {"created_at", "updated_at"}}
+
+
+def _iso_or_none(value: datetime | None) -> str | None:
+    return None if value is None else value.isoformat()
 
 
 def _local_text(instant: datetime | None, tz: ZoneInfo) -> str:
