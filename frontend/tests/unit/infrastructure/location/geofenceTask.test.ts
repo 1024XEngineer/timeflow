@@ -191,4 +191,32 @@ describe('geofenceTask', () => {
       await expect(module.drainPendingGeofenceEvents()).resolves.toEqual([]);
     });
   });
+
+  describe('simulateGeofenceEventForTesting()', () => {
+    it('rejects when the headless database cannot be opened', async () => {
+      const { module } = loadModule();
+      // openHeadlessDatabase() 拿到 null 即抛，这是 dev-only hook 在无原生模块环境的预期行为。
+      await expect(module.simulateGeofenceEventForTesting('schedule-1', 'enter')).rejects.toThrow(
+        '无法打开本地日程数据库',
+      );
+    });
+  });
+
+  describe('headless delivery routing', () => {
+    it('routes a subscriber-less enter event through headless delivery and queues it', async () => {
+      // listeners.size === 0 → deliverHeadlessGeofenceEvent → openHeadlessDatabase 拿到
+      // null 返回 false → persistPendingEvent（loadStorage 拿到 null 即返回）。整条链
+      // 都是"原生不可用"分支，验证它不会抛错、而是走完队列化兜底。
+      const { executor } = loadModule();
+      await expect(
+        executor({
+          data: {
+            eventType: 1,
+            region: { identifier: 'schedule-1', latitude: 1, longitude: 2, radius: 100 },
+          },
+          error: null,
+        }),
+      ).resolves.toBeUndefined();
+    });
+  });
 });

@@ -39,6 +39,8 @@ export {
 export type {
   AlarmNativeDisposition,
   AlarmNativeEvent,
+  AlarmPresentationReceipt,
+  AlarmPresentationRequest,
   AlarmScheduleReceipt,
   AlarmScheduleRequest,
   AlarmSchedulerPort,

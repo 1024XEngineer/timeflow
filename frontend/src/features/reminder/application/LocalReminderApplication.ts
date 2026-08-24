@@ -25,6 +25,7 @@ import type {
 } from '../domain';
 import { DEFAULT_SNOOZE_MINUTES, buildReminderSpeechText } from '../domain';
 import { evaluateGeofence, resolveGeofenceCenter, resolveWatchMode } from '../domain/geofence';
+import type { AlarmSoundTier } from '../domain/strengthDelivery';
 import { resolveStrengthDeliveryPlan } from '../domain/strengthDelivery';
 import {
   isSnoozeActive,
@@ -315,6 +316,18 @@ export class LocalReminderApplication implements ReminderApplicationPort {
 
     if (!this.isLive(generation)) return [];
 
+    // location.rebuild() 会在系统围栏注册完成后立即派发一次当前位置样本。先放入
+    // 占位 registration，确保这次初始样本不会因批量重建尚未返回 handle 而被忽略。
+    for (const schedule of active) {
+      this.registrations.set(schedule.id, {
+        schedule_id: schedule.id,
+        time_listener_id: this.timeListenerId,
+        location_listener_id: null,
+        alarm_id: null,
+        schedule,
+      });
+    }
+
     const locationTargets = active
       .filter((schedule) => schedule.schedule_type === 'location')
       .map((schedule) => {
@@ -330,9 +343,12 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         };
       })
       .filter((target): target is NonNullable<typeof target> => target != null);
-    const locationHandles = await this.dependencies.location.rebuild(locationTargets, (event) => {
-      void this.handleLocationMonitorEvent(event);
-    });
+    const locationHandles = await this.dependencies.location.rebuild(
+      locationTargets,
+      async (event) => {
+        await this.handleLocationMonitorEvent(event);
+      },
+    );
     const locationBySchedule = new Map<string, LocationWatchHandle>(
       locationHandles.map((handle) => [handle.schedule_id, handle]),
     );
@@ -567,6 +583,17 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     for (const raw of schedules) {
       if (!this.isLive(generation)) return;
       const schedule = await this.withStoredRuntime(raw);
+      // 时间型日程只要原生闹钟还接管着（无论是首次触发还是延后重挂），JS 这边
+      // 完全不判定、不投递——之前两条通道各自独立判定、靠 activeDeliveries 互斥的
+      // 设计里，谁先到点完全看运气：JS 这次 tick 一旦抢先，会在 runDeliver() 里
+      // 主动撤销掉本来更可靠的原生闹钟（见 cancelScheduledAlarm），退化成通知/震动
+      // 这种更容易被用户忽略的投递方式。原生已经接管的日程直接跳过，消除这个竞态。
+      if (
+        schedule.schedule_type === 'time' &&
+        this.registrations.get(schedule.id)?.alarm_id != null
+      ) {
+        continue;
+      }
       if (!(await this.canDeliver(schedule, tick.observed_at, generation))) continue;
 
       if (isSnoozeExpired(schedule, tick.observed_at)) {
@@ -655,53 +682,70 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         let usedFallbackAudio = false;
         let deliveryId = `delivery-${schedule.id}`;
 
-        // 时间型日程只要排上了原生精确闹钟，响铃 UI 和声音就全权交给原生
-        // RingActivity/AlarmSoundService；JS 这边再弹 Alert/放音会跟原生的全屏页
-        // 抢事件，谁都关不掉谁。地点型日程没有原生等价物，走完整 JS 通道。
-        const nativeAlarmOwnsRingUi =
-          schedule.schedule_type === 'time' &&
-          this.registrations.get(schedule.id)?.alarm_id != null;
-
-        // low=系统通知；medium=弹窗+短震动；high=弹窗+短震动+TTS（失败则本地音）。
-        if (plan.useSystemNotification) {
-          const receipt = await this.dependencies.delivery.deliver(request);
-          deliveryId = receipt.delivery_id;
-          await this.dependencies.systemNotification.show({
-            notification_id: `reminder-${schedule.id}`,
+        // 原生全屏响铃页统一优先：时间型日程走到这里，说明原生闹钟本来就没能
+        // 挂上（挂上了的日程 runHandleTime 已经整条跳过，不会再进 runDeliver）；
+        // 地点型没有原生闹钟等价物，一律靠这里的 presentNow。两种类型不再区分
+        // 对待，全部强度都要全屏，不再有"低强度只发一条普通通知"这条路——只有
+        // presentNow 本身不可用（iOS、原生模块拿不到）时才回退到下面的 JS 通道。
+        let presentedNatively = false;
+        if (this.dependencies.alarms.presentNow != null) {
+          const nativeReceipt = await this.dependencies.alarms.presentNow({
+            alarm_id: `present-${schedule.id}-${Date.now()}`,
+            schedule_id: schedule.id,
             title: schedule.title,
-            body: schedule.location_name ?? schedule.title,
+            vibrate: plan.useVibration,
+            sound_tier: plan.alarmSoundTier,
+            full_screen: true,
           });
-          channels.push('system_notification');
-        }
-
-        if (plan.usePopup && !nativeAlarmOwnsRingUi) {
-          await this.dependencies.presenter.show(request);
-          channels.push('popup');
-        }
-
-        if (plan.useVibration) {
-          await this.dependencies.vibration.vibrate();
-          channels.push('vibration');
+          if (nativeReceipt.presented) {
+            presentedNatively = true;
+            deliveryId = `native-${nativeReceipt.alarm_id}`;
+            channels.push('native_full_screen');
+          }
         }
 
         let audioPlayed = false;
-        if (plan.useAudio && !nativeAlarmOwnsRingUi) {
-          let audioReceipt = await this.dependencies.audio.playTts({ schedule_id: schedule.id });
-          if (!audioReceipt.played) {
-            audioReceipt = await this.dependencies.audio.playLocalFallback({
-              schedule_id: schedule.id,
+        if (!presentedNatively) {
+          // low=系统通知；medium=弹窗+短震动；high=弹窗+短震动+TTS（失败则本地音）。
+          if (plan.useSystemNotification) {
+            const receipt = await this.dependencies.delivery.deliver(request);
+            deliveryId = receipt.delivery_id;
+            await this.dependencies.systemNotification.show({
+              notification_id: `reminder-${schedule.id}`,
+              title: schedule.title,
+              body: schedule.location_name ?? schedule.title,
             });
+            channels.push('system_notification');
           }
-          audioPlayed = audioReceipt.played;
-          if (audioPlayed) {
-            channels.push(audioReceipt.used_local_fallback ? 'local_sound' : 'tts');
-          }
-          usedFallbackAudio = audioReceipt.used_local_fallback;
-        }
 
-        await this.cancelScheduledAlarm(schedule.id);
-        if (!plan.useAudio || audioPlayed) {
-          await this.dependencies.alarms.stopRinging?.();
+          if (plan.usePopup) {
+            await this.dependencies.presenter.show(request);
+            channels.push('popup');
+          }
+
+          if (plan.useVibration) {
+            await this.dependencies.vibration.vibrate();
+            channels.push('vibration');
+          }
+
+          if (plan.useAudio) {
+            let audioReceipt = await this.dependencies.audio.playTts({ schedule_id: schedule.id });
+            if (!audioReceipt.played) {
+              audioReceipt = await this.dependencies.audio.playLocalFallback({
+                schedule_id: schedule.id,
+              });
+            }
+            audioPlayed = audioReceipt.played;
+            if (audioPlayed) {
+              channels.push(audioReceipt.used_local_fallback ? 'local_sound' : 'tts');
+            }
+            usedFallbackAudio = audioReceipt.used_local_fallback;
+          }
+
+          await this.cancelScheduledAlarm(schedule.id);
+          if (!plan.useAudio || audioPlayed) {
+            await this.dependencies.alarms.stopRinging?.();
+          }
         }
 
         if (!this.isLive(generation)) {
@@ -1000,8 +1044,8 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         mode,
         background: true,
       },
-      (event) => {
-        void this.handleLocationMonitorEvent(event);
+      async (event) => {
+        await this.handleLocationMonitorEvent(event);
       },
     );
     void this.reportPermissionGaps(schedule.id, ['location_foreground', 'location_background']);
@@ -1027,6 +1071,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
       'overlay',
       'full_screen',
       'battery_optimization',
+      'notifications',
     ]);
     return receipt;
   }
@@ -1098,17 +1143,17 @@ function toDeliveryRequest(
 }
 
 /**
- * 原生闹钟响铃时要不要震动/出声/弹全屏止铃界面。全屏三档都要弹（时间型提醒
- * 没有别的可见形式，静音也得让用户看到），vibrate/sound 复用 JS 侧的强度
- * 换算表：低=都不要、中=只震动、高=震动+出声。
+ * 原生闹钟响铃时要不要震动/弹全屏止铃界面、声音走哪个档位。全屏恒为真（时间型
+ * 提醒没有别的可见形式，静音也得让用户看到），vibrate/soundTier 复用 JS 侧的
+ * 强度换算表：低=一声提示音不震动、中=一声提示音+震动、高=循环语音+震动。
  */
 function alarmRingChannels(schedule: LocalReminderSchedule): {
   vibrate: boolean;
-  sound: boolean;
+  sound_tier: AlarmSoundTier;
   full_screen: boolean;
 } {
   const plan = resolveStrengthDeliveryPlan(schedule.reminder?.reminder_strength ?? 'medium');
-  return { vibrate: plan.useVibration, sound: plan.useAudio, full_screen: true };
+  return { vibrate: plan.useVibration, sound_tier: plan.alarmSoundTier, full_screen: true };
 }
 
 function toAlarmSpeechText(schedule: LocalReminderSchedule, scheduledAt: string): string {

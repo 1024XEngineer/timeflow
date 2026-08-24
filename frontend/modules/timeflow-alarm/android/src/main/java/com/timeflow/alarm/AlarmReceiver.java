@@ -1,5 +1,7 @@
 package com.timeflow.alarm;
 
+import android.app.Notification;
+import android.app.NotificationManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -41,8 +43,8 @@ public final class AlarmReceiver extends BroadcastReceiver {
                         intent.getBooleanExtra(AlarmContract.EXTRA_VIBRATE, true)
                 )
                 .putExtra(
-                        AlarmContract.EXTRA_SOUND,
-                        intent.getBooleanExtra(AlarmContract.EXTRA_SOUND, true)
+                        AlarmContract.EXTRA_SOUND_TIER,
+                        intent.getStringExtra(AlarmContract.EXTRA_SOUND_TIER)
                 )
                 .putExtra(
                         AlarmContract.EXTRA_FULL_SCREEN,
@@ -61,6 +63,34 @@ public final class AlarmReceiver extends BroadcastReceiver {
             // 原来这里完全没兜底，抛出去要么被系统吞掉、要么让这条广播直接崩溃退出，
             // 日志里连个痕迹都留不下。
             Log.w(TAG, "startForegroundService failed for alarmId=" + alarmId, exception);
+            postFallbackNotification(context, title);
+        }
+    }
+
+    /**
+     * 前台服务起不来时的最后一道兜底：发一条普通通知，不需要 startForegroundService
+     * 那一套权限，只要 POST_NOTIFICATIONS 就行——比"什么痕迹都不留"好，哪怕全屏止铃页
+     * 和声音/震动都没能展示出来，用户至少能在通知栏看到这条提醒。
+     */
+    private void postFallbackNotification(Context context, String title) {
+        try {
+            AlarmContract.ensureChannel(context);
+            NotificationManager manager =
+                    (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (manager == null) {
+                return;
+            }
+            Notification notification = new Notification.Builder(context, AlarmContract.CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+                    .setContentTitle(title == null || title.isEmpty() ? "日程提醒" : title)
+                    .setContentText("点击打开 Timeflow 处理")
+                    .setCategory(Notification.CATEGORY_ALARM)
+                    .setPriority(Notification.PRIORITY_MAX)
+                    .setAutoCancel(true)
+                    .build();
+            manager.notify((int) (System.currentTimeMillis() & 0x7fffffff), notification);
+        } catch (RuntimeException ignored) {
+            // 尽力而为；这已经是最后一道兜底，失败就真的没办法了。
         }
     }
 }

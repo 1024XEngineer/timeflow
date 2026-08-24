@@ -32,7 +32,7 @@ public final class AlarmScheduler {
         public final String speechText;
         public final boolean legacy;
         public final boolean vibrate;
-        public final boolean sound;
+        public final String soundTier;
         public final boolean fullScreen;
 
         AlarmRecord(
@@ -44,7 +44,7 @@ public final class AlarmScheduler {
                 String speechText,
                 boolean legacy,
                 boolean vibrate,
-                boolean sound,
+                String soundTier,
                 boolean fullScreen
         ) {
             this.alarmId = alarmId;
@@ -55,7 +55,8 @@ public final class AlarmScheduler {
             this.speechText = speechText == null ? "" : speechText;
             this.legacy = legacy;
             this.vibrate = vibrate;
-            this.sound = sound;
+            this.soundTier = soundTier == null || soundTier.isEmpty()
+                    ? AlarmContract.SOUND_TIER_FULL : soundTier;
             this.fullScreen = fullScreen;
         }
     }
@@ -66,7 +67,7 @@ public final class AlarmScheduler {
             String title,
             String scheduleId,
             boolean vibrate,
-            boolean sound,
+            String soundTier,
             boolean fullScreen,
             String speechText
     ) {
@@ -99,7 +100,7 @@ public final class AlarmScheduler {
                 speechText == null ? "" : speechText,
                 false,
                 vibrate,
-                sound,
+                soundTier,
                 fullScreen
         );
 
@@ -119,22 +120,28 @@ public final class AlarmScheduler {
             String speechText
     ) {
         return schedule(
-                context, triggerAtMillis, title, scheduleId, true, true, true, speechText
+                context, triggerAtMillis, title, scheduleId, true,
+                AlarmContract.SOUND_TIER_FULL, true, speechText
         );
     }
 
-    /** @deprecated 请改用包含响铃通道和 speechText 的完整签名。 */
+    /** @deprecated 请改用 {@link #schedule(Context, long, String, String, boolean, String, boolean, String)}。 */
     @Deprecated
     public static String schedule(
             Context context, long triggerAtMillis, String title, String scheduleId
     ) {
-        return schedule(context, triggerAtMillis, title, scheduleId, true, true, true, "");
+        return schedule(
+                context, triggerAtMillis, title, scheduleId, true,
+                AlarmContract.SOUND_TIER_FULL, true, ""
+        );
     }
 
-    /** @deprecated 请改用包含响铃通道和 speechText 的完整签名。 */
+    /** @deprecated 请改用 {@link #schedule(Context, long, String, String, boolean, String, boolean, String)}。 */
     @Deprecated
     public static String schedule(Context context, long triggerAtMillis, String title) {
-        return schedule(context, triggerAtMillis, title, "", true, true, true, "");
+        return schedule(
+                context, triggerAtMillis, title, "", true, AlarmContract.SOUND_TIER_FULL, true, ""
+        );
     }
 
     /**
@@ -187,7 +194,7 @@ public final class AlarmScheduler {
                 .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, record.speechText)
                 .putExtra(AlarmContract.EXTRA_REQUEST_CODE, record.requestCode)
                 .putExtra(AlarmContract.EXTRA_VIBRATE, record.vibrate)
-                .putExtra(AlarmContract.EXTRA_SOUND, record.sound)
+                .putExtra(AlarmContract.EXTRA_SOUND_TIER, record.soundTier)
                 .putExtra(AlarmContract.EXTRA_FULL_SCREEN, record.fullScreen)
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent showPendingIntent = PendingIntent.getActivity(
@@ -281,7 +288,7 @@ public final class AlarmScheduler {
                         object.optString("speech_text", ""),
                         legacy,
                         object.optBoolean("vibrate", true),
-                        object.optBoolean("sound", true),
+                        object.optString("sound_tier", AlarmContract.SOUND_TIER_FULL),
                         object.optBoolean("full_screen", true)
                 ));
             }
@@ -334,6 +341,12 @@ public final class AlarmScheduler {
         return "";
     }
 
+    /** Stable positive notification/foreground-service id for an immediate alarm. */
+    static int immediateRequestCode(String alarmId) {
+        int requestCode = alarmId == null ? 1 : alarmId.hashCode() & 0x7fffffff;
+        return requestCode == 0 ? 1 : requestCode;
+    }
+
     private static void cancelPendingIntent(Context context, AlarmRecord record) {
         AlarmManager alarmManager =
                 (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
@@ -376,7 +389,7 @@ public final class AlarmScheduler {
         object.put("speech_text", alarm.speechText);
         object.put("legacy", alarm.legacy);
         object.put("vibrate", alarm.vibrate);
-        object.put("sound", alarm.sound);
+        object.put("sound_tier", alarm.soundTier);
         object.put("full_screen", alarm.fullScreen);
         return object;
     }
@@ -394,7 +407,7 @@ public final class AlarmScheduler {
                 .putExtra(AlarmContract.EXTRA_TITLE, record.title)
                 .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, record.speechText)
                 .putExtra(AlarmContract.EXTRA_VIBRATE, record.vibrate)
-                .putExtra(AlarmContract.EXTRA_SOUND, record.sound)
+                .putExtra(AlarmContract.EXTRA_SOUND_TIER, record.soundTier)
                 .putExtra(AlarmContract.EXTRA_FULL_SCREEN, record.fullScreen);
         if (!record.legacy) {
             intent.setData(alarmUri(record.alarmId));
