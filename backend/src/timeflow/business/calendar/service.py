@@ -17,6 +17,7 @@ from timeflow.business.calendar.contracts import (
     FindSchedulesQuery,
     OccurrenceOverrideAction,
     RecurringDeleteScope,
+    ReminderDispositionState,
     ReminderType,
     ScheduleBusinessError,
     ScheduleCategory,
@@ -556,6 +557,14 @@ class ScheduleApplicationService(ScheduleAgentService):
 def _matches_static_query(schedule: ScheduleSnapshot, query: FindSchedulesQuery) -> bool:
     title = None if query.title is None else query.title.casefold()
     location = None if query.location_name is None else query.location_name.casefold()
+    # 地点型日程的提醒一旦被确认，就跟客户端地图/日历的展示口径保持一致，
+    # 语音搜索里也不再当作"还需要处理"的日程返回——否则用户已经处理完的
+    # 地点提醒还会被助手反复提起。时间型日程没有这个约束，确认后照常可搜。
+    if (
+        schedule.schedule_type is ScheduleType.LOCATION
+        and schedule.reminder_disposition_state is ReminderDispositionState.CONFIRMED
+    ):
+        return False
     return (
         (query.category is None or schedule.category is query.category)
         and (title is None or title in schedule.title.casefold())
