@@ -1,5 +1,7 @@
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 
+import type { AlarmSoundTier } from '../../../features/reminder/domain/strengthDelivery';
+
 export type NativeAlarmPermissionStatus = {
   exactAlarm: boolean;
   overlay: boolean;
@@ -34,10 +36,23 @@ type TimeflowAlarmNative = {
     triggerAtMillis: number,
     title?: string | null,
     scheduleId?: string | null,
+    vibrate?: boolean,
+    soundTier?: AlarmSoundTier,
+    fullScreen?: boolean,
+    speechText?: string | null,
   ) => Promise<{ alarmId: string; scheduleId?: string }>;
   cancel: (alarmId: string) => Promise<boolean>;
   cancelAll: () => Promise<number>;
   stopRinging: () => Promise<boolean>;
+  presentNow: (
+    alarmId: string,
+    scheduleId: string,
+    title: string,
+    vibrate: boolean,
+    soundTier: AlarmSoundTier,
+    fullScreen: boolean,
+  ) => Promise<boolean>;
+  hasArmedAlarm: (scheduleId: string) => Promise<boolean>;
   peekNativeDispositions: () => Promise<NativeAlarmDispositionPayload[]>;
   ackNativeDispositions: (scheduleIds: string[]) => Promise<boolean>;
   getPermissionStatus: () => Promise<NativeAlarmPermissionStatus>;
@@ -64,13 +79,28 @@ export async function nativeScheduleAlarm(
   triggerAtMillis: number,
   title: string,
   scheduleId?: string,
+  vibrate?: boolean,
+  soundTier?: AlarmSoundTier,
+  fullScreen?: boolean,
+  speechText?: string,
 ): Promise<string | null> {
   const native = getNativeAlarm();
   if (!isTimeflowAlarmAvailable() || native == null) return null;
   try {
-    const result = await native.schedule(triggerAtMillis, title, scheduleId ?? '');
+    const result = await native.schedule(
+      triggerAtMillis,
+      title,
+      scheduleId ?? '',
+      vibrate ?? true,
+      soundTier ?? 'full',
+      fullScreen ?? true,
+      speechText ?? '',
+    );
     return result.alarmId;
-  } catch {
+  } catch (error) {
+    // 临时诊断日志：定位"原生闹钟排不上"到底是权限拒绝、触发时间已过，
+    // 还是 JS<->原生桥接调用本身抛了异常（比如原生端还是旧签名，参数对不上）。
+    console.warn('[TimeflowAlarm] nativeScheduleAlarm failed', error);
     return null;
   }
 }
@@ -102,6 +132,34 @@ export async function nativeStopAlarmRinging(): Promise<void> {
     await native.stopRinging();
   } catch {
     // 尽力停铃，忽略失败。
+  }
+}
+
+export async function nativePresentAlarmNow(
+  alarmId: string,
+  scheduleId: string,
+  title: string,
+  vibrate: boolean,
+  soundTier: AlarmSoundTier,
+  fullScreen: boolean,
+): Promise<boolean> {
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null) return false;
+  try {
+    return await native.presentNow(alarmId, scheduleId, title, vibrate, soundTier, fullScreen);
+  } catch (error) {
+    console.warn('[TimeflowAlarm] nativePresentAlarmNow failed', error);
+    return false;
+  }
+}
+
+export async function nativeHasArmedAlarm(scheduleId: string): Promise<boolean> {
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null || !scheduleId) return false;
+  try {
+    return await native.hasArmedAlarm(scheduleId);
+  } catch {
+    return false;
   }
 }
 

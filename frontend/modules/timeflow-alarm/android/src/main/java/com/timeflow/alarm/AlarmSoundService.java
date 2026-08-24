@@ -1,7 +1,6 @@
 package com.timeflow.alarm;
 
 import android.app.Notification;
-import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.ActivityOptions;
@@ -12,11 +11,16 @@ import android.content.pm.ServiceInfo;
 import android.graphics.PixelFormat;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
+import android.media.Ringtone;
+import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.provider.Settings;
 import android.util.Log;
 import android.view.Gravity;
@@ -38,6 +42,7 @@ public final class AlarmSoundService extends Service {
     private final Runnable replaySpeech = this::replaySpeech;
 
     private MediaPlayer mediaPlayer;
+    private Ringtone pingRingtone;
     private boolean destroyed;
     private File bundledSpeechFile;
     private WindowManager overlayWindowManager;
@@ -46,6 +51,9 @@ public final class AlarmSoundService extends Service {
     String alarmId;
     String scheduleId;
     String alarmTitle;
+    private boolean vibrateEnabled;
+    private String soundTier;
+    private boolean fullScreenEnabled;
     private int requestCode;
     /** 已经通知过 JS "fired" 的 alarmId 集合；service 实例可能被多个不同闹钟复用。 */
     final Set<String> firedNotifiedAlarmIds = new HashSet<>();
@@ -61,8 +69,19 @@ public final class AlarmSoundService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         AlarmContract.ExtractedExtras extras = AlarmContract.ExtractedExtras.from(this, intent);
+        // 临时诊断日志：确认 AlarmReceiver 拉起的 startForegroundService 有没有真的
+        // 走到这里——如果 AlarmReceiver 那边"startForegroundService requested"打出来了
+        // 但这里没打印，说明系统在投递 Intent 给这个 Service 之前就把它拦下来了。
+        Log.i(TAG, "onStartCommand alarmId=" + extras.alarmId + " scheduleId=" + extras.scheduleId
+                + " vibrate=" + extras.vibrate + " soundTier=" + extras.soundTier
+                + " fullScreen=" + extras.fullScreen);
 
         if (overlayView != null) {
+            // 临时诊断日志：这行打出来就说明这条闹钟被前一条还没关掉的止铃界面
+            // 卡住了，静默进了队列，不会有任何全屏/声音/震动——不是这条闹钟本身
+            // 有问题，是前一条 alarmId 没被确认/延后/关闭。
+            Log.i(TAG, "onStartCommand alarmId=" + extras.alarmId
+                    + " queued behind currently visible alarmId=" + alarmId);
             // 界面被占用：先把这条闹钟从持久化列表摘掉、通知 JS 已经 fired（跟
             // 立刻展示的那条待遇一致，不然 JS 侧的状态跟"其实已经响了"对不上），
             // 排队等前一条处理完再展示，不在这里动 this.alarmId 等字段——那些字段
@@ -73,11 +92,39 @@ public final class AlarmSoundService extends Service {
                 AlarmNativeBridge.notifyFired(this, extras.scheduleId, extras.alarmId, extras.title);
             }
             pendingQueue.add(extras);
+            postQueuedNotification(extras);
             return START_NOT_STICKY;
         }
 
         presentAlarm(extras);
         return START_NOT_STICKY;
+    }
+
+    /**
+     * 前一条止铃页还没关掉、这条闹钟被排进队列时的兜底：发一条普通通知，不然这条
+     * 闹钟在真正顶上来之前完全没有任何用户可见的痕迹——用户只会在"点开 App 才发现
+     * 还有一条没处理"的时候才后知后觉，跟没提醒过没什么区别。
+     */
+    private void postQueuedNotification(AlarmContract.ExtractedExtras extras) {
+        try {
+            AlarmContract.ensureChannel(this);
+            NotificationManager manager =
+                    (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (manager == null) {
+                return;
+            }
+            Notification notification = new Notification.Builder(this, AlarmContract.CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+                    .setContentTitle(extras.title)
+                    .setContentText("还有一条提醒排队中，点击打开 Timeflow 处理")
+                    .setCategory(Notification.CATEGORY_ALARM)
+                    .setPriority(Notification.PRIORITY_MAX)
+                    .setAutoCancel(true)
+                    .build();
+            manager.notify(extras.requestCode, notification);
+        } catch (RuntimeException ignored) {
+            // 尽力而为，失败也不能挡住排队本身。
+        }
     }
 
     /** 展示某一条闹钟：更新前台通知、摘除持久化记录、通知 JS fired、弹响铃界面。 */
@@ -86,9 +133,12 @@ public final class AlarmSoundService extends Service {
         alarmId = extras.alarmId;
         scheduleId = extras.scheduleId;
         alarmTitle = extras.title;
+        vibrateEnabled = extras.vibrate;
+        soundTier = extras.soundTier;
+        fullScreenEnabled = extras.fullScreen;
 
         createNotificationChannel();
-        Notification notification = buildNotification(alarmId, alarmTitle);
+        Notification notification = buildNotification(alarmId, alarmTitle, fullScreenEnabled);
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(
@@ -103,11 +153,28 @@ public final class AlarmSoundService extends Service {
             if (firedNotifiedAlarmIds.add(alarmId)) {
                 AlarmNativeBridge.notifyFired(this, scheduleId, alarmId, alarmTitle);
             }
-            showAlarmOverlay(alarmTitle);
-            if (mediaPlayer == null) {
+            // 换成下一条闹钟之前先清掉上一条的震动/声音状态，避免上一条闹钟启动的
+            // 那次播放/震动残留到这条本该更安静的闹钟上。
+            stopVibration();
+            stopPing();
+            if (vibrateEnabled) {
+                startVibration();
+            }
+            if (fullScreenEnabled) {
+                showAlarmOverlay(alarmTitle);
+            }
+            if (AlarmContract.SOUND_TIER_FULL.equals(soundTier) && mediaPlayer == null) {
                 startBundledSpeech();
+            } else if (AlarmContract.SOUND_TIER_PING.equals(soundTier)) {
+                startPing();
             }
         } catch (RuntimeException exception) {
+            // 这里原来完全静默——startForeground() 在部分厂商 ROM/系统版本上会因为
+            // 后台启动限制抛异常（比如 ForegroundServiceStartNotAllowedException），
+            // 抛出去之前这条闹钟就已经从持久化列表摘掉、也通知过 JS "fired" 了，一旦
+            // 走到这个 catch，整条链路就是"通知也没弹、声音也没放、震动也没震"，
+            // 跟用户看到的现象完全对得上，但之前没有任何日志能证实。
+            Log.w(TAG, "presentAlarm failed for alarmId=" + alarmId, exception);
             advanceOrStop();
         }
     }
@@ -132,6 +199,8 @@ public final class AlarmSoundService extends Service {
         playbackHandler.removeCallbacksAndMessages(null);
         removeAlarmOverlay();
         releaseMediaPlayer();
+        stopVibration();
+        stopPing();
         deleteCachedSpeechFile();
         NotificationManager manager =
                 (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
@@ -155,13 +224,19 @@ public final class AlarmSoundService extends Service {
             String alarmId,
             String scheduleId,
             int requestCode,
-            String title
+            String title,
+            boolean vibrate,
+            String soundTier,
+            boolean fullScreen
     ) {
         Intent intent = new Intent(context, AlarmSoundService.class)
                 .putExtra(AlarmContract.EXTRA_ALARM_ID, alarmId)
                 .putExtra(AlarmContract.EXTRA_SCHEDULE_ID, scheduleId)
                 .putExtra(AlarmContract.EXTRA_REQUEST_CODE, requestCode)
-                .putExtra(AlarmContract.EXTRA_TITLE, title);
+                .putExtra(AlarmContract.EXTRA_TITLE, title)
+                .putExtra(AlarmContract.EXTRA_VIBRATE, vibrate)
+                .putExtra(AlarmContract.EXTRA_SOUND_TIER, soundTier)
+                .putExtra(AlarmContract.EXTRA_FULL_SCREEN, fullScreen);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent);
         } else {
@@ -169,24 +244,27 @@ public final class AlarmSoundService extends Service {
         }
     }
 
-    private Notification buildNotification(String alarmId, String title) {
+    private Notification buildNotification(String alarmId, String title, boolean fullScreen) {
         Intent ringIntent = new Intent(this, RingActivity.class)
                 .setData(alarmUri(alarmId))
                 .putExtra(AlarmContract.EXTRA_ALARM_ID, alarmId)
                 .putExtra(AlarmContract.EXTRA_SCHEDULE_ID, scheduleId)
                 .putExtra(AlarmContract.EXTRA_REQUEST_CODE, requestCode)
                 .putExtra(AlarmContract.EXTRA_TITLE, title)
+                .putExtra(AlarmContract.EXTRA_VIBRATE, vibrateEnabled)
+                .putExtra(AlarmContract.EXTRA_SOUND_TIER, soundTier)
+                .putExtra(AlarmContract.EXTRA_FULL_SCREEN, fullScreen)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                         | Intent.FLAG_ACTIVITY_MULTIPLE_TASK
                         | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
-        PendingIntent fullScreenIntent = PendingIntent.getActivity(
+        PendingIntent ringPendingIntent = PendingIntent.getActivity(
                 this,
                 requestCode,
                 ringIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE,
                 pendingIntentOptions()
         );
-        return new Notification.Builder(this, AlarmContract.CHANNEL_ID)
+        Notification.Builder builder = new Notification.Builder(this, AlarmContract.CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
                 .setContentTitle(title)
                 .setContentText("点击停止提醒")
@@ -195,8 +273,12 @@ public final class AlarmSoundService extends Service {
                 .setPriority(Notification.PRIORITY_MAX)
                 .setOngoing(true)
                 .setAutoCancel(false)
-                .setFullScreenIntent(fullScreenIntent, true)
-                .build();
+                // 弱强度也要能点通知手动打开止铃界面，只是不强制弹出。
+                .setContentIntent(ringPendingIntent);
+        if (fullScreen) {
+            builder.setFullScreenIntent(ringPendingIntent, true);
+        }
+        return builder.build();
     }
 
     private Uri alarmUri(String value) {
@@ -222,29 +304,18 @@ public final class AlarmSoundService extends Service {
     }
 
     private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            return;
-        }
-        NotificationManager manager =
-                (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        if (manager == null || manager.getNotificationChannel(AlarmContract.CHANNEL_ID) != null) {
-            return;
-        }
-        NotificationChannel channel = new NotificationChannel(
-                AlarmContract.CHANNEL_ID,
-                "Timeflow",
-                NotificationManager.IMPORTANCE_HIGH
-        );
-        channel.setDescription("日程闹钟提醒");
-        channel.enableVibration(true);
-        channel.setSound(null, null);
-        manager.createNotificationChannel(channel);
+        AlarmContract.ensureChannel(this);
     }
 
     private void showAlarmOverlay(String title) {
         if (overlayView != null
                 || Build.VERSION.SDK_INT < Build.VERSION_CODES.M
                 || !Settings.canDrawOverlays(this)) {
+            // 临时诊断日志：这三个早退条件原来完全静默——尤其是 canDrawOverlays()
+            // 为 false 这种情况，之前唯一的失败日志只覆盖 addView() 抛异常那条
+            // 分支，根本走不到那里就已经 return 了，logcat 里什么痕迹都没有。
+            Log.i(TAG, "showAlarmOverlay skipped: overlayView!=null=" + (overlayView != null)
+                    + " canDrawOverlays=" + Settings.canDrawOverlays(this));
             return;
         }
 
@@ -261,6 +332,9 @@ public final class AlarmSoundService extends Service {
         String targetAlarmId = alarmId;
         String targetScheduleId = scheduleId;
         String targetTitle = title;
+        boolean targetVibrate = vibrateEnabled;
+        String targetSoundTier = soundTier;
+        boolean targetFullScreen = fullScreenEnabled;
 
         View content = AlarmRingUi.build(
                 this,
@@ -269,7 +343,16 @@ public final class AlarmSoundService extends Service {
                     long triggerAt = System.currentTimeMillis()
                             + AlarmContract.SNOOZE_MINUTES * 60_000L;
                     try {
-                        AlarmScheduler.schedule(this, triggerAt, targetTitle, targetScheduleId);
+                        AlarmScheduler.schedule(
+                                this,
+                                triggerAt,
+                                targetTitle,
+                                targetScheduleId,
+                                targetVibrate,
+                                targetSoundTier,
+                                targetFullScreen,
+                                ""
+                        );
                     } catch (RuntimeException ignored) {
                         // ignore
                     }
@@ -320,6 +403,7 @@ public final class AlarmSoundService extends Service {
             overlayWindowManager.addView(content, params);
             overlayView = content;
             OemPermissionHelper.recordOverlayFailure(this, false);
+            Log.i(TAG, "showAlarmOverlay addView succeeded for alarmId=" + targetAlarmId);
         } catch (RuntimeException exception) {
             // 常见于小米"后台弹出界面"关闭、或自启动被拦导致系统对这次前台状态判定
             // 不认账——标准悬浮窗权限（上面 canDrawOverlays 那道早退）已经通过了，
@@ -424,6 +508,79 @@ public final class AlarmSoundService extends Service {
 
     private void removeFromSavedAlarms() {
         AlarmScheduler.removeAlarmRecord(this, alarmId, requestCode);
+    }
+
+    /**
+     * 低/中强度用的一次性短提示音：直接用系统默认通知铃声播一遍就停，不循环、
+     * 不需要额外打包音频素材——跟高强度那段循环语音（startBundledSpeech()）是
+     * 两套独立的播放器实例，互不干扰，也不共用同一个 MediaPlayer。
+     */
+    private void startPing() {
+        if (destroyed) {
+            return;
+        }
+        try {
+            Uri soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+            if (soundUri == null) {
+                return;
+            }
+            Ringtone ringtone = RingtoneManager.getRingtone(this, soundUri);
+            if (ringtone == null) {
+                return;
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                ringtone.setAudioAttributes(new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ALARM)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build());
+            }
+            pingRingtone = ringtone;
+            ringtone.play();
+        } catch (RuntimeException ignored) {
+            // 尽力播放一声提示音；拿不到系统默认铃声就静默跳过，不影响震动/全屏。
+        }
+    }
+
+    private void stopPing() {
+        if (pingRingtone != null) {
+            try {
+                pingRingtone.stop();
+            } catch (RuntimeException ignored) {
+                // 忽略停止失败。
+            }
+            pingRingtone = null;
+        }
+    }
+
+    /** 震动 / 间隔（毫秒），跟 JS 侧 ReactNativeVibration 的 REPEAT_PATTERN 保持一致。 */
+    private static final long[] VIBRATION_PATTERN = {0L, 700L, 350L, 700L};
+
+    private void startVibration() {
+        Vibrator vibrator = obtainVibrator();
+        if (vibrator == null || !vibrator.hasVibrator()) {
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(VibrationEffect.createWaveform(VIBRATION_PATTERN, 0));
+        } else {
+            vibrator.vibrate(VIBRATION_PATTERN, 0);
+        }
+    }
+
+    private void stopVibration() {
+        Vibrator vibrator = obtainVibrator();
+        if (vibrator != null) {
+            vibrator.cancel();
+        }
+    }
+
+    private Vibrator obtainVibrator() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            VibratorManager manager =
+                    (VibratorManager) getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+            return manager == null ? null : manager.getDefaultVibrator();
+        }
+        return (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
     }
 
 }

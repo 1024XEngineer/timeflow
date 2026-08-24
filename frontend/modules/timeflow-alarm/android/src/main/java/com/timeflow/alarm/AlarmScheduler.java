@@ -29,7 +29,11 @@ public final class AlarmScheduler {
         public final long triggerAtMillis;
         public final int requestCode;
         public final String title;
+        public final String speechText;
         public final boolean legacy;
+        public final boolean vibrate;
+        public final String soundTier;
+        public final boolean fullScreen;
 
         AlarmRecord(
                 String alarmId,
@@ -37,14 +41,23 @@ public final class AlarmScheduler {
                 long triggerAtMillis,
                 int requestCode,
                 String title,
-                boolean legacy
+                String speechText,
+                boolean legacy,
+                boolean vibrate,
+                String soundTier,
+                boolean fullScreen
         ) {
             this.alarmId = alarmId;
             this.scheduleId = scheduleId == null ? "" : scheduleId;
             this.triggerAtMillis = triggerAtMillis;
             this.requestCode = requestCode;
             this.title = title;
+            this.speechText = speechText == null ? "" : speechText;
             this.legacy = legacy;
+            this.vibrate = vibrate;
+            this.soundTier = soundTier == null || soundTier.isEmpty()
+                    ? AlarmContract.SOUND_TIER_FULL : soundTier;
+            this.fullScreen = fullScreen;
         }
     }
 
@@ -52,7 +65,11 @@ public final class AlarmScheduler {
             Context context,
             long triggerAtMillis,
             String title,
-            String scheduleId
+            String scheduleId,
+            boolean vibrate,
+            String soundTier,
+            boolean fullScreen,
+            String speechText
     ) {
         if (triggerAtMillis <= System.currentTimeMillis()) {
             throw new IllegalArgumentException("trigger_in_past");
@@ -80,7 +97,11 @@ public final class AlarmScheduler {
                 triggerAtMillis,
                 nextRequestCode(alarms),
                 title == null ? "" : title,
-                false
+                speechText == null ? "" : speechText,
+                false,
+                vibrate,
+                soundTier,
+                fullScreen
         );
 
         rearm(context, alarmManager, record);
@@ -90,10 +111,37 @@ public final class AlarmScheduler {
         return alarmId;
     }
 
-    /** @deprecated 请改用 {@link #schedule(Context, long, String, String)}。 */
+    /** 保留原 TTS 调度签名；未指定强度通道时沿用历史的全响铃行为。 */
+    public static String schedule(
+            Context context,
+            long triggerAtMillis,
+            String title,
+            String scheduleId,
+            String speechText
+    ) {
+        return schedule(
+                context, triggerAtMillis, title, scheduleId, true,
+                AlarmContract.SOUND_TIER_FULL, true, speechText
+        );
+    }
+
+    /** @deprecated 请改用 {@link #schedule(Context, long, String, String, boolean, String, boolean, String)}。 */
+    @Deprecated
+    public static String schedule(
+            Context context, long triggerAtMillis, String title, String scheduleId
+    ) {
+        return schedule(
+                context, triggerAtMillis, title, scheduleId, true,
+                AlarmContract.SOUND_TIER_FULL, true, ""
+        );
+    }
+
+    /** @deprecated 请改用 {@link #schedule(Context, long, String, String, boolean, String, boolean, String)}。 */
     @Deprecated
     public static String schedule(Context context, long triggerAtMillis, String title) {
-        return schedule(context, triggerAtMillis, title, "");
+        return schedule(
+                context, triggerAtMillis, title, "", true, AlarmContract.SOUND_TIER_FULL, true, ""
+        );
     }
 
     /**
@@ -143,7 +191,11 @@ public final class AlarmScheduler {
                 .putExtra(AlarmContract.EXTRA_ALARM_ID, record.alarmId)
                 .putExtra(AlarmContract.EXTRA_SCHEDULE_ID, record.scheduleId)
                 .putExtra(AlarmContract.EXTRA_TITLE, record.title)
+                .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, record.speechText)
                 .putExtra(AlarmContract.EXTRA_REQUEST_CODE, record.requestCode)
+                .putExtra(AlarmContract.EXTRA_VIBRATE, record.vibrate)
+                .putExtra(AlarmContract.EXTRA_SOUND_TIER, record.soundTier)
+                .putExtra(AlarmContract.EXTRA_FULL_SCREEN, record.fullScreen)
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent showPendingIntent = PendingIntent.getActivity(
                 context,
@@ -233,7 +285,11 @@ public final class AlarmScheduler {
                         triggerAt,
                         requestCode,
                         object.optString("title", ""),
-                        legacy
+                        object.optString("speech_text", ""),
+                        legacy,
+                        object.optBoolean("vibrate", true),
+                        object.optString("sound_tier", AlarmContract.SOUND_TIER_FULL),
+                        object.optBoolean("full_screen", true)
                 ));
             }
         } catch (JSONException ignored) {
@@ -285,6 +341,12 @@ public final class AlarmScheduler {
         return "";
     }
 
+    /** Stable positive notification/foreground-service id for an immediate alarm. */
+    static int immediateRequestCode(String alarmId) {
+        int requestCode = alarmId == null ? 1 : alarmId.hashCode() & 0x7fffffff;
+        return requestCode == 0 ? 1 : requestCode;
+    }
+
     private static void cancelPendingIntent(Context context, AlarmRecord record) {
         AlarmManager alarmManager =
                 (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
@@ -324,7 +386,11 @@ public final class AlarmScheduler {
         object.put("trigger_at", alarm.triggerAtMillis);
         object.put("request_code", alarm.requestCode);
         object.put("title", alarm.title);
+        object.put("speech_text", alarm.speechText);
         object.put("legacy", alarm.legacy);
+        object.put("vibrate", alarm.vibrate);
+        object.put("sound_tier", alarm.soundTier);
+        object.put("full_screen", alarm.fullScreen);
         return object;
     }
 
@@ -338,7 +404,11 @@ public final class AlarmScheduler {
                 .putExtra(AlarmContract.EXTRA_ALARM_ID, record.alarmId)
                 .putExtra(AlarmContract.EXTRA_SCHEDULE_ID, record.scheduleId)
                 .putExtra(AlarmContract.EXTRA_REQUEST_CODE, record.requestCode)
-                .putExtra(AlarmContract.EXTRA_TITLE, record.title);
+                .putExtra(AlarmContract.EXTRA_TITLE, record.title)
+                .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, record.speechText)
+                .putExtra(AlarmContract.EXTRA_VIBRATE, record.vibrate)
+                .putExtra(AlarmContract.EXTRA_SOUND_TIER, record.soundTier)
+                .putExtra(AlarmContract.EXTRA_FULL_SCREEN, record.fullScreen);
         if (!record.legacy) {
             intent.setData(alarmUri(record.alarmId));
         }

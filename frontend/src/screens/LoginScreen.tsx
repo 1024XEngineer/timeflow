@@ -1,6 +1,7 @@
 import { StatusBar } from 'expo-status-bar';
 import { useRef, useState } from 'react';
 import {
+  KeyboardAvoidingView,
   Platform,
   Pressable,
   ScrollView,
@@ -13,7 +14,6 @@ import {
 
 import { useAuthAccessForm } from '../features/auth/presentation/useAuthAccessForm';
 import { colors, spacing } from '../shared/ui/theme';
-import { useImeOverlap } from '../shared/ui/useImeOverlap';
 
 type FocusedField = 'username' | 'password' | null;
 
@@ -21,131 +21,132 @@ export function LoginScreen() {
   const passwordInputRef = useRef<TextInput>(null);
   const { width: windowWidth } = useWindowDimensions();
   const [focusedField, setFocusedField] = useState<FocusedField>(null);
-  const imeOverlap = useImeOverlap();
   const { errors, isSubmitting, submit, submitError, updateField, values } = useAuthAccessForm();
 
   return (
-    <View style={styles.screen}>
-      <View
-        style={[styles.imeLift, { transform: [{ translateY: imeOverlap ? -imeOverlap : 0 }] }]}
-        testID="login-ime-lift"
+    <KeyboardAvoidingView
+      behavior={
+        Platform.OS === 'ios' ? 'padding' : Platform.OS === 'android' ? 'height' : undefined
+      }
+      style={styles.screen}
+    >
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        contentInsetAdjustmentBehavior="automatic"
+        // Android may scroll while revealing the focused field. Do not treat
+        // that native scroll as an explicit keyboard-dismiss gesture.
+        keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
+        keyboardShouldPersistTaps="handled"
       >
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          contentInsetAdjustmentBehavior="automatic"
-          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-          keyboardShouldPersistTaps="handled"
-        >
-          <View style={[styles.shell, { width: Math.min(windowWidth - spacing.xxl, 400) }]}>
-            <View style={styles.wordmark} testID="brand-region">
-              <Text style={styles.wordmarkTime}>Time</Text>
-              <Text style={styles.wordmarkFlow}>flow</Text>
-            </View>
+        <View style={[styles.shell, { width: Math.min(windowWidth - spacing.xxl, 400) }]}>
+          <View style={styles.wordmark} testID="brand-region">
+            <Text style={styles.wordmarkTime}>Time</Text>
+            <Text style={styles.wordmarkFlow}>flow</Text>
+          </View>
 
-            <View style={styles.mainArea} testID="login-main">
-              <View style={styles.loginContent}>
-                <View style={styles.intro}>
-                  <Text style={styles.title}>登录</Text>
-                  <Text style={styles.subtitle}>首次使用会自动创建账号。</Text>
-                </View>
+          <View style={styles.mainArea} testID="login-main">
+            <View style={styles.loginContent}>
+              <View style={styles.intro}>
+                <Text style={styles.title}>登录</Text>
+                <Text style={styles.subtitle}>首次使用会自动创建账号。</Text>
+              </View>
 
-                <View style={styles.formSurface}>
-                  <View style={styles.fieldGroup}>
-                    <Text style={styles.label}>用户名</Text>
-                    <TextInput
-                      accessibilityLabel="用户名"
-                      autoCapitalize="none"
-                      autoComplete="username"
-                      autoCorrect={false}
-                      editable={!isSubmitting}
-                      enterKeyHint="next"
-                      maxLength={128}
-                      onBlur={() => setFocusedField(null)}
-                      onChangeText={(value) => updateField('username', value)}
-                      onFocus={() => setFocusedField('username')}
-                      onSubmitEditing={() => passwordInputRef.current?.focus()}
-                      placeholder="输入用户名"
-                      placeholderTextColor={colors.mutedText}
-                      selectionColor={colors.focus}
-                      style={[
-                        styles.input,
-                        focusedField === 'username' && styles.inputFocused,
-                        errors.username && styles.inputError,
-                      ]}
-                      textContentType="username"
-                      value={values.username}
-                    />
-                    {errors.username ? (
-                      <Text accessibilityLiveRegion="polite" style={styles.errorText}>
-                        {errors.username}
-                      </Text>
-                    ) : null}
-                  </View>
-
-                  <View style={styles.fieldGroup}>
-                    <Text style={styles.label}>密码</Text>
-                    <TextInput
-                      ref={passwordInputRef}
-                      accessibilityLabel="密码"
-                      autoCapitalize="none"
-                      autoComplete="current-password"
-                      editable={!isSubmitting}
-                      enterKeyHint="done"
-                      maxLength={128}
-                      onBlur={() => setFocusedField(null)}
-                      onChangeText={(value) => updateField('password', value)}
-                      onFocus={() => setFocusedField('password')}
-                      onSubmitEditing={submit}
-                      placeholder="输入密码"
-                      placeholderTextColor={colors.mutedText}
-                      secureTextEntry
-                      selectionColor={colors.focus}
-                      style={[
-                        styles.input,
-                        focusedField === 'password' && styles.inputFocused,
-                        errors.password && styles.inputError,
-                      ]}
-                      textContentType="password"
-                      value={values.password}
-                    />
-                    {errors.password ? (
-                      <Text accessibilityLiveRegion="polite" style={styles.errorText}>
-                        {errors.password}
-                      </Text>
-                    ) : null}
-                  </View>
-
-                  {submitError ? (
-                    <Text accessibilityLiveRegion="polite" style={styles.submitError}>
-                      {submitError}
+              <View style={styles.formSurface}>
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.label}>用户名</Text>
+                  <TextInput
+                    accessibilityLabel="用户名"
+                    autoCapitalize="none"
+                    autoComplete="username"
+                    autoCorrect={false}
+                    editable={!isSubmitting}
+                    enterKeyHint="next"
+                    maxLength={128}
+                    onBlur={() => setFocusedField(null)}
+                    onChangeText={(value) => updateField('username', value)}
+                    onFocus={() => setFocusedField('username')}
+                    onSubmitEditing={() => passwordInputRef.current?.focus()}
+                    placeholder="输入用户名"
+                    placeholderTextColor={colors.mutedText}
+                    selectionColor={colors.focus}
+                    style={[
+                      styles.input,
+                      focusedField === 'username' && styles.inputFocused,
+                      errors.username && styles.inputError,
+                    ]}
+                    textContentType="username"
+                    value={values.username}
+                  />
+                  {errors.username ? (
+                    <Text accessibilityLiveRegion="polite" style={styles.errorText}>
+                      {errors.username}
                     </Text>
                   ) : null}
-
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityState={{ disabled: isSubmitting }}
-                    disabled={isSubmitting}
-                    onPress={submit}
-                    style={({ pressed }) => [
-                      styles.loginButton,
-                      isSubmitting && styles.loginButtonDisabled,
-                      pressed && !isSubmitting && styles.loginButtonPressed,
-                    ]}
-                  >
-                    <Text style={styles.loginButtonText}>{isSubmitting ? '提交中…' : '继续'}</Text>
-                  </Pressable>
                 </View>
+
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.label}>密码</Text>
+                  <TextInput
+                    ref={passwordInputRef}
+                    accessibilityLabel="密码"
+                    autoCapitalize="none"
+                    autoComplete="current-password"
+                    editable={!isSubmitting}
+                    enterKeyHint="done"
+                    maxLength={128}
+                    onBlur={() => setFocusedField(null)}
+                    onChangeText={(value) => updateField('password', value)}
+                    onFocus={() => setFocusedField('password')}
+                    onSubmitEditing={submit}
+                    placeholder="输入密码"
+                    placeholderTextColor={colors.mutedText}
+                    secureTextEntry
+                    selectionColor={colors.focus}
+                    style={[
+                      styles.input,
+                      focusedField === 'password' && styles.inputFocused,
+                      errors.password && styles.inputError,
+                    ]}
+                    textContentType="password"
+                    value={values.password}
+                  />
+                  {errors.password ? (
+                    <Text accessibilityLiveRegion="polite" style={styles.errorText}>
+                      {errors.password}
+                    </Text>
+                  ) : null}
+                </View>
+
+                {submitError ? (
+                  <Text accessibilityLiveRegion="polite" style={styles.submitError}>
+                    {submitError}
+                  </Text>
+                ) : null}
+
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: isSubmitting }}
+                  disabled={isSubmitting}
+                  onPress={submit}
+                  style={({ pressed }) => [
+                    styles.loginButton,
+                    isSubmitting && styles.loginButtonDisabled,
+                    pressed && !isSubmitting && styles.loginButtonPressed,
+                  ]}
+                >
+                  <Text style={styles.loginButtonText}>{isSubmitting ? '提交中…' : '继续'}</Text>
+                </Pressable>
               </View>
             </View>
-
-            <Text style={styles.privacyNote} testID="privacy-note">
-              你的日程只属于你
-            </Text>
           </View>
-        </ScrollView>
-      </View>
+
+          <Text style={styles.privacyNote} testID="privacy-note">
+            你的日程只属于你
+          </Text>
+        </View>
+      </ScrollView>
       <StatusBar style="dark" />
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -181,10 +182,6 @@ const styles = StyleSheet.create({
   },
   inputFocused: {
     borderColor: colors.focus,
-  },
-  imeLift: {
-    flex: 1,
-    width: '100%',
   },
   intro: {
     marginBottom: 28,
@@ -234,7 +231,6 @@ const styles = StyleSheet.create({
   screen: {
     backgroundColor: colors.background,
     flex: 1,
-    overflow: 'hidden',
   },
   scrollContent: {
     flexGrow: 1,

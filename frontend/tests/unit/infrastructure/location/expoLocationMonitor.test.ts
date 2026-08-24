@@ -476,5 +476,27 @@ describe('ExpoLocationMonitor', () => {
       const monitor = new ExpoLocationMonitor();
       await expect(monitor.watch(request(), jest.fn())).resolves.toBeDefined();
     });
+
+    it('recovers after syncRegions() itself throws instead of leaving the sync chain stuck', async () => {
+      // getForegroundPermissionsAsync/getBackgroundPermissionsAsync above are not
+      // wrapped in try/catch, so a real native hiccup makes syncRegions() itself
+      // reject (not just warn). chainSync() must neutralize that immediately --
+      // handleAppState's resync is fire-and-forget (void this.chainSync()), so if
+      // the rejection is left unhandled even briefly, Node/Hermes treats it as an
+      // unhandled rejection and crashes the process outright (reproduced while
+      // writing this test, before switching chainSync() to .then().catch(() => {})).
+      const monitor = new ExpoLocationMonitor();
+      await monitor.watch(request(), jest.fn());
+      startGeofencing.mockClear();
+
+      getForeground.mockRejectedValueOnce(new Error('native location module hiccup'));
+      appStateHandler?.('active');
+      await new Promise((resolve) => setImmediate(resolve));
+
+      await expect(
+        monitor.watch(request({ schedule_id: 'schedule-2' }), jest.fn()),
+      ).resolves.toBeDefined();
+      expect(startGeofencing).toHaveBeenCalled();
+    });
   });
 });

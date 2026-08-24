@@ -61,22 +61,20 @@ const PTT_BUSY_PHASES: ReadonlySet<ConversationTurnState['phase']> = new Set([
   'awaiting_result',
 ]);
 
-// 只返回通用状态文案，不带具体说了什么/回复了什么——那些内容都在
-// VoiceCallScreen 的聊天记录区里，标题只负责报状态。
-function titleFor(state: ConversationTurnState): string {
-  if (state.phase === 'asking') return state.speechText;
+function statusLabelFor(state: ConversationTurnState): string {
   if (state.phase === 'error') return state.message;
   switch (state.phase) {
     case 'connecting':
       return '连接中…';
     case 'listening':
-      return '聆听中…';
+      return '正在听';
     case 'interrupted':
       return '已打断';
     case 'speaking':
-      return '回答中…';
+    case 'asking':
+      return '正在回复';
     case 'paused':
-      return '已暂停，点一下继续';
+      return '已暂停，点击圆圈继续';
     default:
       return '';
   }
@@ -84,7 +82,7 @@ function titleFor(state: ConversationTurnState): string {
 
 /**
  * 叠在日历屏上的语音入口：底部一条长条状控件，左边一个圆形电话按钮进入免提
- * 通话（沉浸式全屏层，仿豆包语音模式），右边一条长按说话的语音条——两条编排
+ * 通话（沉浸式全屏层，对白与底部声纹球的布局参考 GPT Voice），右边一条长按说话的语音条——两条编排
  * 路径（AssistantConversationService/AssistantContinuousConversationService）
  * 各自独立连接（各自绑定不同 voiceMode 的 AuthenticatedVoiceTransport 实例，
  * 共用同一个 AuthenticatedWebSocketClient），不共享一个 application 实例，
@@ -125,12 +123,13 @@ export function AssistantVoiceOverlay({
   if (expanded) {
     return (
       <VoiceCallScreen
+        messages={call.messages}
         onCollapse={() => setExpanded(false)}
         onEnd={() => void call.endTurn()}
         onTogglePause={() => call.togglePause()}
+        soundLevel={call.soundLevel}
         status={callStatusFor(call.state.phase)}
-        title={titleFor(call.state)}
-        turns={call.turns}
+        title={statusLabelFor(call.state)}
       />
     );
   }

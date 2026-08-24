@@ -82,7 +82,8 @@ export type ReminderTrigger = {
   triggered_at: string;
 };
 
-export type DeliveryChannel = 'system_notification' | 'popup' | 'vibration' | 'tts' | 'local_sound';
+export type DeliveryChannel =
+  'system_notification' | 'native_full_screen' | 'popup' | 'vibration' | 'tts' | 'local_sound';
 
 export type ReminderDeliveryRequest = {
   reminder_id: string;

@@ -1,6 +1,10 @@
 import { isTransportError, type AssistantServerMessage } from '../../../contracts/conversation';
 import type { ScheduleCategory } from '../../../contracts/schedule';
-import type { AppliedCommand, ConversationTurnState } from '../domain/ConversationTurn';
+import type {
+  AppliedCommand,
+  ConversationTurnState,
+  VoiceChatMessage,
+} from '../domain/ConversationTurn';
 
 import type {
   AssistantApplicationDependencies,
@@ -12,6 +16,7 @@ import type { VoiceTransportConnection } from './interfaces/VoiceTransportPort';
 const AUDIO_FORMAT = 'pcm_s16le';
 const SAMPLE_RATE_HZ = 16000;
 const CHANNELS = 1;
+const EMPTY_MESSAGES: readonly VoiceChatMessage[] = [];
 // 共享连接的握手超时（AuthenticatedWebSocketClient 内部固定 5s）已经不归这里管；
 // 这个只是给定位单独留的预算，拿不到就不带，不能让 connect() 本身被定位拖住。
 const LOCATION_TIMEOUT_MS = 2000;
@@ -47,6 +52,10 @@ export class AssistantConversationService implements AssistantApplicationPort {
   private pendingStartTurn: Promise<void> | null = null;
   /** Category events can arrive before the command result creates their local row. */
   private readonly pendingCategoryUpdates = new Map<string, ScheduleCategory>();
+  /** 串起每条 voice.command.result 的本地落库，见 AssistantContinuousConversationService
+   * 里同名字段的注释——一次按住说话也可能在一句话里触发多个工具调用（批量新建/
+   * 删除），不排队会让两个 applyCommandResultLocally() 并发抢同一个 SQLite 连接。 */
+  private commandResultChain: Promise<void> = Promise.resolve();
   private disposed = false;
 
   constructor(
@@ -73,6 +82,10 @@ export class AssistantConversationService implements AssistantApplicationPort {
 
   getReplyText(): string | null {
     return this.replyText;
+  }
+
+  getMessages(): readonly VoiceChatMessage[] {
+    return EMPTY_MESSAGES;
   }
 
   getSoundLevel(): number | null {
@@ -239,7 +252,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
           status: message.payload.status,
         };
         // 状态立刻回到 idle，不等写库；message.ack 必须等写库成功才发（AGENTS.md §6）。
-        void this.applyCommandResultLocally(command, message.message_id);
+        this.queueCommandResult(command, message.message_id);
         this.setState({ phase: 'idle' });
         return;
       }
@@ -275,6 +288,17 @@ export class AssistantConversationService implements AssistantApplicationPort {
       default:
         return;
     }
+  }
+
+  /** .catch(() => {}) 必须紧跟在同一条语句里同步接上——迟一拍再接（比如靠下一次
+   * queueCommandResult 调用里的第二个 then 参数兜底）这段窗口期这个被拒绝的
+   * promise 没有任何 handler，Node 的 unhandled rejection 检测在下一次调用到达前
+   * 就已经判定"没人接"，直接把整个进程带崩——不是理论风险，用一个会抛的 state
+   * 订阅者复现过。 */
+  private queueCommandResult(command: AppliedCommand, messageId: string): void {
+    this.commandResultChain = this.commandResultChain
+      .then(() => this.applyCommandResultLocally(command, messageId))
+      .catch(() => {});
   }
 
   private async applyCommandResultLocally(

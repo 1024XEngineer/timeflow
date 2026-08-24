@@ -47,15 +47,27 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
     triggerAtMillis: Double,
     title: String?,
     scheduleId: String?,
+    vibrate: Boolean,
+    soundTier: String?,
+    fullScreen: Boolean,
+    speechText: String?,
     promise: Promise,
   ) {
     try {
-      Log.i(NAME, "schedule triggerAtMillis=$triggerAtMillis title=$title scheduleId=$scheduleId")
+      Log.i(
+        NAME,
+        "schedule triggerAtMillis=$triggerAtMillis title=$title scheduleId=$scheduleId " +
+          "vibrate=$vibrate soundTier=$soundTier fullScreen=$fullScreen",
+      )
       val alarmId = AlarmScheduler.schedule(
         reactContext,
         triggerAtMillis.toLong(),
         title ?: "日程提醒",
         scheduleId ?: "",
+        vibrate,
+        soundTier ?: AlarmContract.SOUND_TIER_FULL,
+        fullScreen,
+        speechText ?: "",
       )
       Log.i(NAME, "scheduled alarmId=$alarmId")
       val result: WritableMap = Arguments.createMap()
@@ -63,10 +75,13 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
       result.putString("scheduleId", scheduleId ?: "")
       promise.resolve(result)
     } catch (error: IllegalArgumentException) {
+      Log.w(NAME, "schedule rejected: trigger_in_past", error)
       promise.reject("TRIGGER_IN_PAST", error.message, error)
     } catch (error: SecurityException) {
+      Log.w(NAME, "schedule rejected: exact_alarm_denied", error)
       promise.reject("EXACT_ALARM_DENIED", error.message, error)
     } catch (error: Exception) {
+      Log.w(NAME, "schedule rejected: unexpected", error)
       promise.reject("SCHEDULE_FAILED", error.message, error)
     }
   }
@@ -98,6 +113,57 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
       promise.resolve(true)
     } catch (error: Exception) {
       promise.reject("STOP_RINGING_FAILED", error.message, error)
+    }
+  }
+
+  /**
+   * 提醒守护后台任务（reminderGuardTask.ts）判断"这条时间型日程原生闹钟当初有没有
+   * 挂上"用——JS 内存里的 registrations 在守护任务可能运行的独立/headless 上下文里
+   * 拿不到，只有 AlarmScheduler 持久化的挂钟列表是跨上下文都能查的真相来源。
+   */
+  @ReactMethod
+  fun hasArmedAlarm(scheduleId: String?, promise: Promise) {
+    try {
+      if (scheduleId.isNullOrEmpty()) {
+        promise.resolve(false)
+        return
+      }
+      val armed = AlarmScheduler.loadAlarms(reactContext).any { it.scheduleId == scheduleId }
+      promise.resolve(armed)
+    } catch (error: Exception) {
+      promise.reject("HAS_ARMED_ALARM_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun presentNow(
+    alarmId: String?,
+    scheduleId: String?,
+    title: String?,
+    vibrate: Boolean,
+    soundTier: String?,
+    fullScreen: Boolean,
+    promise: Promise,
+  ) {
+    try {
+      val resolvedAlarmId = alarmId?.takeIf { it.isNotEmpty() } ?: "geofence-${System.currentTimeMillis()}"
+      val resolvedScheduleId = scheduleId ?: ""
+      val resolvedTitle = title?.takeIf { it.isNotEmpty() } ?: "日程提醒"
+      AlarmSoundService.start(
+        reactContext,
+        resolvedAlarmId,
+        resolvedScheduleId,
+        AlarmScheduler.immediateRequestCode(resolvedAlarmId),
+        resolvedTitle,
+        vibrate,
+        soundTier ?: AlarmContract.SOUND_TIER_FULL,
+        fullScreen,
+      )
+      Log.i(NAME, "presentNow requested alarmId=$resolvedAlarmId scheduleId=$resolvedScheduleId")
+      promise.resolve(true)
+    } catch (error: Exception) {
+      Log.w(NAME, "presentNow failed", error)
+      promise.reject("PRESENT_NOW_FAILED", error.message, error)
     }
   }
 

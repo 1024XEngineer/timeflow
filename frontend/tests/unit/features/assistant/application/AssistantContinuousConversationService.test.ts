@@ -248,9 +248,37 @@ describe('AssistantContinuousConversationService', () => {
     } as AssistantServerMessage);
     await flushAsync();
 
-    expect(service.getTurns()).toEqual([
-      { id: 'req_1', replyText: '明天下午三点', transcript: '明天几点开会' },
-      { id: 'req_2', replyText: null, transcript: '谁参加' },
+    expect(service.getMessages()).toEqual([
+      { id: 'user-1', role: 'user', text: '明天几点开会' },
+      { id: 'reply_1', role: 'assistant', text: '明天下午三点' },
+      { id: 'user-3', role: 'user', text: '谁参加' },
+    ]);
+  });
+
+  it('keeps a streaming assistant reply pending until it is done', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: false, reply_id: 'reply_1', speech_text: '明天' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getMessages()).toEqual([
+      { id: 'reply_1', pending: true, role: 'assistant', text: '明天' },
+    ]);
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '明天下午三点' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getMessages()).toEqual([
+      { id: 'reply_1', role: 'assistant', text: '明天下午三点' },
     ]);
   });
 
@@ -318,14 +346,15 @@ describe('AssistantContinuousConversationService', () => {
       } as AssistantServerMessage);
       await flushAsync();
 
-      expect(service.getTurns()).toEqual([
-        { id: 'req_1', replyText: speechText, transcript: '帮我订会议室' },
+      expect(service.getMessages()).toEqual([
+        { id: 'user-1', role: 'user', text: '帮我订会议室' },
+        { id: 'q_1', role: 'assistant', text: speechText },
       ]);
       expect(service.getState()).toMatchObject({ phase: 'asking' });
     },
   );
 
-  it('does not create a history turn when a reply arrives before any transcript', async () => {
+  it('records an assistant bubble even when a reply arrives before any transcript', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
     const service = createService(deps);
@@ -339,7 +368,7 @@ describe('AssistantContinuousConversationService', () => {
     await flushAsync();
 
     expect(service.getReplyText()).toBe('好的');
-    expect(service.getTurns()).toEqual([]);
+    expect(service.getMessages()).toEqual([{ id: 'reply_1', role: 'assistant', text: '好的' }]);
   });
 
   it('clears turn history when a new call starts', async () => {
@@ -355,12 +384,12 @@ describe('AssistantContinuousConversationService', () => {
       type: 'voice.asr.completed',
     } as AssistantServerMessage);
     await flushAsync();
-    expect(service.getTurns()).toHaveLength(1);
+    expect(service.getMessages()).toHaveLength(1);
 
     await service.endTurn();
     await startListening(fake, service);
 
-    expect(service.getTurns()).toHaveLength(0);
+    expect(service.getMessages()).toHaveLength(0);
   });
 
   it('resets the idle timer after a reply finishes playing', async () => {
@@ -449,6 +478,123 @@ describe('AssistantContinuousConversationService', () => {
     });
     expect(fake.sent).not.toContainEqual(
       expect.objectContaining({ message_id: 'msg_failed', type: 'message.ack' }),
+    );
+    disposeService(service);
+  });
+
+  it('keeps applying queued command results even if a subscriber listener throws', async () => {
+    // markScheduleDataChanged() synchronously notifies every subscriber; a listener
+    // that throws (e.g. a buggy re-render) rejects applyCommandResultLocally()'s
+    // promise. queueCommandResult() must neutralize that with .catch(() => {})
+    // chained in the same statement (same idiom as chainPlayback) -- deferring the
+    // catch to a later call leaves the rejection unhandled for a few microtask
+    // ticks, which crashes the process outright (reproduced while writing this
+    // test, before adding the immediate .catch()).
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+    await startListening(fake, service);
+
+    // handleMessage's own setState() notifies once synchronously before
+    // applyCommandResultLocally's markScheduleDataChanged() notifies again
+    // asynchronously; only the second one is the one queueCommandResult's chain
+    // needs to survive.
+    let notifyCount = 0;
+    const unsubscribe = service.subscribe(() => {
+      notifyCount += 1;
+      if (notifyCount === 2) {
+        throw new Error('listener boom');
+      }
+    });
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_1',
+      payload: { operation: 'create_schedule', schedule: { id: 'a' }, status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+    unsubscribe();
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_2',
+      payload: { operation: 'create_schedule', schedule: { id: 'b' }, status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getLastAppliedCommand()).toEqual(
+      expect.objectContaining({ operation: 'create_schedule', schedule: { id: 'b' } }),
+    );
+    disposeService(service);
+  });
+
+  it('serializes local writes so a batch of back-to-back command results cannot race', async () => {
+    // Regression test for a batch create/delete race: the model can call several
+    // tools inside one turn, so voice.command.result messages can arrive only
+    // milliseconds apart (observed as low as 12ms in production logs). Each write
+    // opens its own withExclusiveTransactionAsync() on the real SQLite adapter --
+    // running two at once opens two native connections that fight over the same
+    // exclusive lock ("database is locked"), and the loser's write is silently
+    // dropped even though the cloud already committed it. queueCommandResult()
+    // must serialize these instead of firing them concurrently.
+    const fake = createFakeConnection();
+    const order: string[] = [];
+    let resolveFirst: (() => void) | undefined;
+    let inFlight = 0;
+    let overlapped = false;
+    let callCount = 0;
+    const deps = createDeps({
+      applyCommandResult: async () => {
+        callCount += 1;
+        inFlight += 1;
+        if (inFlight > 1) overlapped = true;
+        if (callCount === 1) {
+          order.push('first-start');
+          await new Promise<void>((resolve) => {
+            resolveFirst = resolve;
+          });
+          order.push('first-end');
+        } else {
+          order.push('second-start');
+          order.push('second-end');
+        }
+        inFlight -= 1;
+      },
+      connection: fake.connection,
+    });
+    const service = createService(deps);
+    await startListening(fake, service);
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_1',
+      payload: { operation: 'create_schedule', schedule: { id: 'a' }, status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      message_id: 'msg_2',
+      payload: { operation: 'create_schedule', schedule: { id: 'b' }, status: 'applied' },
+      type: 'voice.command.result',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    // The second write must not have started yet -- the first is still stuck
+    // mid-transaction, waiting on resolveFirst.
+    expect(order).toEqual(['first-start']);
+    expect(overlapped).toBe(false);
+
+    resolveFirst?.();
+    await flushAsync();
+
+    expect(order).toEqual(['first-start', 'first-end', 'second-start', 'second-end']);
+    expect(overlapped).toBe(false);
+    expect(fake.sent).toContainEqual(
+      expect.objectContaining({ message_id: 'msg_1', type: 'message.ack' }),
+    );
+    expect(fake.sent).toContainEqual(
+      expect.objectContaining({ message_id: 'msg_2', type: 'message.ack' }),
     );
     disposeService(service);
   });

@@ -5,15 +5,18 @@ import type {
   ReminderApplicationDependencies,
   ReminderApplicationPort,
 } from '../../features/reminder/application/interfaces';
-import { LocalReminderApplication } from '../../features/reminder/application';
+import {
+  LocalReminderApplication,
+  ReminderGuardCoordinator,
+} from '../../features/reminder/application';
 import {
   LocalReminderDelivery,
-  LocalReminderDispositionSync,
   LocalReminderRecovery,
   NoopPopup,
   SqliteLocalScheduleReader,
   SqliteReminderStateStore,
 } from '../../features/reminder/data/local';
+import { ReminderDispositionHttpSync } from '../../features/reminder/data/http';
 import { AlertReminderPresenter } from '../../features/reminder/presentation';
 import { ExpoAudioPlayback } from '../../infrastructure/audio';
 import { ExpoLocationMonitor } from '../../infrastructure/location';
@@ -74,18 +77,26 @@ export function createAppServices(options: CreateAppServicesOptions = {}): AppSe
     vibration: new ReactNativeVibration(),
     recovery: new LocalReminderRecovery(),
     state: reminderState,
-    dispositionSync: new LocalReminderDispositionSync(),
+    dispositionSync: new ReminderDispositionHttpSync(auth.protectedClient),
     ...restOverrides,
     schedules,
     presenter,
   };
 
   const reminder = new LocalReminderApplication(reminderPorts);
+  const reminderGuard = new ReminderGuardCoordinator({
+    schedules,
+    handleLocation: (sample) => reminder.handleLocation(sample),
+  });
   const scheduleView = new ScheduleViewStore();
   const runtime = new AppRuntime([
     {
       start: () => reminder.start(),
       stop: () => reminder.stop(),
+    },
+    {
+      start: () => reminderGuard.start(),
+      stop: () => reminderGuard.stop(),
     },
   ]);
 

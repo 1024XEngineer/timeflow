@@ -1,8 +1,16 @@
+import type { AlarmSoundTier } from '../../domain/strengthDelivery';
+
 export type AlarmScheduleRequest = {
   schedule_id: string;
   trigger_at: string;
   title: string;
   exact: boolean;
+  /** 原生响铃时是否震动/出声/弹全屏止铃界面；由提醒强度换算而来。 */
+  vibrate: boolean;
+  sound_tier: AlarmSoundTier;
+  full_screen: boolean;
+  /** JS 生成的日程播报文案；原生侧仅负责按闹钟声道朗读。 */
+  speech_text?: string;
 };
 
 export type AlarmScheduleReceipt = {
@@ -27,6 +35,21 @@ export type AlarmNativeDisposition = {
   updated_at: string;
 };
 
+export type AlarmPresentationRequest = {
+  alarm_id: string;
+  schedule_id: string;
+  title: string;
+  vibrate: boolean;
+  sound_tier: AlarmSoundTier;
+  full_screen: boolean;
+};
+
+export type AlarmPresentationReceipt = {
+  alarm_id: string;
+  schedule_id: string;
+  presented: boolean;
+};
+
 /** 原生闹钟映射边界；触发时间的选择留在应用层或领域层。 */
 export interface AlarmSchedulerPort {
   schedule(request: AlarmScheduleRequest): Promise<AlarmScheduleReceipt>;
@@ -40,4 +63,6 @@ export interface AlarmSchedulerPort {
   peekNativeDispositions?(): Promise<readonly AlarmNativeDisposition[]>;
   /** 确认对应 schedule_id 已经在 JS 侧落盘成功，原生缓冲区才真正删除这批记录。 */
   ackNativeDispositions?(scheduleIds: readonly string[]): Promise<void>;
+  /** 立即交给原生全局响铃页；不可用时返回 presented=false，由上层回退。 */
+  presentNow?(request: AlarmPresentationRequest): Promise<AlarmPresentationReceipt>;
 }
