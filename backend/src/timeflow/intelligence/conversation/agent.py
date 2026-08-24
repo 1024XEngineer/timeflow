@@ -76,6 +76,9 @@ class PendingQuestion:
     candidates: tuple[dict[str, Any], ...]
 
 
+_WEEKDAYS = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
+
+
 @dataclass(frozen=True, slots=True)
 class AgentTurnContext:
     """Dynamic time context supplied once for an Agent turn."""
@@ -90,6 +93,7 @@ class AgentTurnContext:
         return (
             f"当前 UTC 时间：{utc.isoformat()}。"
             f"当前本地时间：{local.isoformat()}。"
+            f"今天是{_WEEKDAYS[local.weekday()]}。"
             f"当前 IANA 时区：{self.timezone}。"
         )
 

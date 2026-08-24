@@ -746,6 +746,14 @@ def test_agent_turn_context_system_message_includes_utc_and_local_times() -> Non
     assert "当前 IANA 时区：Asia/Shanghai" in message
 
 
+def test_agent_turn_context_system_message_includes_weekday() -> None:
+    context = AgentTurnContext(datetime(2026, 8, 24, 12, 0, tzinfo=UTC), "Asia/Shanghai")
+
+    message = context.system_message()
+
+    assert "今天是星期一" in message
+
+
 def test_agent_rejects_non_positive_max_tool_rounds() -> None:
     with pytest.raises(ValueError, match="max_tool_rounds must be positive"):
         Agent(FakeLlm([]), ToolRegistry([]), max_tool_rounds=0)
