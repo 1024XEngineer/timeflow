@@ -188,7 +188,12 @@ function AuthenticatedScheduleRoute({
     const abortController = new AbortController();
     void (async () => {
       try {
+        // 全应用共用的那一条连接，不在这里关闭：它同时被后台守护任务、围栏任务
+        // 持有，切账号/点重试只是换一个 accountId 去查同一个库（每张表都带
+        // account_id 过滤），连接本身不需要跟着重建。详见 sqlite.ts 里关于
+        // 重复 open 会触发原生对象被提前释放的说明。
         const database = await openTimeflowDatabase();
+        if (!active) return;
         const preparation = createScheduleSnapshotPreparation(database, protectedClient);
         await preparation.bootstrap.ensureLocalSnapshot(accountId, abortController.signal);
         if (active) {

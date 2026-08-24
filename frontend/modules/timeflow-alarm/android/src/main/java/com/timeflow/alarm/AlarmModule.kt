@@ -7,6 +7,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
@@ -22,6 +24,7 @@ import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.facebook.react.modules.core.PermissionAwareActivity
 import com.facebook.react.modules.core.PermissionListener
 import java.lang.ref.WeakReference
+import java.util.concurrent.ConcurrentHashMap
 
 class AlarmModule(private val reactContext: ReactApplicationContext) :
   ReactContextBaseJavaModule(reactContext) {
@@ -135,6 +138,20 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
+  /**
+   * 之前这里在 AlarmSoundService.start() 一发出去就 resolve(true)——那只代表
+   * "启动请求发出了"，startForegroundService() 本身就是即发即弃，压根不等
+   * onStartCommand() 真的跑起来。真机上出现过"响一次、其实什么都没展示"却被
+   * 当成已展示处理、跳过通知兜底的情况。现在改成真的等 AlarmSoundService 那边
+   * 报回来：presentAlarm() 成功 startForeground()（哪怕只是排队顶不上、退化成
+   * 一条普通通知）才算 true，startForeground() 本身抛异常（后台启动限制之类）
+   * 才是 false。用 alarmId 做 key 把 promise 存起来，AlarmSoundService/
+   * AlarmNativeBridge 那边跑到结果已知的地方回调 resolvePresentation()。
+   *
+   * 有超时兜底：Service 可能被系统直接拒绝调度（Doze/后台限制），永远等不到
+   * onStartCommand() 真的执行，不能让这个 promise 挂死——JS 那边的
+   * presentOrNotify() 还指着这个结果决定要不要发兜底通知。
+   */
   @ReactMethod
   fun presentNow(
     alarmId: String?,
@@ -145,10 +162,17 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
     fullScreen: Boolean,
     promise: Promise,
   ) {
+    val resolvedAlarmId = alarmId?.takeIf { it.isNotEmpty() } ?: "geofence-${System.currentTimeMillis()}"
     try {
-      val resolvedAlarmId = alarmId?.takeIf { it.isNotEmpty() } ?: "geofence-${System.currentTimeMillis()}"
       val resolvedScheduleId = scheduleId ?: ""
       val resolvedTitle = title?.takeIf { it.isNotEmpty() } ?: "日程提醒"
+      pendingPresentations[resolvedAlarmId] = promise
+      mainHandler.postDelayed(
+        {
+          pendingPresentations.remove(resolvedAlarmId)?.resolve(false)
+        },
+        PRESENT_TIMEOUT_MILLIS,
+      )
       AlarmSoundService.start(
         reactContext,
         resolvedAlarmId,
@@ -160,9 +184,9 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
         fullScreen,
       )
       Log.i(NAME, "presentNow requested alarmId=$resolvedAlarmId scheduleId=$resolvedScheduleId")
-      promise.resolve(true)
     } catch (error: Exception) {
       Log.w(NAME, "presentNow failed", error)
+      pendingPresentations.remove(resolvedAlarmId)
       promise.reject("PRESENT_NOW_FAILED", error.message, error)
     }
   }
@@ -358,6 +382,22 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
     const val NAME = "TimeflowAlarm"
     private const val NOTIFICATION_REQUEST_CODE = 2401
     private var reactContextRef: WeakReference<ReactApplicationContext>? = null
+
+    /** presentNow() 等 AlarmSoundService 回报展示结果用的登记表，key 是 alarmId。
+     * ConcurrentHashMap.remove() 是原子的，超时回调和 AlarmSoundService 的真实回报
+     * 谁先到都只会有一次 resolve()——一个 Promise 被 resolve 两次在 RN 桥上是错误。 */
+    private val pendingPresentations = ConcurrentHashMap<String, Promise>()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private const val PRESENT_TIMEOUT_MILLIS = 4_000L
+
+    /** AlarmSoundService（Java，同包）在 presentAlarm() 成功/失败之后回调；
+     * 没有对应 alarmId 在等（比如原生闹钟自己触发的、不是 presentNow() 发起的）
+     * 就是个空操作，不用调用方判断"这次是不是 presentNow 发起的"。 */
+    @JvmStatic
+    fun resolvePresentation(alarmId: String?, presented: Boolean) {
+      if (alarmId.isNullOrEmpty()) return
+      pendingPresentations.remove(alarmId)?.resolve(presented)
+    }
 
     @JvmStatic
     fun emitAlarmEvent(type: String, scheduleId: String?, alarmId: String?, title: String?) {
