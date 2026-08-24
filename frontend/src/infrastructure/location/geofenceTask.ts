@@ -3,10 +3,6 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 import * as TaskManager from 'expo-task-manager';
 
 export const GEOFENCE_TASK_NAME = 'timeflow-geofence';
-export const GEOFENCE_DIAGNOSTIC_KEY = 'timeflow-last-geofence-diagnostic';
-export const GEOFENCE_DIAGNOSTIC_HISTORY_KEY = 'timeflow-geofence-diagnostic-history';
-const MAX_GEOFENCE_DIAGNOSTICS = 20;
-let diagnosticChain: Promise<void> = Promise.resolve();
 
 export type GeofenceTaskPayload = {
   schedule_id: string;
@@ -15,25 +11,6 @@ export type GeofenceTaskPayload = {
   longitude: number;
   radius: number;
   observed_at: string;
-};
-
-export type GeofenceDiagnostic = {
-  phase:
-    | 'callback_received'
-    | 'listener_completed'
-    | 'native_requested'
-    | 'notification_scheduled'
-    | 'state_updated'
-    | 'queued'
-    | 'delivery_failed'
-    | 'registration_succeeded'
-    | 'initial_location_sample'
-    | 'manual_location_read';
-  schedule_id: string;
-  event: GeofenceTaskPayload['event'] | 'registration' | 'initial_sample' | 'manual_read';
-  observed_at: string;
-  recorded_at: string;
-  detail?: string;
 };
 
 type GeofenceTaskListener = (payload: GeofenceTaskPayload) => unknown;
@@ -65,57 +42,6 @@ export function subscribeGeofenceTaskEvents(listener: GeofenceTaskListener): () 
   return () => {
     listeners.delete(listener);
   };
-}
-
-export async function getLastGeofenceDiagnostic(): Promise<GeofenceDiagnostic | null> {
-  const storage = await loadStorage();
-  if (storage == null) return null;
-  const raw = await storage.getItem(GEOFENCE_DIAGNOSTIC_KEY);
-  if (raw == null) return null;
-  try {
-    return JSON.parse(raw) as GeofenceDiagnostic;
-  } catch {
-    return null;
-  }
-}
-
-export async function getGeofenceDiagnostics(): Promise<readonly GeofenceDiagnostic[]> {
-  const storage = await loadStorage();
-  if (storage == null) return [];
-  const raw = await storage.getItem(GEOFENCE_DIAGNOSTIC_HISTORY_KEY);
-  if (raw == null) return [];
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as GeofenceDiagnostic[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-export async function clearGeofenceDiagnostics(): Promise<void> {
-  return enqueueDiagnosticWrite(async () => {
-    const storage = await loadStorage();
-    if (storage == null) return;
-    await Promise.all([
-      storage.removeItem(GEOFENCE_DIAGNOSTIC_KEY),
-      storage.removeItem(GEOFENCE_DIAGNOSTIC_HISTORY_KEY),
-    ]);
-  });
-}
-
-/** 记录应用侧操作，和 defineTask 收到的真实系统围栏回调使用同一条时间线。 */
-export async function recordGeofenceDiagnostic(
-  record: Omit<GeofenceDiagnostic, 'recorded_at'>,
-): Promise<void> {
-  return enqueueDiagnosticWrite(() =>
-    persistGeofenceDiagnostic({ ...record, recorded_at: new Date().toISOString() }),
-  );
-}
-
-function enqueueDiagnosticWrite(work: () => Promise<void>): Promise<void> {
-  const run = diagnosticChain.then(work);
-  diagnosticChain = run.catch(() => undefined);
-  return run;
 }
 
 /**
@@ -211,35 +137,7 @@ async function persistPendingEvent(payload: GeofenceTaskPayload): Promise<void> 
   }
 }
 
-async function persistGeofenceDiagnostic(record: GeofenceDiagnostic): Promise<void> {
-  const storage = await loadStorage();
-  if (storage == null) return;
-  await storage.setItem(GEOFENCE_DIAGNOSTIC_KEY, JSON.stringify(record));
-  const raw = await storage.getItem(GEOFENCE_DIAGNOSTIC_HISTORY_KEY);
-  let history: GeofenceDiagnostic[] = [];
-  if (raw != null) {
-    try {
-      const parsed: unknown = JSON.parse(raw);
-      if (Array.isArray(parsed)) history = parsed as GeofenceDiagnostic[];
-    } catch {
-      // 历史记录损坏不影响当前围栏事件。
-    }
-  }
-  history.push(record);
-  await storage.setItem(
-    GEOFENCE_DIAGNOSTIC_HISTORY_KEY,
-    JSON.stringify(history.slice(-MAX_GEOFENCE_DIAGNOSTICS)),
-  );
-}
-
 async function emit(payload: GeofenceTaskPayload): Promise<void> {
-  await recordGeofenceDiagnostic({
-    phase: 'callback_received',
-    schedule_id: payload.schedule_id,
-    event: payload.event,
-    observed_at: payload.observed_at,
-  });
-
   if (listeners.size === 0) {
     let result: HeadlessDeliveryResult | false = false;
     try {
@@ -247,56 +145,16 @@ async function emit(payload: GeofenceTaskPayload): Promise<void> {
     } catch {
       result = false;
     }
-    if (result === 'native') {
-      await recordGeofenceDiagnostic({
-        phase: 'native_requested',
-        schedule_id: payload.schedule_id,
-        event: payload.event,
-        observed_at: payload.observed_at,
-      });
-    } else if (result === 'notification') {
-      await recordGeofenceDiagnostic({
-        phase: 'notification_scheduled',
-        schedule_id: payload.schedule_id,
-        event: payload.event,
-        observed_at: payload.observed_at,
-      });
-    } else if (result === 'state_updated') {
-      await recordGeofenceDiagnostic({
-        phase: 'state_updated',
-        schedule_id: payload.schedule_id,
-        event: payload.event,
-        observed_at: payload.observed_at,
-      });
-    } else {
+    if (result === false) {
       await persistPendingEvent(payload);
-      await recordGeofenceDiagnostic({
-        phase: 'queued',
-        schedule_id: payload.schedule_id,
-        event: payload.event,
-        observed_at: payload.observed_at,
-        detail: '等待应用会话恢复后重放',
-      });
     }
     return;
   }
   for (const listener of listeners) {
     try {
       await listener(payload);
-      await recordGeofenceDiagnostic({
-        phase: 'listener_completed',
-        schedule_id: payload.schedule_id,
-        event: payload.event,
-        observed_at: payload.observed_at,
-      });
-    } catch (error) {
-      await recordGeofenceDiagnostic({
-        phase: 'delivery_failed',
-        schedule_id: payload.schedule_id,
-        event: payload.event,
-        observed_at: payload.observed_at,
-        detail: error instanceof Error ? error.message : String(error),
-      });
+    } catch {
+      // 交给下一个订阅者继续处理；单个监听器失败不影响其余订阅者。
     }
   }
 }

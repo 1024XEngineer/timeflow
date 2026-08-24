@@ -316,6 +316,18 @@ export class LocalReminderApplication implements ReminderApplicationPort {
 
     if (!this.isLive(generation)) return [];
 
+    // location.rebuild() 会在系统围栏注册完成后立即派发一次当前位置样本。先放入
+    // 占位 registration，确保这次初始样本不会因批量重建尚未返回 handle 而被忽略。
+    for (const schedule of active) {
+      this.registrations.set(schedule.id, {
+        schedule_id: schedule.id,
+        time_listener_id: this.timeListenerId,
+        location_listener_id: null,
+        alarm_id: null,
+        schedule,
+      });
+    }
+
     const locationTargets = active
       .filter((schedule) => schedule.schedule_type === 'location')
       .map((schedule) => {
@@ -331,9 +343,12 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         };
       })
       .filter((target): target is NonNullable<typeof target> => target != null);
-    const locationHandles = await this.dependencies.location.rebuild(locationTargets, (event) => {
-      void this.handleLocationMonitorEvent(event);
-    });
+    const locationHandles = await this.dependencies.location.rebuild(
+      locationTargets,
+      async (event) => {
+        await this.handleLocationMonitorEvent(event);
+      },
+    );
     const locationBySchedule = new Map<string, LocationWatchHandle>(
       locationHandles.map((handle) => [handle.schedule_id, handle]),
     );
@@ -1029,8 +1044,8 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         mode,
         background: true,
       },
-      (event) => {
-        void this.handleLocationMonitorEvent(event);
+      async (event) => {
+        await this.handleLocationMonitorEvent(event);
       },
     );
     void this.reportPermissionGaps(schedule.id, ['location_foreground', 'location_background']);

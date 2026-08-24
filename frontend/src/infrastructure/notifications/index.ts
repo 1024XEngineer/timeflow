@@ -16,6 +16,7 @@ export {
   nativeHasArmedAlarm,
   nativeOpenAlarmPermissionSettings,
   nativePeekAlarmDispositions,
+  nativePresentAlarmNow,
   nativeRequestNotificationPermission,
   nativeScheduleAlarm,
   nativeStopAlarmRinging,

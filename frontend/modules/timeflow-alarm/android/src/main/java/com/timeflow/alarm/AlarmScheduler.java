@@ -341,6 +341,12 @@ public final class AlarmScheduler {
         return "";
     }
 
+    /** Stable positive notification/foreground-service id for an immediate alarm. */
+    static int immediateRequestCode(String alarmId) {
+        int requestCode = alarmId == null ? 1 : alarmId.hashCode() & 0x7fffffff;
+        return requestCode == 0 ? 1 : requestCode;
+    }
+
     private static void cancelPendingIntent(Context context, AlarmRecord record) {
         AlarmManager alarmManager =
                 (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);

@@ -138,7 +138,7 @@ public final class RingActivity extends Activity {
                     + AlarmContract.SNOOZE_MINUTES * 60_000L;
             try {
                 AlarmScheduler.schedule(
-                        this, triggerAt, alarmTitle, scheduleId, vibrate, soundTier, fullScreen
+                        this, triggerAt, alarmTitle, scheduleId, vibrate, soundTier, fullScreen, ""
                 );
             } catch (RuntimeException ignored) {
                 // 尽力重新挂闹钟；即使失败也通知 JS 落 snooze 状态。

@@ -350,7 +350,8 @@ public final class AlarmSoundService extends Service {
                                 targetScheduleId,
                                 targetVibrate,
                                 targetSoundTier,
-                                targetFullScreen
+                                targetFullScreen,
+                                ""
                         );
                     } catch (RuntimeException ignored) {
                         // ignore
