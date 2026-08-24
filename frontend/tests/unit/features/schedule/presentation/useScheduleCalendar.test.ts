@@ -341,4 +341,46 @@ describe('useScheduleCalendar', () => {
       resolveSecondFetch([]);
     });
   });
+
+  it('keeps the full-screen loading state on retry after the initial load fails', async () => {
+    let resolveRetryFetch: (value: readonly []) => void = () => {};
+    const getSchedulesByRange = jest
+      .fn<ScheduleCalendarReadService['getSchedulesByRange']>()
+      .mockRejectedValueOnce(new Error('network error'))
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveRetryFetch = resolve;
+          }),
+      );
+    const service = {
+      getSchedulesByRange,
+      getSchedulesByDay: jest.fn(),
+      getLocationSchedules: jest
+        .fn<ScheduleCalendarReadService['getLocationSchedules']>()
+        .mockResolvedValue([]),
+    } as ScheduleCalendarReadService;
+
+    const { result } = renderHook(() =>
+      useScheduleCalendar(service, 'account-a', 'Asia/Shanghai', new Date(2026, 7, 14)),
+    );
+
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    expect(result.current.loading).toBe(false);
+
+    act(() => {
+      result.current.retry();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(getSchedulesByRange).toHaveBeenCalledTimes(2);
+    expect(result.current.loading).toBe(true);
+
+    await act(async () => {
+      resolveRetryFetch([]);
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+  });
 });
