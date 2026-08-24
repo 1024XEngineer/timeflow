@@ -635,6 +635,95 @@ describe('LocalReminderApplication', () => {
         reminder_disposition_state: null,
       });
     });
+
+    it('start() bails out early when stop() races in right after recovery.registerForRestart()', async () => {
+      // startInternal() 在每个 await 之后都重新检查 isLive(generation)——覆盖
+      // registerForRestart() 之后这第一处检查：模拟调用方在这一步就并发调了 stop()。
+      const schedule = fixtureSchedule({ id: 's1' });
+      const deps = createDeps({
+        schedules: new FakeScheduleReader([schedule]),
+        recovery: {
+          registerForRestart: jest.fn(async () => {
+            void app.stop();
+            return { registered: true, recovery_id: 'r1' };
+          }),
+          restoreAfterRestart: jest.fn(async () => ({ registered: true, recovery_id: 'r1' })),
+        },
+      });
+      const app = new LocalReminderApplication(deps);
+
+      await app.start();
+
+      expect(deps.time.start).not.toHaveBeenCalled();
+    });
+
+    it('rebuildInternal() discards freshly-scheduled alarms/registrations when stop() races in during alarms.rebuild()', async () => {
+      // rebuildInternal() 在 alarms.rebuild() 返回之后也要重新检查 isLive(generation)：
+      // 模拟 stop() 恰好在这次批量排闹钟期间被调用，验证它会撤销掉刚拿到的原生
+      // 闹钟、清空 registrations，而不是把一批"属于已失效世代"的注册留下来。
+      const schedule = fixtureSchedule({ id: 's1' });
+      const { alarms, cancelCalls } = createFakeAlarms({
+        rebuild: jest.fn(async (requests: readonly AlarmScheduleRequest[]) => {
+          void app.stop();
+          return requests.map((request, index) => ({
+            alarm_id: `alarm-${index + 1}`,
+            schedule_id: request.schedule_id,
+            scheduled: true,
+          }));
+        }),
+      });
+      const deps = createDeps({ alarms, schedules: new FakeScheduleReader([schedule]) });
+      const app = new LocalReminderApplication(deps);
+
+      await app.start();
+
+      expect(cancelCalls).toContain('alarm-1');
+    });
+
+    it('presenter/time callbacks registered at start route into confirm/snooze and handleTime', async () => {
+      // onAction 和 time.start 的回调都是 fire-and-forget（void ...），要真的调用
+      // 一次才会跑到 handlePresentationAction/handleTime 内部那几行。
+      const schedule = fixtureSchedule({ id: 's1' });
+      const presenterActionRef: {
+        current: ((event: { schedule_id: string; action: 'confirm' | 'snooze' }) => void) | null;
+      } = { current: null };
+      const timeTickRef: { current: ((tick: { observed_at: string }) => void) | null } = {
+        current: null,
+      };
+      const deps = createDeps({
+        schedules: new FakeScheduleReader([schedule]),
+        presenter: {
+          hide: jest.fn(async () => {}),
+          onAction: jest.fn(
+            (listener: (event: { schedule_id: string; action: 'confirm' | 'snooze' }) => void) => {
+              presenterActionRef.current = listener;
+              return () => {
+                presenterActionRef.current = null;
+              };
+            },
+          ),
+          show: jest.fn(async () => ({ presentation_id: 'p1', visible: true })),
+        },
+        time: {
+          start: jest.fn(async (listener: (tick: { observed_at: string }) => void) => {
+            timeTickRef.current = listener;
+            return { listener_id: 'time-1' };
+          }),
+          stop: jest.fn(async () => {}),
+        },
+      });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+
+      presenterActionRef.current?.({ schedule_id: 's1', action: 'confirm' });
+      await flushAsync();
+      await expect(deps.state.read('s1')).resolves.toMatchObject({
+        reminder_disposition_state: 'confirmed',
+      });
+
+      timeTickRef.current?.({ observed_at: '2026-08-18T10:30:00.000Z' });
+      await flushAsync();
+    });
   });
 
   describe('recurring reminder advancement', () => {
@@ -783,6 +872,161 @@ describe('LocalReminderApplication', () => {
       await app.handleLocation(farSample);
 
       expect(deps.presenter.show).not.toHaveBeenCalled();
+    });
+
+    it('routes a watch() callback event through runLocationMonitorEvent to arm the geofence', async () => {
+      // watchLocationSchedule() 挂给 location.watch() 的回调是
+      // handleLocationMonitorEvent → runLocationMonitorEvent，走的是跟 rebuild()
+      // 批量重建不同的单条注册路径——直接调用一次这个回调，覆盖它自己的守卫分支
+      // （已注册、能拿到日程、类型是 location）。
+      const schedule = fixtureLocationSchedule({ id: 's1' });
+      const deps = createDeps({ schedules: new FakeScheduleReader([schedule]) });
+      let watchListener:
+        | ((event: {
+            schedule_id: string;
+            phase: string;
+            sample: {
+              latitude: number;
+              longitude: number;
+              accuracy_meters: number;
+              observed_at: string;
+            };
+          }) => Promise<void>)
+        | undefined;
+      deps.location.watch = jest.fn(async (request: LocationWatchRequest, listener) => {
+        watchListener = listener as typeof watchListener;
+        return { listener_id: `loc-${request.schedule_id}`, schedule_id: request.schedule_id };
+      });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      await app.register(schedule);
+
+      await watchListener?.({
+        schedule_id: 's1',
+        phase: 'inside',
+        sample: {
+          latitude: 40,
+          longitude: 121.4737,
+          accuracy_meters: 10,
+          observed_at: '2026-08-18T10:00:00.000Z',
+        },
+      });
+
+      await expect(deps.state.read('s1')).resolves.toMatchObject({ geofence_armed: true });
+    });
+
+    it('ignores a watch() callback for a schedule that has already been dropped from registrations', async () => {
+      const schedule = fixtureLocationSchedule({ id: 's1' });
+      const deps = createDeps({ schedules: new FakeScheduleReader([schedule]) });
+      let watchListener:
+        | ((event: {
+            schedule_id: string;
+            phase: string;
+            sample: {
+              latitude: number;
+              longitude: number;
+              accuracy_meters: number;
+              observed_at: string;
+            };
+          }) => Promise<void>)
+        | undefined;
+      deps.location.watch = jest.fn(async (request: LocationWatchRequest, listener) => {
+        watchListener = listener as typeof watchListener;
+        return { listener_id: `loc-${request.schedule_id}`, schedule_id: request.schedule_id };
+      });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      await app.register(schedule);
+      await app.confirm('s1', '2026-08-18T10:00:00.000Z');
+
+      await expect(
+        watchListener?.({
+          schedule_id: 's1',
+          phase: 'inside',
+          sample: {
+            latitude: 40,
+            longitude: 121.4737,
+            accuracy_meters: 10,
+            observed_at: '2026-08-18T10:00:00.000Z',
+          },
+        }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('drops a registration whose location.unwatch() call fails, without throwing', async () => {
+      const schedule = fixtureLocationSchedule({ id: 's1' });
+      const deps = createDeps({ schedules: new FakeScheduleReader([schedule]) });
+      deps.location.unwatch = jest.fn(async () => {
+        throw new Error('unwatch failed');
+      });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      const registration = await app.register(schedule);
+      expect(registration.location_listener_id).not.toBeNull();
+
+      await expect(app.confirm('s1', '2026-08-18T10:00:00.000Z')).resolves.toMatchObject({
+        accepted: true,
+      });
+    });
+  });
+
+  describe('runDeliver edge receipts', () => {
+    it('returns an inflight receipt without re-delivering when the same schedule is already locked', async () => {
+      const schedule = fixtureSchedule({ id: 's1' });
+      const deps = createDeps({ schedules: new FakeScheduleReader([schedule]) });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+
+      const trigger = {
+        reminder_id: 'r1',
+        schedule_id: 's1',
+        reason: 'at_time' as const,
+        triggered_at: '2026-08-18T10:00:00.000Z',
+      };
+      const first = app.deliver(trigger);
+      const second = await app.deliver(trigger);
+
+      expect(second.delivery_id).toBe('inflight-s1');
+      expect(second.channels).toEqual([]);
+      await first;
+    });
+
+    it('returns a missing receipt when the schedule cannot be found by id', async () => {
+      const deps = createDeps({ schedules: new FakeScheduleReader([]) });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+
+      const receipt = await app.deliver({
+        reminder_id: 'r1',
+        schedule_id: 'ghost',
+        reason: 'at_time',
+        triggered_at: '2026-08-18T10:00:00.000Z',
+      });
+
+      expect(receipt).toMatchObject({ delivery_id: 'missing-ghost', channels: [] });
+    });
+
+    it('rolls back runtime and tears down delivery when a channel dependency throws', async () => {
+      const schedule = fixtureSchedule({ id: 's1' });
+      const deps = createDeps({ schedules: new FakeScheduleReader([schedule]) });
+      deps.vibration.vibrate = jest.fn(async () => {
+        throw new Error('vibrate failed');
+      });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+
+      await expect(
+        app.deliver({
+          reminder_id: 'r1',
+          schedule_id: 's1',
+          reason: 'at_time',
+          triggered_at: '2026-08-18T10:00:00.000Z',
+        }),
+      ).rejects.toThrow('vibrate failed');
+
+      await expect(deps.state.read('s1')).resolves.toMatchObject({
+        reminder_disposition_state: null,
+      });
     });
   });
 
