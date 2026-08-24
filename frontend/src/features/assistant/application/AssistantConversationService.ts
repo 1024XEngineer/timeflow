@@ -20,6 +20,8 @@ const EMPTY_MESSAGES: readonly VoiceChatMessage[] = [];
 // 共享连接的握手超时（AuthenticatedWebSocketClient 内部固定 5s）已经不归这里管；
 // 这个只是给定位单独留的预算，拿不到就不带，不能让 connect() 本身被定位拖住。
 const LOCATION_TIMEOUT_MS = 2000;
+/** 每个按住说话的 turn 一个自增 id，随 voice.stream.start 发出、由服务端回显。 */
+let turnRequestIdCounter = 0;
 
 /**
  * 一次"按住说话"编排的真实实现，按 AGENTS.md 第 6 节的时序把 transport / capture /
@@ -44,6 +46,8 @@ export class AssistantConversationService implements AssistantApplicationPort {
   private unsubscribeConnection: (() => void) | null = null;
   /** voice.dialogue.reply 的流式文字，展示层拿来当气泡内容；新一轮开始时清空。 */
   private replyText: string | null = null;
+  /** 当前 turn 的 request_id；voice.dialogue.reply 拿它认轮次，对不上的是上一轮迟到的。 */
+  private turnRequestId: string | null = null;
   /** 当前这一帧麦克风音量（dBFS），给波形展示；不在录音时是 null。 */
   private soundLevel: number | null = null;
   // 展示层的 onPressIn/onPressOut 不等待彼此:快速按放会让 endTurn() 在
@@ -132,7 +136,12 @@ export class AssistantConversationService implements AssistantApplicationPort {
       this.streamStartedWaiter = resolve;
       this.streamStartRejecter = reject;
     });
+    // 紧挨着 send 换 id：connect() 和权限框都可能停留好几秒，提前换掉的话这段窗口
+    // 里线上跑的还是上一轮的流，它自己的 reply 会被当成"别人的"误丢。
+    const turnRequestId = `ptt-turn-${++turnRequestIdCounter}`;
+    this.turnRequestId = turnRequestId;
     connection.send({
+      request_id: turnRequestId,
       payload: {
         audio_format: AUDIO_FORMAT,
         channels: CHANNELS,
@@ -267,6 +276,12 @@ export class AssistantConversationService implements AssistantApplicationPort {
         });
         return;
       case 'voice.dialogue.reply':
+        // 上一轮被打断时它的 reply 可能晚到，把已经点掉的旧气泡重新弹出来——气泡
+        // 是全屏点击层，会挡住语音条，用户得再点一次才能说话。只认当前这一轮的
+        // request_id；服务端把 voice.stream.start 上带的 id 回显在这条消息上。
+        if (!this.isCurrentTurnReply(message.request_id)) {
+          return;
+        }
         this.replyText = message.payload.speech_text;
         this.notifyListeners();
         return;
@@ -288,6 +303,15 @@ export class AssistantConversationService implements AssistantApplicationPort {
       default:
         return;
     }
+  }
+
+  /** 拿不到判断依据时一律放行：后端把缺省的 request_id 序列化成 null 而不是省略字段，
+   * 所以 null 和 undefined 都要当作"不知道是哪一轮"，不能误伤。 */
+  private isCurrentTurnReply(requestId: string | null | undefined): boolean {
+    if (this.turnRequestId === null || requestId === null || requestId === undefined) {
+      return true;
+    }
+    return requestId === this.turnRequestId;
   }
 
   /** .catch(() => {}) 必须紧跟在同一条语句里同步接上——迟一拍再接（比如靠下一次
