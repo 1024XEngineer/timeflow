@@ -1,4 +1,5 @@
 import type { LocalReminderSchedule, ReminderStrength } from './reminder';
+import { resolveEffectiveTriggerAt } from './timeWindow';
 
 /** 原生全屏响铃页的声音档位：none=不出声，ping=一次性短提示音，full=循环语音直到处理。 */
 export type AlarmSoundTier = 'none' | 'ping' | 'full';
@@ -50,13 +51,17 @@ const MAX_SPOKEN_TITLE_LENGTH = 80;
 /**
  * 高强度提醒交给设备 TTS 念的文案：标题 + 播报时钟时间。非 high 或标题为空返回空串，
  * 原生按"无文案"回退打包铃。
+ *
+ * 播报时间必须用 resolveEffectiveTriggerAt()（实际闹钟触发时刻），不能直接读
+ * schedule.start_time——before_start 类型提前于事件本身触发，snooze 后触发时刻
+ * 也变成了 snoozed_until，两种情况下 start_time 都跟"现在几点了"这句播报对不上。
  */
 export function composeReminderSpeech(schedule: LocalReminderSchedule): string {
   if (schedule.reminder?.reminder_strength !== 'high') return '';
   const title = normalizeSpokenTitle(schedule.title);
   if (!title) return '';
   const scheduledTime = formatSpokenScheduleTime(
-    schedule.start_time,
+    resolveEffectiveTriggerAt(schedule),
     schedule.timezone,
     schedule.is_all_day,
   );

@@ -22,6 +22,7 @@ import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
 import android.provider.Settings;
+import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.util.Log;
 import android.view.Gravity;
@@ -585,7 +586,13 @@ public final class AlarmSoundService extends Service {
             return;
         }
         AlarmTtsEngine.setUtteranceListener(utteranceListener);
-        AlarmTtsEngine.speak(speechText, "reminder-high");
+        int result = AlarmTtsEngine.speak(speechText, "reminder-high");
+        // speak() 同步失败（比如引擎队列被拒绝）时不会有任何 utterance 回调，
+        // onDone/onError 都不会触发——这里必须自己走一次跟 onError 一样的兜底，
+        // 否则闹钟已经在别处停掉了打包铃保底播放器，会彻底没有声音。
+        if (result != TextToSpeech.SUCCESS) {
+            onSpeechError();
+        }
     }
 
     private void replayTts() {
