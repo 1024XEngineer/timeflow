@@ -31,6 +31,10 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
 
   init {
     reactContextRef = WeakReference(reactContext)
+    // 抢在这一刻（React Native 加载原生模块，几乎总是应用正常启动、前台）就绑定 TTS
+    // 引擎，而不是拖到 AlarmSoundService 真的要响铃、前台状态已经不可控的那一刻——
+    // 详见 AlarmTtsEngine 顶部注释里追出来的真机故障场景。
+    AlarmTtsEngine.ensureInitialized(reactContext)
   }
 
   override fun getName(): String = NAME
@@ -160,6 +164,7 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
     vibrate: Boolean,
     soundTier: String?,
     fullScreen: Boolean,
+    speechText: String?,
     promise: Promise,
   ) {
     val resolvedAlarmId = alarmId?.takeIf { it.isNotEmpty() } ?: "geofence-${System.currentTimeMillis()}"
@@ -182,6 +187,7 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
         vibrate,
         soundTier ?: AlarmContract.SOUND_TIER_FULL,
         fullScreen,
+        speechText ?: "",
       )
       Log.i(NAME, "presentNow requested alarmId=$resolvedAlarmId scheduleId=$resolvedScheduleId")
     } catch (error: Exception) {

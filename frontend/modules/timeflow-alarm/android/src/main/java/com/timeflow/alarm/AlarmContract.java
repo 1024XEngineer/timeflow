@@ -13,11 +13,12 @@ final class AlarmContract {
     static final String EXTRA_REQUEST_CODE = "request_code";
     static final String EXTRA_TITLE = "alarm_title";
     static final String EXTRA_SCHEDULE_ID = "schedule_id";
-    static final String EXTRA_SPEECH_TEXT = "speech_text";
     /** 响铃要不要震动/弹全屏止铃界面、声音走哪个档位；由 JS 侧按提醒强度换算后传入。 */
     static final String EXTRA_VIBRATE = "vibrate";
     static final String EXTRA_SOUND_TIER = "sound_tier";
     static final String EXTRA_FULL_SCREEN = "full_screen";
+    /** 高强度时 JS 传的设备 TTS 文案；空/缺省则原生回退打包铃。 */
+    static final String EXTRA_SPEECH_TEXT = "speech_text";
     /** 声音档位取值：不出声 / 一次性短提示音 / 循环语音直到用户处理。 */
     static final String SOUND_TIER_NONE = "none";
     static final String SOUND_TIER_PING = "ping";
@@ -128,9 +129,6 @@ final class AlarmContract {
             }
             if (title == null || title.isEmpty()) {
                 title = "日程提醒";
-            }
-            if (speechText == null || speechText.isEmpty()) {
-                speechText = ReminderSpeechFormatter.format(title, System.currentTimeMillis());
             }
             return new ExtractedExtras(
                     alarmId, scheduleId, title, speechText, requestCode, vibrate, soundTier, fullScreen

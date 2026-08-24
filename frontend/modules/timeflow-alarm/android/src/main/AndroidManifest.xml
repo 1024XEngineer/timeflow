@@ -9,6 +9,17 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
+  <!-- targetSdk 30+ 的包可见性限制：不声明这条，TextToSpeech 内部查询"设备上有哪些
+       TTS 引擎"会查到空列表，new TextToSpeech(...) 稳定初始化失败（status=ERROR），
+       即使引擎确实装着、系统设置里试听正常也一样——真机 adb logcat 实测确认过。
+       官方文档明确要求声明这条：
+       https://developer.android.com/reference/android/speech/tts/TextToSpeech.Engine#INTENT_ACTION_TTS_SERVICE -->
+  <queries>
+    <intent>
+      <action android:name="android.intent.action.TTS_SERVICE"/>
+    </intent>
+  </queries>
+
   <application>
     <activity
       android:name="com.timeflow.alarm.RingActivity"

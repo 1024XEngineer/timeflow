@@ -1,8 +1,8 @@
 import type {
   AlarmNativeDisposition,
-  AlarmNativeEvent,
   AlarmPresentationReceipt,
   AlarmPresentationRequest,
+  AlarmNativeEvent,
   AlarmScheduleReceipt,
   AlarmScheduleRequest,
   AlarmSchedulerPort,
@@ -13,8 +13,8 @@ import {
   nativeAreAlarmPermissionsGranted,
   nativeCancelAlarm,
   nativeCancelAllAlarms,
-  nativePeekAlarmDispositions,
   nativePresentAlarmNow,
+  nativePeekAlarmDispositions,
   nativeScheduleAlarm,
   nativeStopAlarmRinging,
   subscribeNativeAlarmEvents,
@@ -31,6 +31,7 @@ export class NativeAlarmScheduler implements AlarmSchedulerPort {
       request.vibrate,
       request.sound_tier,
       request.full_screen,
+      request.speech_text,
     );
     return {
       alarm_id: alarmId,

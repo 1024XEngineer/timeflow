@@ -111,20 +111,6 @@ public final class AlarmScheduler {
         return alarmId;
     }
 
-    /** 保留原 TTS 调度签名；未指定强度通道时沿用历史的全响铃行为。 */
-    public static String schedule(
-            Context context,
-            long triggerAtMillis,
-            String title,
-            String scheduleId,
-            String speechText
-    ) {
-        return schedule(
-                context, triggerAtMillis, title, scheduleId, true,
-                AlarmContract.SOUND_TIER_FULL, true, speechText
-        );
-    }
-
     /** @deprecated 请改用 {@link #schedule(Context, long, String, String, boolean, String, boolean, String)}。 */
     @Deprecated
     public static String schedule(
@@ -391,6 +377,7 @@ public final class AlarmScheduler {
         object.put("vibrate", alarm.vibrate);
         object.put("sound_tier", alarm.soundTier);
         object.put("full_screen", alarm.fullScreen);
+        object.put("speech_text", alarm.speechText);
         return object;
     }
 
@@ -408,7 +395,8 @@ public final class AlarmScheduler {
                 .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, record.speechText)
                 .putExtra(AlarmContract.EXTRA_VIBRATE, record.vibrate)
                 .putExtra(AlarmContract.EXTRA_SOUND_TIER, record.soundTier)
-                .putExtra(AlarmContract.EXTRA_FULL_SCREEN, record.fullScreen);
+                .putExtra(AlarmContract.EXTRA_FULL_SCREEN, record.fullScreen)
+                .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, record.speechText);
         if (!record.legacy) {
             intent.setData(alarmUri(record.alarmId));
         }

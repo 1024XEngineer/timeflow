@@ -23,15 +23,10 @@ import type {
   ReminderTrigger,
   ReminderTriggerReason,
 } from '../domain';
-import { DEFAULT_SNOOZE_MINUTES, buildReminderSpeechText } from '../domain';
-import {
-  distanceMeters,
-  evaluateGeofence,
-  resolveGeofenceCenter,
-  resolveWatchMode,
-} from '../domain/geofence';
+import { DEFAULT_SNOOZE_MINUTES } from '../domain';
+import { evaluateGeofence, resolveGeofenceCenter, resolveWatchMode } from '../domain/geofence';
 import type { AlarmSoundTier } from '../domain/strengthDelivery';
-import { resolveStrengthDeliveryPlan } from '../domain/strengthDelivery';
+import { composeReminderSpeech, resolveStrengthDeliveryPlan } from '../domain/strengthDelivery';
 import {
   isSnoozeActive,
   isSnoozeExpired,
@@ -380,14 +375,12 @@ export class LocalReminderApplication implements ReminderApplicationPort {
       .map((schedule) => {
         const triggerAt = resolveEffectiveTriggerAt(schedule);
         if (triggerAt == null) return null;
-        const scheduledAt = schedule.start_time ?? triggerAt;
         return {
           schedule_id: schedule.id,
           trigger_at: triggerAt,
           title: schedule.title,
           exact: true,
           ...alarmRingChannels(schedule),
-          speech_text: toAlarmSpeechText(schedule, scheduledAt),
         };
       })
       .filter((request): request is NonNullable<typeof request> => request != null);
@@ -562,7 +555,6 @@ export class LocalReminderApplication implements ReminderApplicationPort {
           title: schedule.title,
           exact: true,
           ...alarmRingChannels(schedule),
-          speech_text: toAlarmSpeechText(schedule, snoozedUntil),
         });
         if (!this.isLive(generation)) {
           if (receipt.scheduled) {
@@ -743,6 +735,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         // presentNow 本身不可用（iOS、原生模块拿不到）时才回退到下面的 JS 通道。
         let presentedNatively = false;
         if (this.dependencies.alarms.presentNow != null) {
+          const speechText = composeReminderSpeech(schedule);
           const nativeReceipt = await this.dependencies.alarms.presentNow({
             alarm_id: `present-${schedule.id}-${Date.now()}`,
             schedule_id: schedule.id,
@@ -750,6 +743,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
             vibrate: plan.useVibration,
             sound_tier: plan.alarmSoundTier,
             full_screen: true,
+            speech_text: speechText,
           });
           if (nativeReceipt.presented) {
             presentedNatively = true;
@@ -979,36 +973,10 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   ): Promise<void> {
     if (!this.isLive(generation)) return;
     const canDeliver = await this.canDeliver(schedule, sample.observed_at, generation);
-    // 诊断用：canDeliver 为 false 会直接 return，evaluateGeofence 根本不会跑——
-    // 之前排查"进圈没反应"如果卡在这一步，日志上只会看到这一行、看不到距离/
-    // transition，就是这里拦住了。定位问题排查完可以删。
-    console.warn(
-      '[reminder] applyLocationSample',
-      schedule.id,
-      schedule.title,
-      'canDeliver=',
-      canDeliver,
-      'disposition=',
-      schedule.runtime.reminder_disposition_state,
-    );
     if (!canDeliver) return;
 
     const mode = resolveWatchMode(schedule);
-    const center = resolveGeofenceCenter(schedule, mode);
     const transition = evaluateGeofence(schedule, sample, mode);
-    console.warn(
-      '[reminder] geofence eval',
-      schedule.id,
-      schedule.title,
-      'distance=',
-      center == null ? 'no-center' : Math.round(distanceMeters(sample, center)),
-      'radius=',
-      schedule.geofence_radius_meters,
-      'was_armed=',
-      schedule.runtime.geofence_armed,
-      'transition=',
-      transition,
-    );
     if (transition === 'armed') {
       if (!this.isLive(generation)) return;
       await this.patchRuntime(schedule.id, {
@@ -1139,14 +1107,12 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   ): Promise<AlarmScheduleReceipt | null> {
     const triggerAt = resolveEffectiveTriggerAt(schedule);
     if (triggerAt == null) return null;
-    const scheduledAt = schedule.start_time ?? triggerAt;
     const receipt = await this.dependencies.alarms.schedule({
       schedule_id: schedule.id,
       trigger_at: triggerAt,
       title: schedule.title,
       exact: true,
       ...alarmRingChannels(schedule),
-      speech_text: toAlarmSpeechText(schedule, scheduledAt),
     });
     void this.reportPermissionGaps(schedule.id, [
       'exact_alarm',
@@ -1233,18 +1199,16 @@ function alarmRingChannels(schedule: LocalReminderSchedule): {
   vibrate: boolean;
   sound_tier: AlarmSoundTier;
   full_screen: boolean;
+  speech_text: string;
 } {
   const plan = resolveStrengthDeliveryPlan(schedule.reminder?.reminder_strength ?? 'medium');
-  return { vibrate: plan.useVibration, sound_tier: plan.alarmSoundTier, full_screen: true };
-}
-
-function toAlarmSpeechText(schedule: LocalReminderSchedule, scheduledAt: string): string {
-  return buildReminderSpeechText({
-    title: schedule.title,
-    scheduledAt,
-    timezone: schedule.timezone,
-    isAllDay: schedule.is_all_day,
-  });
+  const speechText = composeReminderSpeech(schedule);
+  return {
+    vibrate: plan.useVibration,
+    sound_tier: plan.alarmSoundTier,
+    full_screen: true,
+    speech_text: speechText,
+  };
 }
 
 function toTimeReason(schedule: LocalReminderSchedule): ReminderTriggerReason {

@@ -283,6 +283,20 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
     );
   });
 
+  it('forwards speech_text to the native bridge', async () => {
+    const scheduler = new NativeAlarmScheduler();
+    await scheduler.schedule(request({ speech_text: '九点面试' }));
+    expect(native.schedule).toHaveBeenCalledWith(
+      Date.parse(FUTURE),
+      '晨会',
+      'schedule-1',
+      true,
+      'full',
+      true,
+      '九点面试',
+    );
+  });
+
   it('maps a native schedule rejection to unscheduled', async () => {
     native.schedule.mockRejectedValue(new Error('exact alarm denied'));
     const scheduler = new NativeAlarmScheduler();
@@ -420,6 +434,7 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
       true,
       'full',
       true,
+      '',
     );
   });
 
@@ -441,6 +456,7 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
       false,
       'ping',
       true,
+      '',
     );
   });
 
