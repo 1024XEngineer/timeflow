@@ -108,6 +108,9 @@ class AgentConversation:
     # destructive tools: a delete is only authorized right after the user answered
     # a confirmation or recurrence-scope question, never from a fresh command.
     answered_question_kind: QuestionKind | None = None
+    # Whether the answered confirmation was an explicit affirmative. Recurrence
+    # scope answers are self-authorizing, so this only gates ``confirmation``.
+    confirmation_affirmed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -425,6 +428,7 @@ class Agent:
         pending = conversation.pending_question
         if pending is None:
             conversation.answered_question_kind = None
+            conversation.confirmation_affirmed = False
             conversation.messages.append(ChatMessage(role="user", content=user_text))
             return
 
@@ -435,6 +439,9 @@ class Agent:
             separators=(",", ":"),
         )
         conversation.answered_question_kind = pending.question_kind
+        conversation.confirmation_affirmed = (
+            pending.question_kind == "confirmation" and _is_affirmative(user_text)
+        )
         conversation.messages.append(
             ToolResultMessage(tool_call_id=pending.tool_call_id, content=answer)
         )
@@ -544,17 +551,46 @@ def _refusal_json(reason: str) -> str:
     )
 
 
-_DELETE_AUTHORIZING_QUESTION_KINDS = frozenset({"confirmation", "recurrence_scope"})
+_CONFIRMATION_NEGATION_MARKERS = ("不", "别", "取消", "算了", "误会")
+_CONFIRMATION_AFFIRMATIVE_MARKERS = (
+    "确认",
+    "是的",
+    "对",
+    "好的",
+    "可以",
+    "行",
+    "删",
+    "没错",
+    "没问题",
+    "嗯",
+)
+
+
+def _is_affirmative(text: str) -> bool:
+    """Whether a confirmation answer explicitly agrees to the deletion.
+
+    A negation word or a bare re-statement (「下周一周会我不参加」) is not an
+    explicit agreement, so it is rejected even if it re-states the intent.
+    """
+    if any(marker in text for marker in _CONFIRMATION_NEGATION_MARKERS):
+        return False
+    return any(marker in text for marker in _CONFIRMATION_AFFIRMATIVE_MARKERS)
 
 
 def _delete_authorized(conversation: AgentConversation) -> bool:
     """Whether the current turn is authorized to delete.
 
     A delete is irreversible, so it is only allowed right after the user answered
-    a confirmation or recurrence-scope question. Disambiguation (``ambiguous_target``)
-    only narrows the target and does not authorize deletion on its own.
+    a recurrence-scope question, or a confirmation with an explicit affirmative
+    answer. Disambiguation (``ambiguous_target``) only narrows the target and does
+    not authorize deletion on its own.
     """
-    return conversation.answered_question_kind in _DELETE_AUTHORIZING_QUESTION_KINDS
+    kind = conversation.answered_question_kind
+    if kind == "recurrence_scope":
+        return True
+    if kind == "confirmation":
+        return conversation.confirmation_affirmed
+    return False
 
 
 def _sum_usage(usages: list[LlmUsage]) -> LlmUsage:

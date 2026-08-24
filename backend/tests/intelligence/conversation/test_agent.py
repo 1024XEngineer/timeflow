@@ -1029,3 +1029,63 @@ async def test_confirmation_does_not_leak_to_later_fresh_delete() -> None:
 
     assert delete_tool.calls == [{"schedule_id": "s1"}]
     assert events == [AgentQuestion("confirmation", "确认删除第二个吗？", "confirmation", ())]
+
+
+@pytest.mark.asyncio
+async def test_delete_after_non_affirmative_confirmation_is_refused() -> None:
+    """A negative or re-stated answer does not authorize the delete."""
+    delete_tool = RecordingTool(
+        ToolDefinition("schedule_delete", "删除日程", {"type": "object"}),
+        result='{"status":"ok"}',
+    )
+    llm = FakeLlm(
+        [
+            question_events(
+                call_id="conf_1",
+                question_kind="confirmation",
+                speech_text="确认删除吗？",
+                required_response="confirmation",
+            ),
+            tool_events("schedule_delete", '{"schedule_id":"s1"}', "del_1"),
+            question_events(
+                call_id="conf_2",
+                question_kind="confirmation",
+                speech_text="那再确认一次，确定删除吗？",
+                required_response="confirmation",
+            ),
+        ]
+    )
+    conversation = AgentConversation()
+    agent = Agent(
+        llm,
+        ToolRegistry([delete_tool, RecordingTool(request_user_input_definition())]),
+    )
+
+    _ = [event async for event in agent.run_turn(conversation, "删除日程")]
+    events = [event async for event in agent.run_turn(conversation, "不用了")]
+
+    assert delete_tool.calls == []
+    assert events == [
+        AgentQuestion("confirmation", "那再确认一次，确定删除吗？", "confirmation", ())
+    ]
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        ("确认", True),
+        ("是的", True),
+        ("对", True),
+        ("好的", True),
+        ("删吧", True),
+        ("不要删了", False),
+        ("不用了", False),
+        ("别删", False),
+        ("取消", False),
+        ("下周一周会我不参加", False),
+    ],
+)
+def test_confirmation_affirmative_detection(answer: str, expected: bool) -> None:
+    from timeflow.intelligence.conversation.agent import _is_affirmative
+
+    assert _is_affirmative(answer) is expected
