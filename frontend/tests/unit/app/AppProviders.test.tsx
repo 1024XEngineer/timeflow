@@ -96,4 +96,24 @@ describe('AppProviders', () => {
     );
     errorSpy.mockRestore();
   });
+
+  it('logs instead of throwing an unhandled rejection when runtime.stop() fails', async () => {
+    mockAuthStatus = 'authenticated';
+    const services = createServices();
+    const stopError = new Error('module stop failed');
+    (services.runtime.stop as jest.Mock<() => Promise<void>>).mockRejectedValue(stopError);
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { unmount } = render(
+      <AppProviders authController={{} as never} services={services}>
+        {null}
+      </AppProviders>,
+    );
+    unmount();
+
+    await waitFor(() =>
+      expect(errorSpy).toHaveBeenCalledWith('[app] runtime.stop() failed', stopError),
+    );
+    errorSpy.mockRestore();
+  });
 });

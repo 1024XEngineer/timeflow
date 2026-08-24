@@ -472,6 +472,65 @@ describe('AppRoot', () => {
     fireEvent.press(screen.getByLabelText('进入 App'));
     await screen.findByText('日程日历');
   });
+
+  it('logs instead of throwing when schedules.refresh() fails after a permission grant', async () => {
+    const services = createController({
+      accountId: 'acc_001',
+      accessToken: 'opaque-token',
+      expiresAt: 200_000,
+      username: 'timeflow_user',
+    });
+    let status = {
+      platform: 'android' as const,
+      supported: true,
+      permissions: {
+        notifications: false,
+        exact_alarm: true,
+        overlay: true,
+        full_screen: true,
+        battery_optimization: true,
+        location_foreground: true,
+        location_background: true,
+        microphone: true,
+      },
+      background_execution: true,
+      oemGuidance: {
+        manufacturer: null,
+        autostartGuided: false,
+        backgroundPopupGuided: false,
+        lastOverlayFailed: false,
+      },
+    };
+    jest.spyOn(services.reminderPorts.device, 'getStatus').mockImplementation(async () => status);
+    jest
+      .spyOn(services.reminderPorts.device, 'requestPermission')
+      .mockImplementation(async (permission) => {
+        status = { ...status, permissions: { ...status.permissions, [permission]: true } };
+        return true;
+      });
+    jest.spyOn(services.reminder, 'rebuild').mockResolvedValue([]);
+    const refreshError = new Error('sqlite read failed');
+    const refresh = jest.spyOn(services.schedules, 'refresh').mockRejectedValue(refreshError);
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    render(<AppRoot services={services} />);
+
+    await screen.findByText('需要这些权限');
+    refresh.mockClear();
+    fireEvent.press(screen.getByTestId('permission-action-notifications'));
+
+    await waitFor(() =>
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[app] schedules.refresh() failed after a permission update',
+        refreshError,
+      ),
+    );
+    // 失败不能挡住用户继续走完权限流程。
+    await waitFor(() =>
+      expect(screen.getByLabelText('进入 App').props.accessibilityState.disabled).toBe(false),
+    );
+    errorSpy.mockRestore();
+  });
 });
 
 function createController(
