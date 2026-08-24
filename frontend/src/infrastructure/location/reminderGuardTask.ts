@@ -78,18 +78,6 @@ if (!TaskManager.isTaskDefined(GUARD_TASK_NAME)) {
             observed_at: new Date(location.timestamp).toISOString(),
           };
 
-    // 诊断用：每次唤醒都无条件打一行，不管走哪个分支——用来确认唤醒本身有没有
-    // 发生、这一刻 listeners.size 到底是不是预期的那个值。定位问题排查完可以删。
-    console.warn(
-      '[guard] tick',
-      'sample=',
-      sample,
-      'listeners.size=',
-      listeners.size,
-      'observed_at=',
-      sample?.observed_at ?? null,
-    );
-
     // headless 直查全靠这个账号 id 限定范围——local_schedules 是全应用共用的一张表，
     // 登出不会删旧账号的行（只有单条删除日程那一条 DELETE），账号 A 登出、账号 B
     // 登录后 A 的数据原样留在库里。前台路径（SqliteLocalScheduleReader ->
@@ -217,21 +205,6 @@ async function runHeadlessLocationPass(
       }
 
       const transition = evaluateGeofence(schedule, sample, mode);
-      // 诊断用：把距离、原来的 armed 状态、这次判定结果都打出来——定位问题排查完
-      // 可以删。距离是单独算的，跟 evaluateGeofence 内部用的是同一个 distanceMeters()。
-      console.warn(
-        '[guard] geofence eval',
-        row.id,
-        row.title,
-        'distance=',
-        Math.round(distanceMeters(sample, center)),
-        'radius=',
-        DEFAULT_GEOFENCE_RADIUS_METERS,
-        'was_armed=',
-        row.geofence_armed === 1,
-        'transition=',
-        transition,
-      );
       if (transition === 'armed') {
         const armClaim = await database.runAsync(
           `UPDATE local_schedules SET geofence_armed = 1 WHERE id = ? AND geofence_armed = 0`,
@@ -649,7 +622,7 @@ export function resolveNextPollIntervalMs(
   }
   let nearestBoundary = Number.POSITIVE_INFINITY;
   for (const target of targets) {
-    // 用跟 evaluateGeofence()/诊断日志同一个 distanceMeters()，不要自己按
+    // 用跟 evaluateGeofence() 同一个 distanceMeters()，不要自己按
     // 111km/度换算——纬度越高经度 1° 对应的实际距离越短，平面近似会在高纬度
     // 地区把距离算大，导致该加密轮询时没加密。
     const approxMeters = distanceMeters(currentSample, target);

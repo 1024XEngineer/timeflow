@@ -24,12 +24,7 @@ import type {
   ReminderTriggerReason,
 } from '../domain';
 import { DEFAULT_SNOOZE_MINUTES } from '../domain';
-import {
-  distanceMeters,
-  evaluateGeofence,
-  resolveGeofenceCenter,
-  resolveWatchMode,
-} from '../domain/geofence';
+import { evaluateGeofence, resolveGeofenceCenter, resolveWatchMode } from '../domain/geofence';
 import type { AlarmSoundTier } from '../domain/strengthDelivery';
 import { composeReminderSpeech, resolveStrengthDeliveryPlan } from '../domain/strengthDelivery';
 import {
@@ -978,36 +973,10 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   ): Promise<void> {
     if (!this.isLive(generation)) return;
     const canDeliver = await this.canDeliver(schedule, sample.observed_at, generation);
-    // 诊断用：canDeliver 为 false 会直接 return，evaluateGeofence 根本不会跑——
-    // 之前排查"进圈没反应"如果卡在这一步，日志上只会看到这一行、看不到距离/
-    // transition，就是这里拦住了。定位问题排查完可以删。
-    console.warn(
-      '[reminder] applyLocationSample',
-      schedule.id,
-      schedule.title,
-      'canDeliver=',
-      canDeliver,
-      'disposition=',
-      schedule.runtime.reminder_disposition_state,
-    );
     if (!canDeliver) return;
 
     const mode = resolveWatchMode(schedule);
-    const center = resolveGeofenceCenter(schedule, mode);
     const transition = evaluateGeofence(schedule, sample, mode);
-    console.warn(
-      '[reminder] geofence eval',
-      schedule.id,
-      schedule.title,
-      'distance=',
-      center == null ? 'no-center' : Math.round(distanceMeters(sample, center)),
-      'radius=',
-      schedule.geofence_radius_meters,
-      'was_armed=',
-      schedule.runtime.geofence_armed,
-      'transition=',
-      transition,
-    );
     if (transition === 'armed') {
       if (!this.isLive(generation)) return;
       await this.patchRuntime(schedule.id, {
