@@ -10,8 +10,10 @@ import {
   nativeCancelAlarm,
   nativeCancelAllAlarms,
   nativeGetAlarmPermissionStatus,
+  nativeHasArmedAlarm,
   nativeOpenAlarmPermissionSettings,
   nativePeekAlarmDispositions,
+  nativePresentAlarmNow,
   nativeRequestNotificationPermission,
   nativeScheduleAlarm,
   nativeStopAlarmRinging,
@@ -27,6 +29,8 @@ jest.mock('react-native', () => {
     cancel: jest.fn(),
     cancelAll: jest.fn(),
     stopRinging: jest.fn(),
+    presentNow: jest.fn(),
+    hasArmedAlarm: jest.fn(),
     peekNativeDispositions: jest.fn(),
     ackNativeDispositions: jest.fn(),
     getPermissionStatus: jest.fn(),
@@ -71,6 +75,17 @@ type NativeAlarmMock = {
   cancel: jest.MockedFunction<(alarmId: string) => Promise<boolean>>;
   cancelAll: jest.MockedFunction<() => Promise<number>>;
   stopRinging: jest.MockedFunction<() => Promise<boolean>>;
+  presentNow: jest.MockedFunction<
+    (
+      alarmId: string,
+      scheduleId: string,
+      title: string,
+      vibrate: boolean,
+      soundTier: string,
+      fullScreen: boolean,
+    ) => Promise<boolean>
+  >;
+  hasArmedAlarm: jest.MockedFunction<(scheduleId: string) => Promise<boolean>>;
   peekNativeDispositions: jest.MockedFunction<
     () => Promise<{ scheduleId: string; alarmId: string; state: string; updatedAtMillis: number }[]>
   >;
@@ -136,6 +151,8 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
     native.cancel.mockReset();
     native.cancelAll.mockReset();
     native.stopRinging.mockReset();
+    native.presentNow.mockReset();
+    native.hasArmedAlarm.mockReset();
     native.peekNativeDispositions.mockReset();
     native.ackNativeDispositions.mockReset();
     native.getPermissionStatus.mockReset();
@@ -146,6 +163,8 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
     native.cancel.mockResolvedValue(true);
     native.cancelAll.mockResolvedValue(0);
     native.stopRinging.mockResolvedValue(true);
+    native.presentNow.mockResolvedValue(true);
+    native.hasArmedAlarm.mockResolvedValue(false);
     native.peekNativeDispositions.mockResolvedValue([]);
     native.ackNativeDispositions.mockResolvedValue(true);
     native.openPermissionSettings.mockResolvedValue(true);
@@ -380,6 +399,92 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
 
     native.stopRinging.mockRejectedValue(new Error('stop failed'));
     await expect(nativeStopAlarmRinging()).resolves.toBeUndefined();
+  });
+
+  it('presentNow forwards to the native bridge and returns the receipt', async () => {
+    const scheduler = new NativeAlarmScheduler();
+    await expect(
+      scheduler.presentNow({
+        alarm_id: 'alarm-9',
+        schedule_id: 'schedule-1',
+        title: '晨会',
+        vibrate: true,
+        sound_tier: 'full',
+        full_screen: true,
+      }),
+    ).resolves.toEqual({ alarm_id: 'alarm-9', schedule_id: 'schedule-1', presented: true });
+    expect(native.presentNow).toHaveBeenCalledWith(
+      'alarm-9',
+      'schedule-1',
+      '晨会',
+      true,
+      'full',
+      true,
+    );
+  });
+
+  it('presentNow generates a guard-ids alarm id when none is provided', async () => {
+    const scheduler = new NativeAlarmScheduler();
+    const receipt = await scheduler.presentNow({
+      alarm_id: '',
+      schedule_id: 'schedule-1',
+      title: '晨会',
+      vibrate: false,
+      sound_tier: 'ping',
+      full_screen: true,
+    });
+    expect(receipt.alarm_id).toMatch(/^geofence-schedule-1-\d+$/);
+    expect(native.presentNow).toHaveBeenCalledWith(
+      receipt.alarm_id,
+      'schedule-1',
+      '晨会',
+      false,
+      'ping',
+      true,
+    );
+  });
+
+  it('nativePresentAlarmNow returns true on the happy path and false when declined', async () => {
+    await expect(
+      nativePresentAlarmNow('alarm-1', 'schedule-1', '晨会', true, 'full', true),
+    ).resolves.toBe(true);
+
+    native.presentNow.mockResolvedValue(false);
+    await expect(
+      nativePresentAlarmNow('alarm-1', 'schedule-1', '晨会', true, 'full', true),
+    ).resolves.toBe(false);
+  });
+
+  it('nativePresentAlarmNow fails closed off Android and on native rejection', async () => {
+    Platform.OS = 'ios';
+    await expect(
+      nativePresentAlarmNow('alarm-1', 'schedule-1', '晨会', true, 'full', true),
+    ).resolves.toBe(false);
+    Platform.OS = 'android';
+
+    native.presentNow.mockRejectedValue(new Error('present failed'));
+    await expect(
+      nativePresentAlarmNow('alarm-1', 'schedule-1', '晨会', true, 'full', true),
+    ).resolves.toBe(false);
+  });
+
+  it('nativeHasArmedAlarm forwards the native query and falls back to false', async () => {
+    native.hasArmedAlarm.mockResolvedValue(true);
+    await expect(nativeHasArmedAlarm('schedule-1')).resolves.toBe(true);
+    expect(native.hasArmedAlarm).toHaveBeenCalledWith('schedule-1');
+
+    native.hasArmedAlarm.mockResolvedValue(false);
+    await expect(nativeHasArmedAlarm('schedule-1')).resolves.toBe(false);
+  });
+
+  it('nativeHasArmedAlarm fails closed off Android, with an empty id, and on rejection', async () => {
+    Platform.OS = 'ios';
+    await expect(nativeHasArmedAlarm('schedule-1')).resolves.toBe(false);
+    Platform.OS = 'android';
+    await expect(nativeHasArmedAlarm('')).resolves.toBe(false);
+
+    native.hasArmedAlarm.mockRejectedValue(new Error('query failed'));
+    await expect(nativeHasArmedAlarm('schedule-1')).resolves.toBe(false);
   });
 
   it('peeks native dispositions and maps known states, dropping unknown ones', async () => {

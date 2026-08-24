@@ -183,6 +183,35 @@ describe('ReminderGuardCoordinator', () => {
     expect(options?.foregroundService?.notificationBody).toContain('1 个地点提醒');
   });
 
+  it('orders multiple time schedules by their next trigger for the countdown', async () => {
+    // describeGuardNotification 里 .sort() 的比较函数只有在 ≥2 条时间型日程时才被
+    // 真正调用；用一前一后两个触发时刻验证它按最早触发的排在最前。
+    const reader = createReader([
+      timeSchedule({ id: 't1', title: '晨会' }),
+      timeSchedule({
+        id: 't2',
+        title: '午会',
+        start_time: '2026-08-18T14:00:00.000Z',
+        reminder: {
+          reminder_type: 'at_time',
+          reminder_trigger_at: '2026-08-18T14:00:00.000Z',
+          reminder_offset_minutes: null,
+          reminder_strength: 'medium',
+        },
+      }),
+    ]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+
+    await coordinator.start();
+
+    const [, options] = startUpdates.mock.calls[0];
+    expect(options?.foregroundService?.notificationBody).toContain('晨会');
+    expect(options?.foregroundService?.notificationBody).not.toContain('午会');
+  });
+
   it('does not start when foreground location permission is missing', async () => {
     getForeground.mockResolvedValue({
       status: 'denied' as Location.PermissionStatus,
@@ -273,5 +302,46 @@ describe('ReminderGuardCoordinator', () => {
     });
 
     expect(handleLocation).toHaveBeenCalledTimes(1);
+  });
+
+  it('describes a location-only backlog without a time countdown', async () => {
+    // describeGuardNotification 的 next == null 分支：没有时间型日程时拼不出倒计时，
+    // 退化成"正在监听 N 个地点提醒"。
+    const reader = createReader([locationSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+
+    await coordinator.start();
+
+    const [, options] = startUpdates.mock.calls[0];
+    expect(options?.foregroundService?.notificationBody).toBe('正在监听 1 个地点提醒');
+  });
+
+  it('swallows a startLocationUpdatesAsync failure without rethrowing', async () => {
+    startUpdates.mockRejectedValue(new Error('start failed'));
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+
+    await coordinator.start();
+
+    expect(startUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it('stop() survives a stopLocationUpdatesAsync failure while tearing down', async () => {
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+    await coordinator.start();
+    expect(startUpdates).toHaveBeenCalledTimes(1);
+
+    stopUpdates.mockRejectedValue(new Error('stop failed'));
+    await coordinator.stop();
   });
 });
