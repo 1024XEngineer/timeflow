@@ -57,6 +57,22 @@ export function useScheduleCalendar(
   const [locationsLoading, setLocationsLoading] = useState(true);
   const [occurrencesError, setOccurrencesError] = useState<string | null>(null);
   const [locationsError, setLocationsError] = useState<string | null>(null);
+  // 首次加载成功后，后续重取（增删日程/语音写日程/轮询）不再把整个 agenda
+  // 卸载重挂——只在真的还没数据时才盖全屏转圈，之后都是后台悄悄换数据。必须等
+  // 两个请求都没报错才算数：首次加载失败时不能锁上，否则点重试会在空/旧数据
+  // 上直接显示 agenda，而不是原来的全屏首次加载态。渲染期间同步翻它，不放进
+  // useEffect（react-hooks 规则不允许在 effect 里直接 setState 触发级联渲染，
+  // 也不允许在渲染期间读 ref）。
+  const [initialLoadDone, setInitialLoadDone] = useState(false);
+  if (
+    !initialLoadDone &&
+    !occurrencesLoading &&
+    !locationsLoading &&
+    occurrencesError === null &&
+    locationsError === null
+  ) {
+    setInitialLoadDone(true);
+  }
   const [reloadToken, setReloadToken] = useState(0);
 
   const focusKey = focusTarget
@@ -215,7 +231,7 @@ export function useScheduleCalendar(
     occurrencesByDate,
     selectedOccurrences,
     locationSchedules,
-    loading: occurrencesLoading || locationsLoading,
+    loading: !initialLoadDone && (occurrencesLoading || locationsLoading),
     error: occurrencesError ?? locationsError,
     selectDate,
     changeMonth,
