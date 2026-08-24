@@ -104,6 +104,10 @@ class AgentConversation:
 
     messages: list[LlmMessage] = field(default_factory=list)
     pending_question: PendingQuestion | None = None
+    # Kind of the question the user is answering this turn, if any. Used to gate
+    # destructive tools: a delete is only authorized right after the user answered
+    # a confirmation or recurrence-scope question, never from a fresh command.
+    answered_question_kind: QuestionKind | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -362,6 +366,21 @@ class Agent:
                 )
                 return
 
+            if tool_call.name == "schedule_delete" and not _delete_authorized(conversation):
+                conversation.messages.extend(
+                    [
+                        assistant_message,
+                        ToolResultMessage(
+                            tool_call_id=tool_call.call_id,
+                            content=_refusal_json(
+                                "删除是不可逆操作，必须先调用 request_user_input（confirmation）"
+                                "向用户确认删除目标，得到用户确认后才能 schedule_delete。"
+                            ),
+                        ),
+                    ]
+                )
+                continue
+
             try:
                 tool = self._tools.get(tool_call.name)
             except KeyError as exc:
@@ -405,6 +424,7 @@ class Agent:
 
         pending = conversation.pending_question
         if pending is None:
+            conversation.answered_question_kind = None
             conversation.messages.append(ChatMessage(role="user", content=user_text))
             return
 
@@ -414,6 +434,7 @@ class Agent:
             sort_keys=True,
             separators=(",", ":"),
         )
+        conversation.answered_question_kind = pending.question_kind
         conversation.messages.append(
             ToolResultMessage(tool_call_id=pending.tool_call_id, content=answer)
         )
@@ -521,6 +542,19 @@ def _refusal_json(reason: str) -> str:
         ensure_ascii=False,
         separators=(",", ":"),
     )
+
+
+_DELETE_AUTHORIZING_QUESTION_KINDS = frozenset({"confirmation", "recurrence_scope"})
+
+
+def _delete_authorized(conversation: AgentConversation) -> bool:
+    """Whether the current turn is authorized to delete.
+
+    A delete is irreversible, so it is only allowed right after the user answered
+    a confirmation or recurrence-scope question. Disambiguation (``ambiguous_target``)
+    only narrows the target and does not authorize deletion on its own.
+    """
+    return conversation.answered_question_kind in _DELETE_AUTHORIZING_QUESTION_KINDS
 
 
 def _sum_usage(usages: list[LlmUsage]) -> LlmUsage:

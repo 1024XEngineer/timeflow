@@ -855,3 +855,177 @@ async def test_subsequent_turn_refreshes_system_message_with_turn_context() -> N
     updated_system = conversation.messages[0]
     assert isinstance(updated_system, ChatMessage)
     assert "当前本地时间：" in updated_system.content
+
+
+@pytest.mark.asyncio
+async def test_delete_without_confirmation_is_refused() -> None:
+    """A delete from a fresh command is blocked and the model is steered to confirm."""
+    delete_tool = RecordingTool(
+        ToolDefinition("schedule_delete", "删除日程", {"type": "object"}),
+        result='{"status":"ok"}',
+    )
+    llm = FakeLlm(
+        [
+            tool_events("schedule_delete", '{"schedule_id":"s1"}', "del_1"),
+            question_events(
+                call_id="conf_1",
+                question_kind="confirmation",
+                speech_text="确认删除吗？",
+                required_response="confirmation",
+            ),
+        ]
+    )
+    conversation = AgentConversation()
+    agent = Agent(
+        llm,
+        ToolRegistry([delete_tool, RecordingTool(request_user_input_definition())]),
+    )
+
+    events = [event async for event in agent.run_turn(conversation, "删除日程")]
+
+    assert delete_tool.calls == []
+    assert events == [AgentQuestion("confirmation", "确认删除吗？", "confirmation", ())]
+    refusal = conversation.messages[-2]
+    assert isinstance(refusal, ToolResultMessage)
+    assert '"status":"failed"' in refusal.content
+    assert "confirmation" in refusal.content
+
+
+@pytest.mark.asyncio
+async def test_delete_after_confirmation_executes() -> None:
+    delete_tool = RecordingTool(
+        ToolDefinition("schedule_delete", "删除日程", {"type": "object"}),
+        result='{"status":"ok"}',
+    )
+    llm = FakeLlm(
+        [
+            question_events(
+                call_id="conf_1",
+                question_kind="confirmation",
+                speech_text="确认删除吗？",
+                required_response="confirmation",
+            ),
+            tool_events("schedule_delete", '{"schedule_id":"s1"}', "del_1"),
+            [TextDelta("已删除。"), completed()],
+        ]
+    )
+    conversation = AgentConversation()
+    agent = Agent(
+        llm,
+        ToolRegistry([delete_tool, RecordingTool(request_user_input_definition())]),
+    )
+
+    _ = [event async for event in agent.run_turn(conversation, "删除日程")]
+    events = [event async for event in agent.run_turn(conversation, "确认")]
+
+    assert delete_tool.calls == [{"schedule_id": "s1"}]
+    assert events == [AgentTextDelta("已删除。"), AgentCompleted(LlmUsage(4, 3, 7))]
+
+
+@pytest.mark.asyncio
+async def test_delete_after_recurrence_scope_executes() -> None:
+    delete_tool = RecordingTool(
+        ToolDefinition("schedule_delete", "删除日程", {"type": "object"}),
+        result='{"status":"ok"}',
+    )
+    llm = FakeLlm(
+        [
+            question_events(
+                call_id="scope_1",
+                question_kind="recurrence_scope",
+                speech_text="删本次还是整个系列？",
+                required_response="scope",
+            ),
+            tool_events("schedule_delete", '{"schedule_id":"s1"}', "del_1"),
+            [TextDelta("已删除。"), completed()],
+        ]
+    )
+    conversation = AgentConversation()
+    agent = Agent(
+        llm,
+        ToolRegistry([delete_tool, RecordingTool(request_user_input_definition())]),
+    )
+
+    _ = [event async for event in agent.run_turn(conversation, "删除周会")]
+    events = [event async for event in agent.run_turn(conversation, "整个系列")]
+
+    assert delete_tool.calls == [{"schedule_id": "s1"}]
+    assert events == [AgentTextDelta("已删除。"), AgentCompleted(LlmUsage(4, 3, 7))]
+
+
+@pytest.mark.asyncio
+async def test_delete_after_ambiguous_target_still_requires_confirmation() -> None:
+    """Disambiguation narrows the target but does not authorize deletion on its own."""
+    delete_tool = RecordingTool(
+        ToolDefinition("schedule_delete", "删除日程", {"type": "object"}),
+        result='{"status":"ok"}',
+    )
+    llm = FakeLlm(
+        [
+            question_events(
+                call_id="amb_1",
+                question_kind="ambiguous_target",
+                speech_text="删哪个？",
+                required_response=None,
+                candidates=[{"id": "s1", "title": "开会"}],
+            ),
+            tool_events("schedule_delete", '{"schedule_id":"s1"}', "del_1"),
+            question_events(
+                call_id="conf_1",
+                question_kind="confirmation",
+                speech_text="确认删除吗？",
+                required_response="confirmation",
+            ),
+        ]
+    )
+    conversation = AgentConversation()
+    agent = Agent(
+        llm,
+        ToolRegistry([delete_tool, RecordingTool(request_user_input_definition())]),
+    )
+
+    _ = [event async for event in agent.run_turn(conversation, "删除那个")]
+    events = [event async for event in agent.run_turn(conversation, "第一个")]
+
+    assert delete_tool.calls == []
+    assert events == [AgentQuestion("confirmation", "确认删除吗？", "confirmation", ())]
+
+
+@pytest.mark.asyncio
+async def test_confirmation_does_not_leak_to_later_fresh_delete() -> None:
+    """A confirmation only authorizes the delete it answered, not a later fresh command."""
+    delete_tool = RecordingTool(
+        ToolDefinition("schedule_delete", "删除日程", {"type": "object"}),
+        result='{"status":"ok"}',
+    )
+    llm = FakeLlm(
+        [
+            question_events(
+                call_id="conf_1",
+                question_kind="confirmation",
+                speech_text="确认删除吗？",
+                required_response="confirmation",
+            ),
+            tool_events("schedule_delete", '{"schedule_id":"s1"}', "del_1"),
+            [TextDelta("已删除。"), completed()],
+            tool_events("schedule_delete", '{"schedule_id":"s2"}', "del_2"),
+            question_events(
+                call_id="conf_2",
+                question_kind="confirmation",
+                speech_text="确认删除第二个吗？",
+                required_response="confirmation",
+            ),
+        ]
+    )
+    conversation = AgentConversation()
+    agent = Agent(
+        llm,
+        ToolRegistry([delete_tool, RecordingTool(request_user_input_definition())]),
+    )
+
+    _ = [event async for event in agent.run_turn(conversation, "删除日程")]
+    _ = [event async for event in agent.run_turn(conversation, "确认")]
+    events = [event async for event in agent.run_turn(conversation, "删除另一个日程")]
+
+    assert delete_tool.calls == [{"schedule_id": "s1"}]
+    assert events == [AgentQuestion("confirmation", "确认删除第二个吗？", "confirmation", ())]
