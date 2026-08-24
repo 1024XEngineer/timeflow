@@ -1073,6 +1073,47 @@ def test_find_schedules_filters_without_leaking_other_accounts_or_deleted_rows()
     assert with_deleted.schedules[0].status is ScheduleStatus.DELETED
 
 
+def test_find_schedules_excludes_a_confirmed_location_reminder() -> None:
+    # 地点型提醒一旦被用户确认，就跟移动端地图/日历的展示口径对齐——语音搜索
+    # 也不应该再把它当"还需要处理"的日程报出来，否则助手会反复提起已经
+    # 处理完的地点提醒。时间型日程没有这条约束，确认后依然可搜。
+    service, store = _service()
+    location = service.create_schedule(
+        account_id="account-a",
+        command=CreateScheduleCommand(
+            schedule_type=ScheduleType.LOCATION,
+            schedule_kind=ScheduleKind.ONCE,
+            title="去机场",
+            timezone="Asia/Shanghai",
+            location_name="虹桥机场",
+            latitude=31.2304,
+            longitude=121.4737,
+            reminder_type=ReminderType.ARRIVE_LOCATION,
+            reminder_strength=ReminderStrength.MEDIUM,
+        ),
+    ).schedules[0]
+    confirmed_location = replace(
+        location,
+        reminder_disposition_state=ReminderDispositionState.CONFIRMED,
+    )
+    store.schedules[location.id] = confirmed_location
+
+    time_schedule = service.create_schedule(
+        account_id="account-a",
+        command=_time_command(title="项目复盘"),
+    ).schedules[0]
+    confirmed_time = replace(
+        time_schedule,
+        reminder_disposition_state=ReminderDispositionState.CONFIRMED,
+    )
+    store.schedules[time_schedule.id] = confirmed_time
+
+    matches = service.find_schedules(account_id="account-a", query=FindSchedulesQuery())
+
+    assert confirmed_location not in matches.schedules
+    assert confirmed_time in matches.schedules
+
+
 def test_find_schedules_filters_category_and_combines_it_with_a_time_window() -> None:
     service, store = _service()
     template = service.create_schedule(
