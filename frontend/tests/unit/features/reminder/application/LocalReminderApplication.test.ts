@@ -1079,6 +1079,34 @@ describe('LocalReminderApplication', () => {
         accepted: true,
       });
     });
+
+    it('notifies onScheduleConfirmed after a confirm commits, but not on register()', async () => {
+      const schedule = fixtureLocationSchedule({ id: 's1' });
+      const deps = createDeps({ schedules: new FakeScheduleReader([schedule]) });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      const listener = jest.fn();
+      app.onScheduleConfirmed(listener);
+
+      await app.register(schedule);
+      expect(listener).not.toHaveBeenCalled();
+
+      await app.confirm('s1', '2026-08-18T10:00:00.000Z');
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it('stops notifying onScheduleConfirmed after unsubscribing', async () => {
+      const schedule = fixtureLocationSchedule({ id: 's1' });
+      const deps = createDeps({ schedules: new FakeScheduleReader([schedule]) });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      const listener = jest.fn();
+      const unsubscribe = app.onScheduleConfirmed(listener);
+      unsubscribe();
+
+      await app.confirm('s1', '2026-08-18T10:00:00.000Z');
+      expect(listener).not.toHaveBeenCalled();
+    });
   });
 
   describe('runDeliver edge receipts', () => {

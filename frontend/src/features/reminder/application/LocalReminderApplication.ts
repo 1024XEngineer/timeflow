@@ -68,6 +68,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   private readonly permissionBlockedListeners = new Set<
     (event: ReminderPermissionBlockedEvent) => void
   >();
+  private readonly scheduleConfirmedListeners = new Set<() => void>();
   private opChain: Promise<void> = Promise.resolve();
   /** 每次 stop / 失败回滚自增；停机前开始的工作持有旧世代，重启后仍视为已取消。 */
   private generation = 0;
@@ -98,6 +99,13 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     this.permissionBlockedListeners.add(listener);
     return () => {
       this.permissionBlockedListeners.delete(listener);
+    };
+  }
+
+  onScheduleConfirmed(listener: () => void): () => void {
+    this.scheduleConfirmedListeners.add(listener);
+    return () => {
+      this.scheduleConfirmedListeners.delete(listener);
     };
   }
 
@@ -450,6 +458,9 @@ export class LocalReminderApplication implements ReminderApplicationPort {
       });
 
       await this.dropRegistration(scheduleId);
+      for (const listener of this.scheduleConfirmedListeners) {
+        listener();
+      }
 
       if (!this.isLive(generation)) {
         return { accepted: false, schedule_id: scheduleId, disposition: null };

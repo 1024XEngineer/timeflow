@@ -73,7 +73,9 @@ describe('HomeScreen calendar refresh', () => {
         onRequestPermission={() => {}}
         onSignOut={async () => {}}
         pushToTalkApplication={pushToTalkApplication}
-        reminder={{ onPermissionBlocked: () => () => {} } as never}
+        reminder={
+          { onPermissionBlocked: () => () => {}, onScheduleConfirmed: () => () => {} } as never
+        }
         scheduleService={scheduleService}
         timezone="Asia/Shanghai"
         username="Sarah"
@@ -109,5 +111,53 @@ describe('HomeScreen calendar refresh', () => {
     expect(scheduleService.getLocationSchedules).toHaveBeenLastCalledWith({
       accountId: 'account-a',
     });
+  });
+
+  it('reloads the calendar when a reminder is confirmed outside the voice-command path', async () => {
+    const pushToTalkApplication = new FakeAssistantApplication();
+    const continuousApplication = new FakeAssistantApplication();
+    const scheduleService: ScheduleCalendarReadService = {
+      getLocationSchedules: jest
+        .fn<ScheduleCalendarReadService['getLocationSchedules']>()
+        .mockResolvedValue([]),
+      getSchedulesByDay: jest
+        .fn<ScheduleCalendarReadService['getSchedulesByDay']>()
+        .mockResolvedValue([]),
+      getSchedulesByRange: jest
+        .fn<ScheduleCalendarReadService['getSchedulesByRange']>()
+        .mockResolvedValue([]),
+    };
+    const confirmedListeners = new Set<() => void>();
+    render(
+      <HomeScreen
+        accountId="account-a"
+        continuousApplication={continuousApplication}
+        alertDialog={{ show: async () => {} }}
+        isSigningOut={false}
+        onRequestPermission={() => {}}
+        onSignOut={async () => {}}
+        pushToTalkApplication={pushToTalkApplication}
+        reminder={
+          {
+            onPermissionBlocked: () => () => {},
+            onScheduleConfirmed: (listener: () => void) => {
+              confirmedListeners.add(listener);
+              return () => confirmedListeners.delete(listener);
+            },
+          } as never
+        }
+        scheduleService={scheduleService}
+        timezone="Asia/Shanghai"
+        username="Sarah"
+      />,
+    );
+
+    await waitFor(() => expect(scheduleService.getLocationSchedules).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      for (const listener of confirmedListeners) listener();
+    });
+
+    await waitFor(() => expect(scheduleService.getLocationSchedules).toHaveBeenCalledTimes(2));
   });
 });
