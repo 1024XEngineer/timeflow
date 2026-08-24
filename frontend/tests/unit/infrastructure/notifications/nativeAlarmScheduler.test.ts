@@ -434,6 +434,7 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
       true,
       'full',
       true,
+      '',
     );
   });
 
@@ -455,6 +456,7 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
       false,
       'ping',
       true,
+      '',
     );
   });
 
