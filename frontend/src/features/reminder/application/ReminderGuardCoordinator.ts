@@ -128,7 +128,17 @@ export class ReminderGuardCoordinator {
     // 才需要）——上一版这里连后台权限一起卡，导致用户只给了"仅使用时允许"（没给
     // "始终允许"，这是安卓上很常见的选择）时，连时间型提醒的兜底轮询都启动不了，
     // 跟这条日程要不要用到位置完全没关系。
-    const { status: foreground } = await Location.getForegroundPermissionsAsync();
+    // 冷启动时原生模块可能还没链接完，这次调用偶尔会抛错——不兜住的话会一路
+    // 传出 reconcile()/start()，把整个 AppRuntime 启动流程炸掉（详见
+    // AppProviders.tsx 里 runtime.start() 未 catch 的说明），而不是仅仅这一次
+    // reconcile 失败。
+    let foreground: Location.PermissionStatus;
+    try {
+      ({ status: foreground } = await Location.getForegroundPermissionsAsync());
+    } catch (error) {
+      console.warn('[guard] getForegroundPermissionsAsync failed', error);
+      return;
+    }
     if (foreground !== 'granted') {
       console.warn('[guard] ensureLocationUpdates skipped: foreground permission not granted');
       return;

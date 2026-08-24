@@ -35,9 +35,16 @@ function AuthenticatedRuntime({ services }: { readonly services: AppServices }) 
       return;
     }
 
-    void services.runtime.start();
+    // 不 catch 的话，runtime.start() 里任何一个模块启动失败（哪怕只是某次原生
+    // 调用偶发抛错）都会变成静默的 unhandled rejection——用户看到的就是"提醒/
+    // 守护线程这次没起来"，没有任何日志能定位到具体是哪次启动失败的。
+    services.runtime.start().catch((error) => {
+      console.error('[app] runtime.start() failed', error);
+    });
     return () => {
-      void services.runtime.stop();
+      services.runtime.stop().catch((error) => {
+        console.error('[app] runtime.stop() failed', error);
+      });
     };
   }, [isAuthenticated, services]);
 

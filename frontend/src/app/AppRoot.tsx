@@ -37,6 +37,13 @@ export function AppRoot({ services: providedServices }: { services?: AppServices
   const controller = services.auth.controller;
   const handlePermissionsUpdated = useCallback(() => {
     void services.reminder.rebuild();
+    // ReminderGuardCoordinator 冷启动时如果权限还没给，会跳过启动且不重试；
+    // schedules.refresh() 会顺带唤醒它订阅的 reconcile()，不用单独给协调器开端口。
+    // refresh() 内部要读 SQLite，可能因为瞬时的原生/数据库错误 reject——不 catch
+    // 的话这里又是一次静默 unhandled rejection，跟这个 PR 本身要修的问题一样。
+    services.schedules.refresh().catch((error) => {
+      console.error('[app] schedules.refresh() failed after a permission update', error);
+    });
   }, [services]);
   return (
     <AppProviders
@@ -243,7 +250,9 @@ function AuthenticatedScheduleRoute({
     }
     reminderState.attach(currentLoadState.repository, accountId);
     scheduleReader.attach(currentLoadState.repository, accountId);
-    void scheduleReader.refresh();
+    scheduleReader.refresh().catch((error) => {
+      console.error('[app] schedules.refresh() failed after SQLite became ready', error);
+    });
     return () => {
       scheduleReader.detach();
       reminderState.detach();

@@ -312,6 +312,20 @@ describe('ReminderGuardCoordinator', () => {
     expect(startUpdates).toHaveBeenCalledTimes(1);
   });
 
+  it('does not let a getForegroundPermissionsAsync failure reject start()', async () => {
+    getForeground.mockRejectedValue(new Error('boom'));
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+
+    // 改之前：这次原生调用不兜错的话，start() 会直接 reject，把整个
+    // AppRuntime 的启动流程一起炸掉，而不是仅仅这次 reconcile 没启动成功。
+    await expect(coordinator.start()).resolves.toBeUndefined();
+    expect(startUpdates).not.toHaveBeenCalled();
+  });
+
   it('swallows a startLocationUpdatesAsync failure', async () => {
     startUpdates.mockRejectedValue(new Error('boom'));
     const reader = createReader([timeSchedule()]);

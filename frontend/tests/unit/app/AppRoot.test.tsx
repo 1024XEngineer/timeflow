@@ -451,19 +451,85 @@ describe('AppRoot', () => {
         return true;
       });
     const rebuild = jest.spyOn(services.reminder, 'rebuild').mockResolvedValue([]);
+    const refresh = jest.spyOn(services.schedules, 'refresh').mockResolvedValue(undefined);
 
     render(<AppRoot services={services} />);
 
     await screen.findByText('需要这些权限');
+    // DB ready 那条 effect 自己也会在挂载时 refresh() 一次；只关心权限授予
+    // 这次触发的那一下，把挂载阶段的调用先清掉。
+    refresh.mockClear();
     fireEvent.press(screen.getByTestId('permission-action-notifications'));
 
     await waitFor(() =>
       expect(screen.getByLabelText('进入 App').props.accessibilityState.disabled).toBe(false),
     );
     expect(rebuild).toHaveBeenCalledTimes(1);
+    // 冷启动权限没给时，守护线程的 reconcile() 会跳过启动且不重试；权限中途
+    // 被授予后必须有人把它叫醒，不然只能等下次重启才会再跑一次 reconcile()。
+    expect(refresh).toHaveBeenCalledTimes(1);
 
     fireEvent.press(screen.getByLabelText('进入 App'));
     await screen.findByText('日程日历');
+  });
+
+  it('logs instead of throwing when schedules.refresh() fails after a permission grant', async () => {
+    const services = createController({
+      accountId: 'acc_001',
+      accessToken: 'opaque-token',
+      expiresAt: 200_000,
+      username: 'timeflow_user',
+    });
+    let status = {
+      platform: 'android' as const,
+      supported: true,
+      permissions: {
+        notifications: false,
+        exact_alarm: true,
+        overlay: true,
+        full_screen: true,
+        battery_optimization: true,
+        location_foreground: true,
+        location_background: true,
+        microphone: true,
+      },
+      background_execution: true,
+      oemGuidance: {
+        manufacturer: null,
+        autostartGuided: false,
+        backgroundPopupGuided: false,
+        lastOverlayFailed: false,
+      },
+    };
+    jest.spyOn(services.reminderPorts.device, 'getStatus').mockImplementation(async () => status);
+    jest
+      .spyOn(services.reminderPorts.device, 'requestPermission')
+      .mockImplementation(async (permission) => {
+        status = { ...status, permissions: { ...status.permissions, [permission]: true } };
+        return true;
+      });
+    jest.spyOn(services.reminder, 'rebuild').mockResolvedValue([]);
+    const refreshError = new Error('sqlite read failed');
+    const refresh = jest.spyOn(services.schedules, 'refresh').mockRejectedValue(refreshError);
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    render(<AppRoot services={services} />);
+
+    await screen.findByText('需要这些权限');
+    refresh.mockClear();
+    fireEvent.press(screen.getByTestId('permission-action-notifications'));
+
+    await waitFor(() =>
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[app] schedules.refresh() failed after a permission update',
+        refreshError,
+      ),
+    );
+    // 失败不能挡住用户继续走完权限流程。
+    await waitFor(() =>
+      expect(screen.getByLabelText('进入 App').props.accessibilityState.disabled).toBe(false),
+    );
+    errorSpy.mockRestore();
   });
 });
 
