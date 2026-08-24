@@ -37,6 +37,9 @@ export function AppRoot({ services: providedServices }: { services?: AppServices
   const controller = services.auth.controller;
   const handlePermissionsUpdated = useCallback(() => {
     void services.reminder.rebuild();
+    // ReminderGuardCoordinator 冷启动时如果权限还没给，会跳过启动且不重试；
+    // schedules.refresh() 会顺带唤醒它订阅的 reconcile()，不用单独给协调器开端口。
+    void services.schedules.refresh();
   }, [services]);
   return (
     <AppProviders

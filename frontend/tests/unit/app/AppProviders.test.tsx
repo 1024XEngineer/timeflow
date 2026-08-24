@@ -1,5 +1,5 @@
 import { describe, expect, it, jest } from '@jest/globals';
-import { render } from '@testing-library/react-native';
+import { render, waitFor } from '@testing-library/react-native';
 import type { PropsWithChildren } from 'react';
 
 import type { AppServices } from '../../../src/app/composition/createAppServices';
@@ -26,7 +26,10 @@ function createServices(): AppServices {
     reminder: { rebuild: jest.fn() },
     reminderPorts: { device: {} },
     alertDialog: {},
-    runtime: { start: jest.fn(), stop: jest.fn() },
+    runtime: {
+      start: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      stop: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    },
     protectedClient: {},
     scheduleView: {},
     webSocketClient: {},
@@ -73,5 +76,24 @@ describe('AppProviders', () => {
     unmount();
 
     expect(services.runtime.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs instead of throwing an unhandled rejection when runtime.start() fails', async () => {
+    mockAuthStatus = 'authenticated';
+    const services = createServices();
+    const startError = new Error('module start failed');
+    (services.runtime.start as jest.Mock<() => Promise<void>>).mockRejectedValue(startError);
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    render(
+      <AppProviders authController={{} as never} services={services}>
+        {null}
+      </AppProviders>,
+    );
+
+    await waitFor(() =>
+      expect(errorSpy).toHaveBeenCalledWith('[app] runtime.start() failed', startError),
+    );
+    errorSpy.mockRestore();
   });
 });

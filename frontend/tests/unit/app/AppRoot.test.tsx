@@ -451,16 +451,23 @@ describe('AppRoot', () => {
         return true;
       });
     const rebuild = jest.spyOn(services.reminder, 'rebuild').mockResolvedValue([]);
+    const refresh = jest.spyOn(services.schedules, 'refresh').mockResolvedValue(undefined);
 
     render(<AppRoot services={services} />);
 
     await screen.findByText('需要这些权限');
+    // DB ready 那条 effect 自己也会在挂载时 refresh() 一次；只关心权限授予
+    // 这次触发的那一下，把挂载阶段的调用先清掉。
+    refresh.mockClear();
     fireEvent.press(screen.getByTestId('permission-action-notifications'));
 
     await waitFor(() =>
       expect(screen.getByLabelText('进入 App').props.accessibilityState.disabled).toBe(false),
     );
     expect(rebuild).toHaveBeenCalledTimes(1);
+    // 冷启动权限没给时，守护线程的 reconcile() 会跳过启动且不重试；权限中途
+    // 被授予后必须有人把它叫醒，不然只能等下次重启才会再跑一次 reconcile()。
+    expect(refresh).toHaveBeenCalledTimes(1);
 
     fireEvent.press(screen.getByLabelText('进入 App'));
     await screen.findByText('日程日历');
