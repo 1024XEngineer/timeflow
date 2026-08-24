@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Sequence
 from typing import Any, Protocol, cast
 
 from openai import AsyncOpenAI, OpenAI
 
+from timeflow.infrastructure.observability.external import ExternalCall
+from timeflow.infrastructure.observability.metrics import LLM_TOKENS
 from timeflow.infrastructure.settings import Settings
 from timeflow.intelligence.conversation.llm import (
     AssistantToolCallMessage,
@@ -101,6 +104,7 @@ class OpenAICompatibleLlm(LlmPort):
         stream: Any = None
         usage: LlmUsage | None = None
         finish_reason: str | None = None
+        call = ExternalCall("llm", "stream")
         try:
             stream = await self._client.chat.completions.create(
                 model=self._settings.openai_model,
@@ -134,25 +138,37 @@ class OpenAICompatibleLlm(LlmPort):
                 if content is not None and not isinstance(content, str):
                     raise LlmProtocolError("LLM text delta must be a string")
                 if content:
+                    call.mark_first_byte()
                     yield TextDelta(content)
                 tool_calls = getattr(delta, "tool_calls", None)
                 if tool_calls is not None:
                     if not isinstance(tool_calls, list):
                         raise LlmProtocolError("LLM tool call deltas must be a list")
-                    for call in tool_calls:
-                        yield self._parse_tool_call_delta(call)
+                    call.mark_first_byte()
+                    for call_delta in tool_calls:
+                        yield self._parse_tool_call_delta(call_delta)
+            if usage is not None:
+                LLM_TOKENS.labels("stream", "prompt").inc(usage.prompt_tokens)
+                LLM_TOKENS.labels("stream", "completion").inc(usage.completion_tokens)
             yield LlmStreamCompleted(finish_reason, usage)
         except asyncio.CancelledError:
+            call.cancel()
             raise
-        except (LlmProtocolError, LlmProviderError):
+        except LlmProtocolError:
+            call.fail("protocol")
+            raise
+        except LlmProviderError:
+            call.fail("provider")
             raise
         except Exception as exc:
+            call.fail("provider")
             raise LlmProviderError("OpenAI-compatible LLM request failed") from exc
         finally:
             if stream is not None:
                 close = getattr(stream, "close", None)
                 if callable(close):
                     await close()
+            call.__exit__(None, None, None)
 
     def _validate_settings(self) -> None:
         if not self._settings.openai_base_url:
@@ -191,9 +207,23 @@ class OpenAICompatibleLlm(LlmPort):
             raise LlmProtocolError("LLM tool call ID must be a string")
         if name is not None and not isinstance(name, str):
             raise LlmProtocolError("LLM tool call name must be a string")
-        if not isinstance(arguments, str):
-            raise LlmProtocolError("LLM tool call arguments must be a string")
-        return ToolCallDelta(index, call_id or None, name or None, arguments)
+        return ToolCallDelta(index, call_id or None, name or None, _tool_arguments_text(arguments))
+
+
+def _tool_arguments_text(arguments: object) -> str:
+    """Normalize one streamed tool-call arguments fragment to a string.
+
+    OpenAI-compatible providers, including DashScope, often omit arguments on the
+    first delta (null) or send a completed JSON object instead of a string. Those
+    shapes still concatenate into valid JSON for the Agent accumulator.
+    """
+    if arguments is None:
+        return ""
+    if isinstance(arguments, str):
+        return arguments
+    if isinstance(arguments, (dict, list)):
+        return json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+    raise LlmProtocolError("LLM tool call arguments must be a string")
 
 
 class OpenAICompatibleJsonLlm(JsonLlmPort):
@@ -223,25 +253,41 @@ class OpenAICompatibleJsonLlm(JsonLlmPort):
 
     def complete_json(self, messages: Sequence[ChatMessage]) -> str:
         self._validate_settings()
-        try:
-            completion = self._client.chat.completions.create(
-                model=self._settings.openai_model,
-                messages=[_message_payload(message) for message in messages],
-                response_format={"type": "json_object"},
-                stream=False,
-            )
-            choices = getattr(completion, "choices", None)
-            if not isinstance(choices, list) or len(choices) != 1:
-                raise LlmProtocolError("LLM JSON response must contain exactly one choice")
-            message = getattr(choices[0], "message", None)
-            content = None if message is None else getattr(message, "content", None)
-            if not isinstance(content, str) or not content.strip():
-                raise LlmProtocolError("LLM JSON response content must be a non-empty string")
-            return content
-        except (LlmProtocolError, LlmProviderError):
-            raise
-        except Exception as exc:
-            raise LlmProviderError("OpenAI-compatible JSON request failed") from exc
+        with ExternalCall("llm", "json") as call:
+            try:
+                completion = self._client.chat.completions.create(
+                    model=self._settings.openai_model,
+                    messages=[_message_payload(message) for message in messages],
+                    response_format={"type": "json_object"},
+                    stream=False,
+                )
+                choices = getattr(completion, "choices", None)
+                if not isinstance(choices, list) or len(choices) != 1:
+                    raise LlmProtocolError("LLM JSON response must contain exactly one choice")
+                message = getattr(choices[0], "message", None)
+                content = None if message is None else getattr(message, "content", None)
+                if not isinstance(content, str) or not content.strip():
+                    raise LlmProtocolError("LLM JSON response content must be a non-empty string")
+                usage = getattr(completion, "usage", None)
+                if usage is not None:
+                    prompt = getattr(usage, "prompt_tokens", 0)
+                    completion_tokens = getattr(usage, "completion_tokens", 0)
+                    if isinstance(prompt, int) and not isinstance(prompt, bool):
+                        LLM_TOKENS.labels("json", "prompt").inc(prompt)
+                    if isinstance(completion_tokens, int) and not isinstance(
+                        completion_tokens, bool
+                    ):
+                        LLM_TOKENS.labels("json", "completion").inc(completion_tokens)
+                return content
+            except LlmProtocolError:
+                call.fail("protocol")
+                raise
+            except LlmProviderError:
+                call.fail("provider")
+                raise
+            except Exception as exc:
+                call.fail("provider")
+                raise LlmProviderError("OpenAI-compatible JSON request failed") from exc
 
     def _validate_settings(self) -> None:
         if not self._settings.openai_base_url:

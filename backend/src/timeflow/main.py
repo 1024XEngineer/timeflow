@@ -21,7 +21,7 @@ from timeflow.business.calendar.service import ScheduleApplicationService
 from timeflow.business.health import HealthService
 from timeflow.composition import build_composed_voice_agent
 from timeflow.data.account_uow import SqlAlchemyAuthUnitOfWork
-from timeflow.data.database import build_engine, build_session_factory
+from timeflow.data.database import build_engine, build_session_factory, ping_database
 from timeflow.data.schedule_unit_of_work import SqlAlchemyScheduleUnitOfWork
 from timeflow.gateway.http import (
     AuthAccess,
@@ -32,6 +32,7 @@ from timeflow.gateway.http import (
     create_schedule_snapshot_router,
     install_auth_http_error_handler,
 )
+from timeflow.gateway.observability.http import install_http_observability, record_health
 from timeflow.gateway.websocket.agent_ports import Agent
 from timeflow.gateway.websocket.connection_manager import ConnectionManager
 from timeflow.gateway.websocket.endpoint import (
@@ -52,6 +53,7 @@ from timeflow.infrastructure.external.realtime.qwen_audio import (
     QwenAudioConfig,
     QwenAudioSessionFactory,
 )
+from timeflow.infrastructure.observability.runtime import configure_observability
 from timeflow.infrastructure.security import Argon2PasswordHasher, JwtAccessTokenService
 from timeflow.infrastructure.settings import Settings, get_settings
 from timeflow.intelligence.fake_agent import FakeAgent
@@ -60,6 +62,7 @@ from timeflow.intelligence.realtime.agent import RealtimeAgent
 from timeflow.intelligence.realtime.instructions import build_instructions
 from timeflow.intelligence.realtime.schedule_tools import ToolBox
 from timeflow.intelligence.schedule_category import LlmScheduleCategoryClassifier
+from timeflow.observability import VOICE_TELEMETRY
 
 logging.basicConfig(
     level=logging.INFO,
@@ -80,6 +83,7 @@ def create_app(
 ) -> FastAPI:
     """Build the application and connect the minimal inbound surface."""
     settings = get_settings()
+    configure_observability(settings)
     access_tokens = access_token_service or _build_access_token_service(settings)
     owned_engine: Engine | None = None
     session_factory: sessionmaker[Session] | None = None
@@ -148,6 +152,7 @@ def create_app(
             allow_headers=["Authorization", "Content-Type"],
             expose_headers=["Retry-After", "X-Auth-Event-Id"],
         )
+    install_http_observability(application)
     health_service = HealthService()
 
     handshake = SessionHandshake(access_tokens)
@@ -198,9 +203,23 @@ def create_app(
     application.state.authenticated_account_dependency = authenticated_account
 
     @application.get("/api/v1/health")
-    def health() -> dict[str, str]:
-        """Return the process liveness status."""
-        return {"status": health_service.check().status}
+    def health() -> dict[str, object]:
+        """Return process liveness plus bounded dependency readiness, never payloads."""
+        checks = {
+            "process": "ok",
+            "database": _database_readiness(engine),
+            "asr": _configured_state(
+                bool(settings.aliyun_asr_ws_url and settings.aliyun_asr_api_key)
+            ),
+            "llm": _configured_state(settings.openai_is_configured()),
+            "tts": _configured_state(
+                bool(settings.aliyun_tts_ws_url and settings.aliyun_tts_api_key)
+            ),
+            "realtime": _configured_state(settings.aliyun_audio_is_configured()),
+            "maps": _configured_state(settings.tencent_maps_is_configured()),
+        }
+        record_health(checks)
+        return {"status": health_service.check().status, "checks": checks}
 
     @application.websocket("/ws")
     async def websocket_session(websocket: WebSocket) -> None:
@@ -281,6 +300,7 @@ def _build_realtime_agent(
                 timezone,
                 location_service=location_service,
                 client_location=client_location,
+                telemetry=VOICE_TELEMETRY,
             )
 
         return RealtimeAgent(
@@ -299,6 +319,7 @@ def _build_realtime_agent(
             result_sink,
             tools_factory=bind_account,
             instructions=build_instructions,
+            telemetry=VOICE_TELEMETRY,
         )
 
     if settings.environment != "development":
@@ -313,6 +334,16 @@ def _build_realtime_agent(
         extra={"needs": "TIMEFLOW_ALIYUN_AUDIO_API_KEY and TIMEFLOW_ALIYUN_AUDIO_WORKSPACE_ID"},
     )
     return FakeAgent(result_sink)
+
+
+def _configured_state(configured: bool) -> str:
+    return "configured" if configured else "unconfigured"
+
+
+def _database_readiness(engine: Engine | None) -> str:
+    if engine is None:
+        return "skipped"
+    return "ok" if ping_database(engine) else "error"
 
 
 app = create_app()

@@ -9,6 +9,11 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from timeflow.gateway.observability.websocket import (
+    observe_audio_queue_depth,
+    record_audio_chunk,
+    record_audio_truncated,
+)
 from timeflow.gateway.websocket.envelope import ERROR_AUDIO_INVALID, build_error_envelope
 from timeflow.gateway.websocket.messages.voice import (
     VoiceStreamEnd,
@@ -159,6 +164,7 @@ class VoiceStreamHandlers:
         if message.payload.stream_id != stream.context.stream_id:
             return self._error(request_id, "stream_id does not match the active stream", stream)
         if stream.total_audio_bytes == 0:
+            record_audio_truncated("empty_stream")
             await self._abort(session.session_id, stream)
             return self._error(request_id, "The audio stream carried no audio", stream)
 
@@ -174,6 +180,7 @@ class VoiceStreamHandlers:
         if not chunk:
             return self._error(stream.request_id, "Audio frame is empty", stream)
         if stream.total_audio_bytes + len(chunk) > stream.max_audio_bytes:
+            record_audio_truncated("max_duration")
             await self._abort(session.session_id, stream)
             return self._error(
                 stream.request_id,
@@ -186,6 +193,8 @@ class VoiceStreamHandlers:
         # Blocks the receive loop when the queue is full, which propagates backpressure
         # to the client over TCP rather than dropping frames.
         await stream.queue.put(chunk)
+        record_audio_chunk()
+        observe_audio_queue_depth(stream.queue.qsize())
         return None
 
     async def handle_disconnect(self, session: SessionContext) -> None:

@@ -2,6 +2,7 @@
 .idea/
 .cursor/
 scripts/
+/observability/
 .env
 .venv/
 node_modules/

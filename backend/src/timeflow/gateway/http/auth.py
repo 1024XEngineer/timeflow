@@ -1,6 +1,7 @@
 """账户访问与稳定认证错误的 HTTP 适配器。"""
 
 import logging
+import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -15,6 +16,7 @@ from starlette.responses import Response
 from timeflow.business.auth import AuthAccessResult, AuthError, AuthErrorCode
 from timeflow.gateway.auth_diagnostics import log_sanitized_exception
 from timeflow.gateway.http.rate_limit import AuthRateLimiter
+from timeflow.gateway.observability.http import record_auth_access
 
 logger = logging.getLogger(__name__)
 
@@ -180,9 +182,11 @@ class _AuthAccessRoute(APIRoute):
         original_handler = super().get_route_handler()
 
         async def route_handler(request: Request) -> Response:
+            started = time.perf_counter()
             try:
                 return await original_handler(request)
             except RequestValidationError as error:
+                record_auth_access("failure", time.perf_counter() - started)
                 error_code = _single_invalid_request_field(error)
                 if error_code is None:
                     return _uncontracted_validation_response()
@@ -213,9 +217,11 @@ def create_auth_router(
         http_request: Request,
         request: AuthAccessRequest,
     ) -> AuthAccessResponse | Response:
+        started = time.perf_counter()
         client = http_request.client
         client_key = client.host if client is not None else "unknown"
         if not limiter.allow(client_key):
+            record_auth_access("rate_limited", time.perf_counter() - started)
             return _error_response(
                 AUTH_RATE_LIMITED,
                 retry_after_seconds=limiter.retry_after_seconds,
@@ -223,7 +229,9 @@ def create_auth_router(
         try:
             result = auth_access.access(request.username, request.password)
         except Exception as error:
+            record_auth_access("failure", time.perf_counter() - started)
             return _service_error_response(error)
+        record_auth_access("success", time.perf_counter() - started)
         return AuthAccessResponse(
             account_id=result.account_id,
             access_token=result.access_token,

@@ -46,6 +46,12 @@ JWT_ENVIRONMENT_VARIABLES = (
     "TIMEFLOW_JWT_ACCESS_TTL_SECONDS",
 )
 CORS_ENVIRONMENT_VARIABLES = ("TIMEFLOW_CORS_ALLOWED_ORIGINS",)
+OTEL_ENVIRONMENT_VARIABLES = (
+    "TIMEFLOW_OTEL_SERVICE_NAME",
+    "TIMEFLOW_OTEL_EXPORTER_OTLP_ENDPOINT",
+    "TIMEFLOW_OTEL_TRACES_ENABLED",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+)
 TENCENT_MAP_ENVIRONMENT_VARIABLES = (
     "TIMEFLOW_TENCENT_MAP_KEY",
     "TIMEFLOW_TENCENT_MAP_BASE_URL",
@@ -89,7 +95,7 @@ def clear_model_environment(monkeypatch: MonkeyPatch) -> None:
     clear_llm_environment(monkeypatch)
     clear_tts_environment(monkeypatch)
     clear_audio_environment(monkeypatch)
-    for name in JWT_ENVIRONMENT_VARIABLES + CORS_ENVIRONMENT_VARIABLES:
+    for name in JWT_ENVIRONMENT_VARIABLES + CORS_ENVIRONMENT_VARIABLES + OTEL_ENVIRONMENT_VARIABLES:
         monkeypatch.delenv(name, raising=False)
     clear_tencent_map_environment(monkeypatch)
 
@@ -168,6 +174,38 @@ def test_settings_use_qwen_llm_defaults(
     assert settings.openai_is_configured() is False
     assert settings.agent_max_tool_rounds == 4
     assert settings.voice_agent_mode == "1"
+    assert settings.otel_service_name == "timeflow-backend"
+    assert settings.otel_exporter_otlp_endpoint == ""
+    assert settings.otel_traces_enabled is False
+
+
+def test_settings_enable_traces_when_otlp_endpoint_is_set(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    clear_model_environment(monkeypatch)
+    monkeypatch.setenv("TIMEFLOW_OTEL_EXPORTER_OTLP_ENDPOINT", "http://tempo:4318")
+    monkeypatch.setenv("TIMEFLOW_OTEL_SERVICE_NAME", "timeflow-test")
+
+    settings = Settings.from_environment(tmp_path / "missing.env")
+
+    assert settings.otel_exporter_otlp_endpoint == "http://tempo:4318"
+    assert settings.otel_service_name == "timeflow-test"
+    assert settings.otel_traces_enabled is True
+
+
+def test_settings_honor_explicit_trace_disable_even_with_an_endpoint(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    clear_model_environment(monkeypatch)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://tempo:4318")
+    monkeypatch.setenv("TIMEFLOW_OTEL_TRACES_ENABLED", "0")
+
+    settings = Settings.from_environment(tmp_path / "missing.env")
+
+    assert settings.otel_exporter_otlp_endpoint == "http://tempo:4318"
+    assert settings.otel_traces_enabled is False
 
 
 def test_settings_use_qwen_tts_defaults(

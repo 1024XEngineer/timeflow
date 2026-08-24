@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from timeflow.infrastructure.observability.external import ExternalCall
 from timeflow.intelligence.location.contracts import (
     Coordinate,
     CurrentArea,
@@ -102,29 +103,35 @@ class TencentMapsLocationPort:
         *,
         operation: str,
     ) -> Mapping[str, Any]:
-        try:
-            response = await self._client.get(f"{self._base_url}{path}", params=params)
-            response.raise_for_status()
-            payload = response.json()
-        except (httpx.RequestError, httpx.HTTPStatusError):
-            logger.warning("Tencent Maps request failed", extra={"operation": operation})
-            raise LocationConnectionError("Tencent Maps request failed") from None
-        except ValueError:
-            raise LocationProtocolError("Tencent Maps returned invalid JSON") from None
-        if not isinstance(payload, dict):
-            raise LocationProtocolError("Tencent Maps returned an invalid response")
-        status = payload.get("status")
-        if isinstance(status, bool) or not isinstance(status, int) or status != 0:
-            # Tencent's status/message say why (quota, auth, bad params, ...); neither
-            # contains user data, so logging them is safe and is the only way to tell
-            # these apart later -- LocationProtocolError itself carries no detail on.
-            logger.warning(
-                "Tencent Maps rejected the request: status=%s message=%s",
-                status,
-                payload.get("message"),
-            )
-            raise LocationProtocolError("Tencent Maps rejected the request")
-        return payload
+        async with ExternalCall("maps", operation) as call:
+            try:
+                response = await self._client.get(f"{self._base_url}{path}", params=params)
+                call.mark_first_byte()
+                response.raise_for_status()
+                payload = response.json()
+            except (httpx.RequestError, httpx.HTTPStatusError):
+                logger.warning("Tencent Maps request failed", extra={"operation": operation})
+                call.fail("connection")
+                raise LocationConnectionError("Tencent Maps request failed") from None
+            except ValueError:
+                call.fail("protocol")
+                raise LocationProtocolError("Tencent Maps returned invalid JSON") from None
+            if not isinstance(payload, dict):
+                call.fail("protocol")
+                raise LocationProtocolError("Tencent Maps returned an invalid response")
+            status = payload.get("status")
+            if isinstance(status, bool) or not isinstance(status, int) or status != 0:
+                # Tencent's status/message say why (quota, auth, bad params, ...); neither
+                # contains user data, so logging them is safe and is the only way to tell
+                # these apart later -- LocationProtocolError itself carries no detail on.
+                logger.warning(
+                    "Tencent Maps rejected the request: status=%s message=%s",
+                    status,
+                    payload.get("message"),
+                )
+                call.fail("provider")
+                raise LocationProtocolError("Tencent Maps rejected the request")
+            return payload
 
 
 def _candidate(value: object) -> ProviderLocationCandidate | None:

@@ -41,6 +41,7 @@ from timeflow.intelligence.realtime.tool_mapping import (
     map_update_schedule_command,
     normalize_datetime_args,
 )
+from timeflow.intelligence.telemetry import NOOP_TELEMETRY, VoiceTelemetry, tool_result_status
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +279,7 @@ class ToolBox:
         *,
         location_service: LocationSearchService | None = None,
         client_location: ClientLocation | None = None,
+        telemetry: VoiceTelemetry | None = None,
     ) -> None:
         """Store the account, the service, the client's zone, and the clock seam.
 
@@ -299,6 +301,7 @@ class ToolBox:
         self._location_service = location_service
         self._client_location = client_location
         self._location_context: LocationSearchContext | None = None
+        self._telemetry = telemetry if telemetry is not None else NOOP_TELEMETRY
 
     # The service is synchronous and reaches Postgres over a socket, so every call goes
     # to a worker thread: awaiting it inline would stall the loop streaming this turn's
@@ -310,6 +313,16 @@ class ToolBox:
 
     async def run(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         """Run a tool and report what each side of the conversation should get."""
+        tool_span = self._telemetry.start_tool(name, agent_mode="realtime")
+        try:
+            result = await self._run_tool(name, arguments)
+        except Exception:
+            tool_span.finish(status="error", error_kind="exception")
+            raise
+        tool_span.finish(status=tool_result_status(result.output))
+        return result
+
+    async def _run_tool(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         if name == REQUEST_USER_INPUT:
             return self._ask(arguments)
         if name == END_CONVERSATION:
