@@ -101,14 +101,15 @@ export class ReminderGuardCoordinator {
     intervalMs: number,
     active: readonly LocalReminderSchedule[],
   ): Promise<void> {
+    // 只查前台权限：startLocationUpdatesAsync() 传了 foregroundService 配置，走的是
+    // "用户可见前台服务"这条路径，expo-location 原生侧本身就不要求
+    // ACCESS_BACKGROUND_LOCATION（只有不带 foregroundService、纯后台位置服务那条路径
+    // 才需要）——上一版这里连后台权限一起卡，导致用户只给了"仅使用时允许"（没给
+    // "始终允许"，这是安卓上很常见的选择）时，连时间型提醒的兜底轮询都启动不了，
+    // 跟这条日程要不要用到位置完全没关系。
     const { status: foreground } = await Location.getForegroundPermissionsAsync();
     if (foreground !== 'granted') {
       console.warn('[guard] ensureLocationUpdates skipped: foreground permission not granted');
-      return;
-    }
-    const { status: background } = await Location.getBackgroundPermissionsAsync();
-    if (background !== 'granted') {
-      console.warn('[guard] ensureLocationUpdates skipped: background permission not granted');
       return;
     }
 

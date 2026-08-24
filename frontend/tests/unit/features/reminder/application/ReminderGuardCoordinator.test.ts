@@ -11,7 +11,6 @@ import {
 jest.mock('expo-location', () => ({
   Accuracy: { Balanced: 3 },
   getForegroundPermissionsAsync: jest.fn(),
-  getBackgroundPermissionsAsync: jest.fn(),
   startLocationUpdatesAsync: jest.fn(),
   stopLocationUpdatesAsync: jest.fn(),
   hasStartedLocationUpdatesAsync: jest.fn(),
@@ -30,9 +29,6 @@ jest.mock('../../../../../src/infrastructure/location/reminderGuardTask', () => 
 
 const getForeground = Location.getForegroundPermissionsAsync as jest.MockedFunction<
   typeof Location.getForegroundPermissionsAsync
->;
-const getBackground = Location.getBackgroundPermissionsAsync as jest.MockedFunction<
-  typeof Location.getBackgroundPermissionsAsync
 >;
 const startUpdates = Location.startLocationUpdatesAsync as jest.MockedFunction<
   typeof Location.startLocationUpdatesAsync
@@ -139,7 +135,6 @@ describe('ReminderGuardCoordinator', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     getForeground.mockResolvedValue(granted());
-    getBackground.mockResolvedValue(granted());
     startUpdates.mockResolvedValue(undefined);
     stopUpdates.mockResolvedValue(undefined);
     hasStarted.mockResolvedValue(true);
@@ -188,8 +183,8 @@ describe('ReminderGuardCoordinator', () => {
     expect(options?.foregroundService?.notificationBody).toContain('1 个地点提醒');
   });
 
-  it('does not start when foreground or background location permission is missing', async () => {
-    getBackground.mockResolvedValue({
+  it('does not start when foreground location permission is missing', async () => {
+    getForeground.mockResolvedValue({
       status: 'denied' as Location.PermissionStatus,
       granted: false,
       canAskAgain: true,
@@ -204,6 +199,21 @@ describe('ReminderGuardCoordinator', () => {
     await coordinator.start();
 
     expect(startUpdates).not.toHaveBeenCalled();
+  });
+
+  it('starts the time-only fallback with just foreground permission (no background permission needed)', async () => {
+    // startLocationUpdatesAsync() 走的是 foregroundService 配置这条路径，原生侧本身
+    // 就不要求 ACCESS_BACKGROUND_LOCATION——用户只给了"仅使用时允许"也应该照样启动，
+    // 不然纯时间型日程的兜底轮询会被一个跟它无关的权限卡死。
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+
+    await coordinator.start();
+
+    expect(startUpdates).toHaveBeenCalledTimes(1);
   });
 
   it('stops location updates once every schedule is confirmed or removed', async () => {
