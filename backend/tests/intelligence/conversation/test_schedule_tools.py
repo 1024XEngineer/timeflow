@@ -475,6 +475,37 @@ async def test_registry_calls_service_with_injected_account_and_serializes_snaps
 
 
 @pytest.mark.asyncio
+async def test_serialized_snapshot_trims_internal_fields() -> None:
+    """The LLM-facing result keeps only reference/report fields and drops the
+    internal snapshot noise (account scoping, status, timestamps, coordinates,
+    reminder disposition) so the conversation history stays small."""
+    service = FakeScheduleService()
+    tool = build_agent_tool_registry(service, "account-1").get("schedule_create")
+
+    result = json.loads(await tool.execute(create_arguments()))
+
+    schedule = result["result"]["schedules"][0]
+    assert schedule["id"] == "schedule-1"
+    assert schedule["revision"] == 1
+    assert schedule["schedule_kind"] == "once"
+    for dropped in (
+        "account_id",
+        "status",
+        "created_at",
+        "updated_at",
+        "deleted_at",
+        "reminder_disposition_state",
+        "reminder_strength",
+        "latitude",
+        "longitude",
+        "timezone",
+        "category",
+    ):
+        assert dropped not in schedule
+    assert "occurrence_overrides" not in result["result"]
+
+
+@pytest.mark.asyncio
 async def test_schedule_service_runs_off_the_event_loop() -> None:
     service = FakeScheduleService()
     caller_thread = threading.get_ident()

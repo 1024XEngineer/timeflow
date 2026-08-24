@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol, TypeVar, cast
@@ -25,6 +25,7 @@ from timeflow.business.calendar import (
     ScheduleKind,
     ScheduleMutationResult,
     ScheduleSearchResult,
+    ScheduleSnapshot,
     ScheduleType,
     ScheduleUpdatePatch,
     UpdateScheduleCommand,
@@ -600,7 +601,10 @@ def _optional_enum(
 
 def _result_json(result: ScheduleMutationResult | ScheduleSearchResult) -> str:
     return json.dumps(
-        {"status": "ok", "result": _json_value(asdict(result))},
+        {
+            "status": "ok",
+            "result": {"schedules": [_schedule_for_llm(s) for s in result.schedules]},
+        },
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -634,16 +638,33 @@ def _refusal_json(reason: str) -> str:
     )
 
 
-def _json_value(value: object) -> object:
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, StrEnum):
-        return value.value
-    if isinstance(value, dict):
-        return {key: _json_value(item) for key, item in value.items() if key != "category"}
-    if isinstance(value, (list, tuple)):
-        return [_json_value(item) for item in value]
-    return value
+def _schedule_for_llm(snapshot: ScheduleSnapshot) -> dict[str, object]:
+    """Serialize one schedule for the LLM, trimming fields the model never uses.
+
+    The model only references (id, revision), decides on (schedule_kind,
+    schedule_type), or reports (title, times, recurrence, location, reminder).
+    Account scoping, status, timestamps, coordinates, and reminder disposition
+    are internal noise that would bloat every turn's conversation history.
+    """
+    return {
+        "id": snapshot.id,
+        "title": snapshot.title,
+        "schedule_type": snapshot.schedule_type.value,
+        "schedule_kind": snapshot.schedule_kind.value,
+        "is_all_day": snapshot.is_all_day,
+        "start_time": _iso_or_none(snapshot.start_time),
+        "end_time": _iso_or_none(snapshot.end_time),
+        "recurrence_rule": snapshot.recurrence_rule,
+        "location_name": snapshot.location_name,
+        "reminder_type": None if snapshot.reminder_type is None else snapshot.reminder_type.value,
+        "reminder_trigger_at": _iso_or_none(snapshot.reminder_trigger_at),
+        "reminder_offset_minutes": snapshot.reminder_offset_minutes,
+        "revision": snapshot.revision,
+    }
+
+
+def _iso_or_none(value: datetime | None) -> str | None:
+    return None if value is None else value.isoformat()
 
 
 __all__ = [

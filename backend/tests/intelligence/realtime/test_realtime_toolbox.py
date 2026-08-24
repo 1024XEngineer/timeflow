@@ -454,6 +454,46 @@ def test_a_committed_write_speaks_the_local_time_and_hides_the_audit_fields() ->
     assert "created_at" not in result.outcome["schedule"]
 
 
+def test_model_output_trims_internal_fields_but_keeps_speaking_fields() -> None:
+    result = run(
+        "schedule_create",
+        {"schedule_type": "time", "schedule_kind": "once", "title": "写周报"},
+        ToolBox("acc_test", RecordingService()),
+    )
+    schedule = json.loads(result.output)["schedule"]
+
+    assert set(schedule) == {
+        "id",
+        "title",
+        "schedule_type",
+        "schedule_kind",
+        "is_all_day",
+        "start_time",
+        "end_time",
+        "recurrence_rule",
+        "location_name",
+        "reminder_type",
+        "reminder_trigger_at",
+        "reminder_offset_minutes",
+        "revision",
+        "starts_at_local",
+    }
+    for field in (
+        "account_id",
+        "timezone",
+        "status",
+        "created_at",
+        "updated_at",
+        "deleted_at",
+        "latitude",
+        "longitude",
+        "reminder_strength",
+        "reminder_disposition_state",
+        "category",
+    ):
+        assert field not in schedule
+
+
 def test_a_schedule_without_a_start_time_speaks_no_local_time() -> None:
     class LocationService(RecordingService):
         def create_schedule(self, *, account_id: str, command: Any) -> ScheduleMutationResult:
