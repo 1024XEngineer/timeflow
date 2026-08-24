@@ -3,16 +3,13 @@ import * as Location from 'expo-location';
 import type { LocalScheduleReader } from './interfaces';
 import type { GeoPoint, LocalReminderSchedule, LocationSample } from '../domain';
 import { resolveGeofenceCenter, resolveWatchMode } from '../domain/geofence';
-import { resolveEffectiveTriggerAt } from '../domain/timeWindow';
 import {
+  GUARD_NOTIFICATION_TITLE,
   GUARD_TASK_NAME,
   resolveNextPollIntervalMs,
   subscribeGuardTaskEvents,
   type GuardTaskSample,
 } from '../../../infrastructure/location/reminderGuardTask';
-
-const NOTIFICATION_TITLE = 'Timeflow 提醒守护';
-const RESTART_INTERVAL_RATIO_THRESHOLD = 0.2;
 
 export type ReminderGuardDependencies = {
   schedules: LocalScheduleReader;
@@ -101,6 +98,30 @@ export class ReminderGuardCoordinator {
     intervalMs: number,
     active: readonly LocalReminderSchedule[],
   ): Promise<void> {
+    // 已经在跑就不从这条路径碰它——"间隔变化超过阈值就重新注册"这条逻辑，
+    // 会在日程列表一变（比如插入第二条日程）时，对着一个可能正在执行/待执行的
+    // 后台任务同步地重新调用 startLocationUpdatesAsync()，真机上追出来的一个
+    // 大概率解释：这个重新注册跟任务自己的执行窗口撞在一起，引发了 SQLite
+    // 连接的并发访问。轮询密度要不要变，交给任务自己下次醒来时决定
+    // （reminderGuardTask.ts 的 refreshGuardRegistration，在它自己已经串行的
+    // 执行上下文里调），不要跟前台的增删操作同步触发。
+    //
+    // "已经在跑"查的是原生真实状态，不是本地缓存的 this.running——任务现在
+    // 会在查到 0 条待处理日程时自己把原生任务停掉（见 refreshGuardRegistration），
+    // 这个协调器不知情，本地标志会跟真实状态脱节；用本地标志判断的话，日程
+    // 清空又新增时会被误判成"已经在跑"，永远不会真正重新启动。
+    let alreadyRunning: boolean;
+    try {
+      alreadyRunning = await Location.hasStartedLocationUpdatesAsync(GUARD_TASK_NAME);
+    } catch (error) {
+      console.warn('[guard] hasStartedLocationUpdatesAsync failed', error);
+      alreadyRunning = this.running;
+    }
+    if (alreadyRunning) {
+      this.running = true;
+      return;
+    }
+
     // 只查前台权限：startLocationUpdatesAsync() 传了 foregroundService 配置，走的是
     // "用户可见前台服务"这条路径，expo-location 原生侧本身就不要求
     // ACCESS_BACKGROUND_LOCATION（只有不带 foregroundService、纯后台位置服务那条路径
@@ -113,23 +134,14 @@ export class ReminderGuardCoordinator {
       return;
     }
 
-    const intervalChangedEnough =
-      this.currentIntervalMs == null ||
-      Math.abs(intervalMs - this.currentIntervalMs) / this.currentIntervalMs >
-        RESTART_INTERVAL_RATIO_THRESHOLD;
-
-    if (this.running && !intervalChangedEnough) {
-      return;
-    }
-
     try {
       await Location.startLocationUpdatesAsync(GUARD_TASK_NAME, {
         accuracy: Location.Accuracy.Balanced,
         timeInterval: intervalMs,
         distanceInterval: 0,
         foregroundService: {
-          notificationTitle: NOTIFICATION_TITLE,
-          notificationBody: describeGuardNotification(active),
+          notificationTitle: GUARD_NOTIFICATION_TITLE,
+          notificationBody: '提醒守护运行中',
         },
       });
       this.running = true;
@@ -153,38 +165,4 @@ export class ReminderGuardCoordinator {
       this.currentIntervalMs = null;
     }
   }
-}
-
-/**
- * 常驻通知文案：有时间型日程时显示最近一条的倒计时（信息量更大，优先展示）；
- * 只有地点型日程时改成"正在监听 N 个"——地点型没有确定的下一个触发时刻，凑不出
- * 倒计时。
- */
-function describeGuardNotification(active: readonly LocalReminderSchedule[]): string {
-  const timeSchedules = active.filter((schedule) => schedule.schedule_type === 'time');
-  const locationCount = active.length - timeSchedules.length;
-
-  const next = timeSchedules
-    .map((schedule) => ({ schedule, triggerAt: resolveNextTriggerAt(schedule) }))
-    .filter(
-      (entry): entry is { schedule: LocalReminderSchedule; triggerAt: number } =>
-        entry.triggerAt != null,
-    )
-    .sort((a, b) => a.triggerAt - b.triggerAt)[0];
-
-  if (next == null) {
-    return locationCount > 0 ? `正在监听 ${locationCount} 个地点提醒` : '正在后台监控提醒';
-  }
-
-  const minutesLeft = Math.max(0, Math.round((next.triggerAt - Date.now()) / 60_000));
-  const countdown = minutesLeft <= 0 ? '即将到时' : `还有约 ${minutesLeft} 分钟`;
-  const suffix = locationCount > 0 ? `，另有 ${locationCount} 个地点提醒监听中` : '';
-  return `下一条：${next.schedule.title}，${countdown}${suffix}`;
-}
-
-function resolveNextTriggerAt(schedule: LocalReminderSchedule): number | null {
-  const triggerAt = resolveEffectiveTriggerAt(schedule);
-  if (triggerAt == null) return null;
-  const parsed = Date.parse(triggerAt);
-  return Number.isNaN(parsed) ? null : parsed;
 }

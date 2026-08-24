@@ -93,6 +93,9 @@ public final class AlarmSoundService extends Service {
             }
             pendingQueue.add(extras);
             postQueuedNotification(extras);
+            // 排队顶不上全屏页，但 postQueuedNotification() 确实发出了一条用户可见的
+            // 普通通知——对 presentNow() 的调用方来说，这不算"什么都没展示"。
+            AlarmModule.resolvePresentation(extras.alarmId, true);
             return START_NOT_STICKY;
         }
 
@@ -153,6 +156,10 @@ public final class AlarmSoundService extends Service {
             if (firedNotifiedAlarmIds.add(alarmId)) {
                 AlarmNativeBridge.notifyFired(this, scheduleId, alarmId, alarmTitle);
             }
+            // startForeground() 已经成功——至少那条前台通知确实发出去了，对
+            // presentNow() 的调用方来说这就算"展示了"，不用等下面全屏页/悬浮窗的
+            // 结果（那两条本来就没有系统回调能确认真的被用户看到）。
+            AlarmModule.resolvePresentation(alarmId, true);
             // 换成下一条闹钟之前先清掉上一条的震动/声音状态，避免上一条闹钟启动的
             // 那次播放/震动残留到这条本该更安静的闹钟上。
             stopVibration();
@@ -175,6 +182,9 @@ public final class AlarmSoundService extends Service {
             // 走到这个 catch，整条链路就是"通知也没弹、声音也没放、震动也没震"，
             // 跟用户看到的现象完全对得上，但之前没有任何日志能证实。
             Log.w(TAG, "presentAlarm failed for alarmId=" + alarmId, exception);
+            // 真的什么都没展示：之前这里完全没告诉 presentNow() 的调用方，JS 侧会把
+            // 服务启动请求本身当成"已展示"，跳过通知兜底——用户彻底看不到任何东西。
+            AlarmModule.resolvePresentation(alarmId, false);
             advanceOrStop();
         }
     }

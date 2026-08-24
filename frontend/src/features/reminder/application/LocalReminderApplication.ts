@@ -24,7 +24,12 @@ import type {
   ReminderTriggerReason,
 } from '../domain';
 import { DEFAULT_SNOOZE_MINUTES, buildReminderSpeechText } from '../domain';
-import { evaluateGeofence, resolveGeofenceCenter, resolveWatchMode } from '../domain/geofence';
+import {
+  distanceMeters,
+  evaluateGeofence,
+  resolveGeofenceCenter,
+  resolveWatchMode,
+} from '../domain/geofence';
 import type { AlarmSoundTier } from '../domain/strengthDelivery';
 import { resolveStrengthDeliveryPlan } from '../domain/strengthDelivery';
 import {
@@ -40,6 +45,8 @@ type RegistrationRecord = ReminderRegistration & {
 };
 
 const EMPTY_CHANNELS: ReminderDeliveryReceipt['channels'] = [];
+/** 跟 reminderGuardTask.ts 的同名常量保持一致——两处合起来覆盖会话存活/已死两种场景。 */
+const STUCK_PENDING_THRESHOLD_MS = 2 * 60_000;
 
 function emptyRegistration(scheduleId: string): ReminderRegistration {
   return {
@@ -609,6 +616,53 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         await this.deliverOne(this.buildTrigger(schedule, reason, tick.observed_at), generation);
       }
     }
+    await this.runStuckPendingRescue(schedules, tick.observed_at, generation);
+  }
+
+  /**
+   * 卡在 pending 超过 STUCK_PENDING_THRESHOLD_MS 还没被确认/延后，当成"响了但没
+   * 送达"补一次——不管这条 pending 是本会话的 runDeliver/acknowledgeNativeFire 落的，
+   * 还是跨会话遗留的，一律按同一个阈值处理。不用 activeDeliveries 做区分：只要还
+   * pending 就一直有这条 id 在里面，分不出"真的在正常展示"还是"其实原生没展示
+   * 成功"——presentNow() 无论展示成不成功都会 resolve(true)，两者目前没有任何
+   * 独立信号能区分开。
+   *
+   * 这是 reminderGuardTask.ts 里 runStuckPendingPass 的会话存活版本：那份只在
+   * listeners.size === 0（会话已死）时才跑，而前台保活的目的正是让会话不死，
+   * 两份合起来才覆盖"会话存活"和"会话已死"两种场景，缺一个都有盲区。
+   */
+  private async runStuckPendingRescue(
+    schedules: readonly LocalReminderSchedule[],
+    observedAt: string,
+    generation: number,
+  ): Promise<void> {
+    const nowMs = Date.parse(observedAt);
+    for (const raw of schedules) {
+      if (!this.isLive(generation)) return;
+      if (raw.status !== 'active') continue;
+      if (this.deliverLocks.has(raw.id)) continue;
+
+      const runtime = await this.readRuntime(raw.id);
+      if (runtime?.reminder_disposition_state !== 'pending') continue;
+      const staleAt = runtime.disposition_updated_at;
+      const updatedMs = staleAt == null ? NaN : Date.parse(staleAt);
+      if (Number.isNaN(updatedMs) || nowMs - updatedMs < STUCK_PENDING_THRESHOLD_MS) continue;
+
+      // confirm()/snooze() 走独立的 opChain，跟这个 30s tick（track()）之间没有共享
+      // 锁——触发前再读一次，disposition_updated_at 变了说明这段时间被 confirm/
+      // snooze 抢先处理了，放弃这次补弹，避免把刚确认完的提醒又弹回来。
+      if (this.deliverLocks.has(raw.id)) continue;
+      const recheck = await this.readRuntime(raw.id);
+      if (
+        recheck?.reminder_disposition_state !== 'pending' ||
+        recheck.disposition_updated_at !== staleAt
+      ) {
+        continue;
+      }
+
+      const schedule: LocalReminderSchedule = { ...raw, runtime: recheck };
+      await this.deliverOne(this.buildTrigger(schedule, 'stuck_pending', observedAt), generation);
+    }
   }
 
   private async runHandleLocation(sample: LocationSample, generation: number): Promise<void> {
@@ -924,10 +978,37 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     generation: number,
   ): Promise<void> {
     if (!this.isLive(generation)) return;
-    if (!(await this.canDeliver(schedule, sample.observed_at, generation))) return;
+    const canDeliver = await this.canDeliver(schedule, sample.observed_at, generation);
+    // 诊断用：canDeliver 为 false 会直接 return，evaluateGeofence 根本不会跑——
+    // 之前排查"进圈没反应"如果卡在这一步，日志上只会看到这一行、看不到距离/
+    // transition，就是这里拦住了。定位问题排查完可以删。
+    console.warn(
+      '[reminder] applyLocationSample',
+      schedule.id,
+      schedule.title,
+      'canDeliver=',
+      canDeliver,
+      'disposition=',
+      schedule.runtime.reminder_disposition_state,
+    );
+    if (!canDeliver) return;
 
     const mode = resolveWatchMode(schedule);
+    const center = resolveGeofenceCenter(schedule, mode);
     const transition = evaluateGeofence(schedule, sample, mode);
+    console.warn(
+      '[reminder] geofence eval',
+      schedule.id,
+      schedule.title,
+      'distance=',
+      center == null ? 'no-center' : Math.round(distanceMeters(sample, center)),
+      'radius=',
+      schedule.geofence_radius_meters,
+      'was_armed=',
+      schedule.runtime.geofence_armed,
+      'transition=',
+      transition,
+    );
     if (transition === 'armed') {
       if (!this.isLive(generation)) return;
       await this.patchRuntime(schedule.id, {
@@ -938,6 +1019,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     }
     if (transition === 'triggered') {
       if (!this.isLive(generation)) return;
+      console.warn('[reminder] TRIGGERED, delivering', schedule.id, schedule.title);
       // 先消耗边沿（disarm），再送达；失败也不恢复 armed，避免圈内连响。
       await this.patchRuntime(schedule.id, {
         ...schedule.runtime,

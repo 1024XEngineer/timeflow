@@ -2,6 +2,8 @@ import * as Location from 'expo-location';
 import type { SQLiteDatabase } from 'expo-sqlite';
 import * as TaskManager from 'expo-task-manager';
 
+import { withDatabaseAccess } from '../database/accessGate';
+
 export const GEOFENCE_TASK_NAME = 'timeflow-geofence';
 
 export type GeofenceTaskPayload = {
@@ -21,7 +23,6 @@ const listeners = new Set<GeofenceTaskListener>();
  * AppRoot/ExpoLocationMonitor 那套 React 生命周期根本没启动），通知失败的事件落这里，
  * 等真正的会话起来后由 drainPendingGeofenceEvents() 取走重放，而不是直接丢掉。 */
 const PENDING_EVENTS_KEY = 'timeflow-pending-geofence-events';
-const TIMEFLOW_DATABASE_NAME = 'timeflow.db';
 
 type HeadlessScheduleRow = {
   id: string;
@@ -53,22 +54,26 @@ export async function simulateGeofenceEventForTesting(
   scheduleId: string,
   event: GeofenceTaskPayload['event'],
 ): Promise<void> {
-  const database = await openHeadlessDatabase();
-  if (database == null) {
-    throw new Error('无法打开本地日程数据库');
-  }
-
-  const schedule = await database.getFirstAsync<{
-    latitude: number | null;
-    longitude: number | null;
-  }>(
-    `SELECT latitude, longitude
-       FROM local_schedules
-      WHERE id = ?
-        AND schedule_type = 'location'
-        AND status = 'active'`,
-    scheduleId,
-  );
+  // 只把这一次查询放进队列。emit() 往下会走到同样要排队的
+  // deliverHeadlessGeofenceEvent，圈进来就是等自己持有的锁，直接死锁——队列是
+  // 不可重入的（见 accessGate.ts）。连接是全应用共用的，用完不关。
+  const schedule = await withDatabaseAccess(async () => {
+    const database = await openHeadlessDatabase();
+    if (database == null) {
+      throw new Error('无法打开本地日程数据库');
+    }
+    return database.getFirstAsync<{
+      latitude: number | null;
+      longitude: number | null;
+    }>(
+      `SELECT latitude, longitude
+         FROM local_schedules
+        WHERE id = ?
+          AND schedule_type = 'location'
+          AND status = 'active'`,
+      scheduleId,
+    );
+  });
   if (schedule?.latitude == null || schedule.longitude == null) {
     throw new Error('这条地点提醒没有可用的坐标');
   }
@@ -172,13 +177,20 @@ type HeadlessDeliveryResult = 'native' | 'notification' | 'state_updated';
 async function deliverHeadlessGeofenceEvent(
   payload: GeofenceTaskPayload,
 ): Promise<HeadlessDeliveryResult | false> {
+  // 同上：跟主会话的写入事务、reminderGuardTask.ts 的唤醒排同一条队列。
+  return withDatabaseAccess(() => deliverHeadlessGeofenceEventInner(payload));
+}
+
+async function deliverHeadlessGeofenceEventInner(
+  payload: GeofenceTaskPayload,
+): Promise<HeadlessDeliveryResult | false> {
   const database = await openHeadlessDatabase();
   if (database == null) return false;
 
-  // istanbul ignore next -- database is only non-null with a real expo-sqlite, which
-  // openHeadlessDatabase() can never resolve in this Jest env (see the file header);
-  // unreachable here.
   {
+    // istanbul ignore next -- database is only non-null with a real expo-sqlite, which
+    // openHeadlessDatabase() can never resolve in this Jest env (see the file header);
+    // unreachable here.
     if (payload.event === 'exit') {
       await database.runAsync(
         `UPDATE local_schedules
@@ -292,12 +304,16 @@ async function presentHeadlessNativeAlarm(
   }
 }
 
+/**
+ * 拿全应用共用的那一条连接，不自己 openDatabaseAsync——重复打开同一个库会让原生
+ * 对象被提前释放、把主会话那条连接一起弄废（详见 infrastructure/database/sqlite.ts）。
+ */
 async function openHeadlessDatabase(): Promise<SQLiteDatabase | null> {
   try {
-    const { openDatabaseAsync } = await import('expo-sqlite');
+    const { openTimeflowDatabase } = await import('../database/sqlite');
     // istanbul ignore next -- unreachable in this Jest env: the import above always throws
     // first (no --experimental-vm-modules, see the file header), so this line never runs.
-    return await openDatabaseAsync(TIMEFLOW_DATABASE_NAME);
+    return await openTimeflowDatabase();
   } catch {
     return null;
   }

@@ -16,7 +16,9 @@ import { FakeAuthSessionStore } from '../../fakes/FakeAuthSessionStore';
 import { openTimeflowDatabase } from '../../../src/infrastructure/database';
 
 jest.mock('../../../src/infrastructure/database', () => ({
-  openTimeflowDatabase: jest.fn<() => Promise<unknown>>().mockResolvedValue({}),
+  openTimeflowDatabase: jest
+    .fn<() => Promise<unknown>>()
+    .mockResolvedValue({ closeAsync: jest.fn<() => Promise<void>>().mockResolvedValue(undefined) }),
 }));
 jest.mock('../../../src/app/composition/createScheduleSnapshotPreparation', () => ({
   createScheduleSnapshotPreparation: jest.fn(),
@@ -82,6 +84,11 @@ jest.mock('../../../src/features/assistant/presentation/AssistantVoiceOverlay', 
   AssistantVoiceOverlay: () => null,
 }));
 
+/** AppRoot 的数据库 effect 现在会在清理时调 closeAsync()，假连接必须有这个方法。 */
+function fakeDatabase(): never {
+  return { closeAsync: jest.fn<() => Promise<void>>().mockResolvedValue(undefined) } as never;
+}
+
 const mockedOpenTimeflowDatabase = openTimeflowDatabase as jest.MockedFunction<
   typeof openTimeflowDatabase
 >;
@@ -95,7 +102,7 @@ let mockedEnsureLocalSnapshot: jest.MockedFunction<
 
 beforeEach(() => {
   mockedOpenTimeflowDatabase.mockReset();
-  mockedOpenTimeflowDatabase.mockResolvedValue({} as never);
+  mockedOpenTimeflowDatabase.mockResolvedValue(fakeDatabase());
   mockedEnsureLocalSnapshot = jest.fn<ScheduleSnapshotBootstrapService['ensureLocalSnapshot']>(
     async () => ({ status: 'skipped_local_data' }),
   );
@@ -273,7 +280,7 @@ describe('AppRoot', () => {
   it('can retry SQLite initialization after a failure', async () => {
     mockedOpenTimeflowDatabase
       .mockRejectedValueOnce(new Error('database unavailable'))
-      .mockResolvedValue({} as never);
+      .mockResolvedValue(fakeDatabase());
     const services = createController({
       accountId: 'acc_001',
       accessToken: 'opaque-token',
