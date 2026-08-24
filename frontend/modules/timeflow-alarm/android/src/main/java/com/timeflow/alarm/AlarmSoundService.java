@@ -150,14 +150,6 @@ public final class AlarmSoundService extends Service {
         soundTier = extras.soundTier;
         fullScreenEnabled = extras.fullScreen;
         speechText = extras.speechText;
-        // 诊断用：这条闹钟真正展示的这一刻，soundTier/speechText/TTS 引擎状态到底是
-        // 什么——如果 wantsSpeech()=false 或引擎没就绪，就是这两个原因之一让它
-        // 退回了打包铃。定位问题排查完可以删。
-        Log.i(TAG, "presentAlarm speech diagnostics alarmId=" + alarmId
-                + " soundTier=" + soundTier
-                + " speechText=" + speechText
-                + " wantsSpeech=" + wantsSpeech()
-                + " ttsReady=" + AlarmTtsEngine.isReady());
 
         createNotificationChannel();
         Notification notification = buildNotification(alarmId, alarmTitle, fullScreenEnabled);
@@ -590,17 +582,10 @@ public final class AlarmSoundService extends Service {
 
     private void speakCurrent() {
         if (destroyed || !AlarmTtsEngine.isReady() || !wantsSpeech()) {
-            Log.i(TAG, "speakCurrent bailed destroyed=" + destroyed
-                    + " ttsReady=" + AlarmTtsEngine.isReady()
-                    + " wantsSpeech=" + wantsSpeech());
             return;
         }
         AlarmTtsEngine.setUtteranceListener(utteranceListener);
-        // speak() 的返回值只代表"这句话有没有成功排进播放队列"，不代表真的念出来了——
-        // 但如果连排队都失败（返回 ERROR），后面大概率也不会有 onDone/onError 回调，
-        // 之前完全没有日志能看出这一步失败过。定位问题排查完可以删。
-        int result = AlarmTtsEngine.speak(speechText, "reminder-high");
-        Log.i(TAG, "speakCurrent queued text=" + speechText + " result=" + result);
+        AlarmTtsEngine.speak(speechText, "reminder-high");
     }
 
     private void replayTts() {
@@ -613,9 +598,6 @@ public final class AlarmSoundService extends Service {
     /** 引擎就绪后，若这条闹钟还在打包铃保底、且确实该念 TTS，就切过去。 */
     private void maybeSwitchToSpeech() {
         if (destroyed || !AlarmTtsEngine.isReady() || !wantsSpeech()) {
-            Log.i(TAG, "maybeSwitchToSpeech skipped destroyed=" + destroyed
-                    + " ttsReady=" + AlarmTtsEngine.isReady()
-                    + " wantsSpeech=" + wantsSpeech());
             return;
         }
         releaseMediaPlayer();

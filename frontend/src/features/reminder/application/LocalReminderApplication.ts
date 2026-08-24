@@ -741,16 +741,6 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         let presentedNatively = false;
         if (this.dependencies.alarms.presentNow != null) {
           const speechText = composeReminderSpeech(schedule);
-          // 诊断用：presentNow 这条兜底路径算出来的语音文案——定位问题排查完可以删。
-          console.warn(
-            '[reminder] presentNow speech_text',
-            schedule.id,
-            schedule.title,
-            'strength=',
-            schedule.reminder?.reminder_strength,
-            'speech_text=',
-            speechText,
-          );
           const nativeReceipt = await this.dependencies.alarms.presentNow({
             alarm_id: `present-${schedule.id}-${Date.now()}`,
             schedule_id: schedule.id,
@@ -1244,20 +1234,6 @@ function alarmRingChannels(schedule: LocalReminderSchedule): {
 } {
   const plan = resolveStrengthDeliveryPlan(schedule.reminder?.reminder_strength ?? 'medium');
   const speechText = composeReminderSpeech(schedule);
-  // 诊断用：确认排闹钟这一刻算出来的强度/声音档位/语音文案到底是什么——如果
-  // strength 不是 'high' 或者 speech_text 是空串，原生那边不可能念 TTS，问题
-  // 就出在这一步而不是原生。定位问题排查完可以删。
-  console.warn(
-    '[reminder] alarmRingChannels',
-    schedule.id,
-    schedule.title,
-    'strength=',
-    schedule.reminder?.reminder_strength,
-    'sound_tier=',
-    plan.alarmSoundTier,
-    'speech_text=',
-    speechText,
-  );
   return {
     vibrate: plan.useVibration,
     sound_tier: plan.alarmSoundTier,
