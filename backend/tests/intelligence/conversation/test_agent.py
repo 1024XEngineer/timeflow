@@ -1073,11 +1073,11 @@ async def test_delete_after_non_affirmative_confirmation_is_refused() -> None:
 @pytest.mark.parametrize(
     ("answer", "expected"),
     [
-        ("确认", True),
-        ("是的", True),
-        ("对", True),
-        ("好的", True),
-        ("删吧", True),
+        ("是", True),
+        ("确定", True),
+        ("地铁站", True),
+        ("不确定", False),
+        ("不好", False),
         ("不要删了", False),
         ("不用了", False),
         ("别删", False),
@@ -1085,7 +1085,7 @@ async def test_delete_after_non_affirmative_confirmation_is_refused() -> None:
         ("下周一周会我不参加", False),
     ],
 )
-def test_confirmation_affirmative_detection(answer: str, expected: bool) -> None:
+def test_confirmation_rejects_negation(answer: str, expected: bool) -> None:
     from timeflow.intelligence.conversation.agent import _is_affirmative
 
     assert _is_affirmative(answer) is expected
