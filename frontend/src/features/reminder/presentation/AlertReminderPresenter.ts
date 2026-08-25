@@ -12,6 +12,7 @@ const MESSAGE_BY_REASON: Record<string, string> = {
   at_time: '已到提醒时间，请及时处理。',
   before_start: '日程即将开始，请及时处理。',
   snooze_expired: '延后提醒时间已到，请及时处理。',
+  stuck_pending: '日程提醒已触发，请及时处理。',
 };
 
 /** 提醒展示编排；平台 Alert 由注入的 AlertDialogPort 完成。 */

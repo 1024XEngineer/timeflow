@@ -302,6 +302,7 @@ async def test_stream_sends_documented_request_shape() -> None:
         ],
         "stream": True,
         "stream_options": {"include_usage": True},
+        "temperature": 0.2,
         "extra_body": {"enable_thinking": False},
         "parallel_tool_calls": False,
         "tool_choice": "auto",

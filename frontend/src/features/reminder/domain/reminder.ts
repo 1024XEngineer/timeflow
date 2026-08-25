@@ -73,7 +73,12 @@ export type LocalReminderSchedule = {
 };
 
 export type ReminderTriggerReason =
-  'at_time' | 'before_start' | 'arrive_location' | 'return_to_recorded_location' | 'snooze_expired';
+  | 'at_time'
+  | 'before_start'
+  | 'arrive_location'
+  | 'return_to_recorded_location'
+  | 'snooze_expired'
+  | 'stuck_pending';
 
 export type ReminderTrigger = {
   reminder_id: string;
@@ -82,7 +87,8 @@ export type ReminderTrigger = {
   triggered_at: string;
 };
 
-export type DeliveryChannel = 'system_notification' | 'popup' | 'vibration' | 'tts' | 'local_sound';
+export type DeliveryChannel =
+  'system_notification' | 'native_full_screen' | 'popup' | 'vibration' | 'tts' | 'local_sound';
 
 export type ReminderDeliveryRequest = {
   reminder_id: string;

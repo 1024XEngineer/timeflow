@@ -70,7 +70,7 @@ describe('SqliteLocalScheduleReader', () => {
       id: 'schedule-a',
       account_id: 'account-a',
       title: 'Original title',
-      geofence_radius_meters: 200,
+      geofence_radius_meters: 400,
       reminder: {
         reminder_type: 'before_start',
         reminder_offset_minutes: 15,

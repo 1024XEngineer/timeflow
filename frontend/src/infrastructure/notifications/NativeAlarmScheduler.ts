@@ -1,5 +1,7 @@
 import type {
   AlarmNativeDisposition,
+  AlarmPresentationReceipt,
+  AlarmPresentationRequest,
   AlarmNativeEvent,
   AlarmScheduleReceipt,
   AlarmScheduleRequest,
@@ -11,6 +13,7 @@ import {
   nativeAreAlarmPermissionsGranted,
   nativeCancelAlarm,
   nativeCancelAllAlarms,
+  nativePresentAlarmNow,
   nativePeekAlarmDispositions,
   nativeScheduleAlarm,
   nativeStopAlarmRinging,
@@ -19,6 +22,24 @@ import {
 
 /** Android TimeflowAlarm 适配器；无法挂上时返回 scheduled=false。 */
 export class NativeAlarmScheduler implements AlarmSchedulerPort {
+  async presentNow(request: AlarmPresentationRequest): Promise<AlarmPresentationReceipt> {
+    const alarmId = request.alarm_id || `geofence-${request.schedule_id}-${Date.now()}`;
+    const presented = await nativePresentAlarmNow(
+      alarmId,
+      request.schedule_id,
+      request.title,
+      request.vibrate,
+      request.sound_tier,
+      request.full_screen,
+      request.speech_text,
+    );
+    return {
+      alarm_id: alarmId,
+      schedule_id: request.schedule_id,
+      presented,
+    };
+  }
+
   async schedule(request: AlarmScheduleRequest): Promise<AlarmScheduleReceipt> {
     if (!isTimeflowAlarmAvailable()) {
       return unscheduled(request.schedule_id);
@@ -39,7 +60,7 @@ export class NativeAlarmScheduler implements AlarmSchedulerPort {
       request.title,
       request.schedule_id,
       request.vibrate,
-      request.sound,
+      request.sound_tier,
       request.full_screen,
       request.speech_text,
     );

@@ -3,7 +3,6 @@ package com.timeflow.alarm;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
 import android.content.Intent;
@@ -32,7 +31,7 @@ public class AlarmIntentForwardingTest {
 
     @Test
     public void receiverForwardsSpeechTextToSoundService() {
-        String speechText = "晨会，时间到了。现在已经09点了。";
+        String speechText = "提醒你，晨会，别忘了";
         Intent incoming = new Intent(AlarmContract.ACTION_FIRE_ALARM)
                 .putExtra(AlarmContract.EXTRA_ALARM_ID, "alarm-1")
                 .putExtra(AlarmContract.EXTRA_SCHEDULE_ID, "schedule-1")
@@ -40,7 +39,7 @@ public class AlarmIntentForwardingTest {
                 .putExtra(AlarmContract.EXTRA_TITLE, "晨会")
                 .putExtra(AlarmContract.EXTRA_SPEECH_TEXT, speechText)
                 .putExtra(AlarmContract.EXTRA_VIBRATE, false)
-                .putExtra(AlarmContract.EXTRA_SOUND, true)
+                .putExtra(AlarmContract.EXTRA_SOUND_TIER, AlarmContract.SOUND_TIER_FULL)
                 .putExtra(AlarmContract.EXTRA_FULL_SCREEN, false);
 
         new AlarmReceiver().onReceive(context, incoming);
@@ -50,13 +49,16 @@ public class AlarmIntentForwardingTest {
         assertEquals(AlarmSoundService.class.getName(), started.getComponent().getClassName());
         assertEquals(speechText, started.getStringExtra(AlarmContract.EXTRA_SPEECH_TEXT));
         assertFalse(started.getBooleanExtra(AlarmContract.EXTRA_VIBRATE, true));
-        assertTrue(started.getBooleanExtra(AlarmContract.EXTRA_SOUND, false));
+        assertEquals(
+                AlarmContract.SOUND_TIER_FULL,
+                started.getStringExtra(AlarmContract.EXTRA_SOUND_TIER)
+        );
         assertFalse(started.getBooleanExtra(AlarmContract.EXTRA_FULL_SCREEN, true));
     }
 
     @Test
     public void activityServiceStartForwardsSpeechText() {
-        String speechText = "提交报告，时间到了。";
+        String speechText = "提醒你，提交报告，别忘了";
 
         AlarmSoundService.start(
                 context,
@@ -65,7 +67,7 @@ public class AlarmIntentForwardingTest {
                 202,
                 "提交报告",
                 true,
-                false,
+                AlarmContract.SOUND_TIER_NONE,
                 true,
                 speechText
         );
@@ -73,8 +75,9 @@ public class AlarmIntentForwardingTest {
         Intent started = ShadowApplication.getInstance().getNextStartedService();
         assertNotNull(started);
         assertEquals(speechText, started.getStringExtra(AlarmContract.EXTRA_SPEECH_TEXT));
-        assertTrue(started.getBooleanExtra(AlarmContract.EXTRA_VIBRATE, false));
-        assertFalse(started.getBooleanExtra(AlarmContract.EXTRA_SOUND, true));
-        assertTrue(started.getBooleanExtra(AlarmContract.EXTRA_FULL_SCREEN, false));
+        assertEquals(
+                AlarmContract.SOUND_TIER_NONE,
+                started.getStringExtra(AlarmContract.EXTRA_SOUND_TIER)
+        );
     }
 }

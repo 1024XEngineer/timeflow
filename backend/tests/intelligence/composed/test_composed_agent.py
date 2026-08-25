@@ -1085,6 +1085,52 @@ def test_command_result_rejects_mismatched_result_types() -> None:
         _command_result("msg", "bogus_op", mutation)
 
 
+def test_command_result_preserves_occurrence_overrides_for_single_occurrence_delete() -> None:
+    from timeflow.business.calendar import (
+        OccurrenceOverrideAction,
+        ScheduleOccurrenceOverrideSnapshot,
+    )
+    from timeflow.intelligence.composed.delivery import _command_result
+
+    schedule = ScheduleSnapshot(
+        id="sch_1",
+        account_id="acc",
+        schedule_type=ScheduleType.TIME,
+        schedule_kind=ScheduleKind.RECURRING,
+        title="周会",
+        is_all_day=False,
+        timezone="Asia/Shanghai",
+        status=ScheduleStatus.ACTIVE,
+        revision=2,
+        created_at=datetime(2026, 9, 7, 0, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 9, 7, 0, 0, tzinfo=UTC),
+        start_time=datetime(2026, 9, 8, 1, 0, tzinfo=UTC),
+    )
+    override = ScheduleOccurrenceOverrideSnapshot(
+        id="ov_1",
+        schedule_id="sch_1",
+        occurrence_start=datetime(2026, 9, 8, 1, 0, tzinfo=UTC),
+        action=OccurrenceOverrideAction.CANCEL,
+        created_at=datetime(2026, 9, 7, 0, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 9, 7, 0, 0, tzinfo=UTC),
+    )
+    result = ScheduleMutationResult(schedules=(schedule,), occurrence_overrides=(override,))
+
+    command = _command_result("msg", "schedule_delete", result)
+
+    assert command.schedules is not None
+    assert command.schedules[0]["id"] == "sch_1"
+    assert command.occurrence_overrides == [
+        {
+            "id": "ov_1",
+            "schedule_id": "sch_1",
+            "occurrence_start": override.occurrence_start.isoformat(),
+            "action": "cancel",
+            "replacement_schedule_id": None,
+        }
+    ]
+
+
 def test_json_value_serializes_nested_structures() -> None:
     from timeflow.intelligence.composed.delivery import _json_value
 

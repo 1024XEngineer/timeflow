@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from timeflow.business.calendar import (
     ScheduleMutationResult,
+    ScheduleOccurrenceOverrideSnapshot,
     ScheduleSearchResult,
     ScheduleSnapshot,
 )
@@ -78,11 +79,15 @@ def _command_result(
     except KeyError as exc:
         raise ValueError(f"Unsupported successful schedule operation: {tool_name}") from exc
     snapshot = result.schedules[0] if result.schedules else None
+    schedules = [_snapshot_for_client(item) for item in result.schedules]
+    overrides = [_override_for_client(item) for item in result.occurrence_overrides]
     return CommandResult(
         message_id,
         operation,
         "applied",
         schedule=_snapshot_for_client(snapshot) if snapshot is not None else None,
+        schedules=schedules or None,
+        occurrence_overrides=overrides or None,
     )
 
 
@@ -92,6 +97,15 @@ def _snapshot_for_client(snapshot: ScheduleSnapshot) -> dict[str, Any]:
         key: cast(Any, _json_value(value))
         for key, value in asdict(snapshot).items()
         if key not in {"account_id", "created_at", "updated_at", "deleted_at"}
+    }
+
+
+def _override_for_client(override: ScheduleOccurrenceOverrideSnapshot) -> dict[str, Any]:
+    """Match the Realtime Agent's client override exactly."""
+    return {
+        key: cast(Any, _json_value(value))
+        for key, value in asdict(override).items()
+        if key not in {"created_at", "updated_at"}
     }
 
 

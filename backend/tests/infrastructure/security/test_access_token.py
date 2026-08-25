@@ -104,8 +104,8 @@ def test_service_measures_secret_in_utf8_bytes() -> None:
         ({"issuer": "other-api"}, "JWT issuer must match the v1 contract"),
         ({"audience": ""}, "JWT audience must match the v1 contract"),
         ({"audience": "other-app"}, "JWT audience must match the v1 contract"),
-        ({"access_ttl_seconds": 0}, "JWT access TTL must match the v1 contract"),
-        ({"access_ttl_seconds": 7200}, "JWT access TTL must match the v1 contract"),
+        ({"access_ttl_seconds": 0}, "JWT access TTL must be greater than zero"),
+        ({"access_ttl_seconds": -1}, "JWT access TTL must be greater than zero"),
     ],
 )
 def test_service_rejects_non_v1_configuration(
@@ -114,6 +114,14 @@ def test_service_rejects_non_v1_configuration(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         build_service(**overrides)
+
+
+def test_service_accepts_a_custom_access_ttl() -> None:
+    service = build_service(access_ttl_seconds=7200)
+    issued = service.issue(ACCOUNT_ID)
+
+    assert issued.expires_in == 7200
+    assert service.verify(issued.access_token) == ACCOUNT_ID
 
 
 @pytest.mark.parametrize("missing_claim", ["sub", "iat", "exp", "iss", "aud"])

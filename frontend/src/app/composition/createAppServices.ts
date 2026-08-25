@@ -5,7 +5,10 @@ import type {
   ReminderApplicationDependencies,
   ReminderApplicationPort,
 } from '../../features/reminder/application/interfaces';
-import { LocalReminderApplication } from '../../features/reminder/application';
+import {
+  LocalReminderApplication,
+  ReminderGuardCoordinator,
+} from '../../features/reminder/application';
 import {
   LocalReminderDelivery,
   LocalReminderRecovery,
@@ -81,11 +84,19 @@ export function createAppServices(options: CreateAppServicesOptions = {}): AppSe
   };
 
   const reminder = new LocalReminderApplication(reminderPorts);
+  const reminderGuard = new ReminderGuardCoordinator({
+    schedules,
+    handleLocation: (sample) => reminder.handleLocation(sample),
+  });
   const scheduleView = new ScheduleViewStore();
   const runtime = new AppRuntime([
     {
       start: () => reminder.start(),
       stop: () => reminder.stop(),
+    },
+    {
+      start: () => reminderGuard.start(),
+      stop: () => reminderGuard.stop(),
     },
   ]);
 

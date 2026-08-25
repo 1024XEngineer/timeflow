@@ -1,9 +1,7 @@
 import type { ScheduleLocalRepository, LocalScheduleRow } from '../../../schedule/data';
 import type { LocalScheduleReader } from '../../application/interfaces';
 import type { LocalReminderSchedule, ReminderStrength } from '../../domain';
-
-/** local_schedules 表没有这一列；地点提醒暂时统一按 200 米围栏处理。 */
-const DEFAULT_GEOFENCE_RADIUS_METERS = 200;
+import { DEFAULT_GEOFENCE_RADIUS_METERS } from '../../domain/geofence';
 
 type Target = { repository: ScheduleLocalRepository; accountId: string };
 

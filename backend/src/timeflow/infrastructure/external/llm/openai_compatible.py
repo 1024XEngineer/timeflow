@@ -112,6 +112,7 @@ class OpenAICompatibleLlm(LlmPort):
                 tools=[_tool_payload(tool) for tool in tools],
                 stream=True,
                 stream_options={"include_usage": True},
+                temperature=0.2,
                 extra_body={"enable_thinking": False},
                 parallel_tool_calls=False,
                 tool_choice="auto",

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import type { AssistantApplicationPort } from '../features/assistant/application/AssistantApplication';
@@ -57,8 +57,17 @@ export function HomeScreen({
   const [trackedPttCommand, setTrackedPttCommand] = useState(pttCommand);
   const [trackedCallCommand, setTrackedCallCommand] = useState(callCommand);
   const [focusTarget, setFocusTarget] = useState<CalendarFocusTarget | null>(null);
+  const [confirmRevision, setConfirmRevision] = useState(0);
 
   useReminderPermissionNudge(reminder, alertDialog, onRequestPermission);
+
+  // 提醒确认（闹钟响铃/App 内弹窗）只写本地库，不经过语音写日程那条
+  // scheduleDataRevision 路径——地点提醒确认后要从下方地点列表里消失，
+  // 靠这里单独订阅触发重取，否则要等重启才会刷新。
+  useEffect(
+    () => reminder.onScheduleConfirmed(() => setConfirmRevision((value) => value + 1)),
+    [reminder],
+  );
 
   // command.result 写完本地库之后 lastAppliedCommand 才会更新（见
   // AssistantConversationService.applyCommandResultLocally），所以这里发现它
@@ -84,7 +93,7 @@ export function HomeScreen({
         isSigningOut={isSigningOut}
         onOpenPermissions={() => onRequestPermission()}
         onSignOut={onSignOut}
-        refreshSignal={pttScheduleRevision + callScheduleRevision}
+        refreshSignal={pttScheduleRevision + callScheduleRevision + confirmRevision}
         focusTarget={focusTarget}
         service={scheduleService}
         timezone={timezone}

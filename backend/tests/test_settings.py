@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from pytest import MonkeyPatch
 
+from timeflow.infrastructure.security.access_token import JWT_ACCESS_TTL_SECONDS
 from timeflow.infrastructure.settings import Settings, get_settings
 
 ASR_ENVIRONMENT_VARIABLES = (
@@ -264,7 +265,7 @@ def test_settings_allow_empty_jwt_secret_with_v1_defaults(
     assert settings.jwt_secret == ""
     assert settings.jwt_issuer == "timeflow-api"
     assert settings.jwt_audience == "timeflow-app"
-    assert settings.jwt_access_ttl_seconds == 3600
+    assert settings.jwt_access_ttl_seconds == JWT_ACCESS_TTL_SECONDS
 
 
 def test_settings_carry_explicit_jwt_environment_values(

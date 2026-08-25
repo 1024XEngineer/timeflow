@@ -1,5 +1,6 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
+import { withDatabaseAccess } from '../../../infrastructure/database/accessGate';
 import {
   SCHEDULE_CATEGORIES,
   type CloudScheduleSnapshot,
@@ -112,52 +113,58 @@ export class SqliteScheduleSyncService
 
     const changedScheduleIds = new Set<string>();
     try {
-      await this.database.withExclusiveTransactionAsync(async (transaction) => {
-        const existingRows = await loadExistingRows(transaction, command.snapshot.schedules);
-        const schedulesToApply: ScheduleSnapshot[] = [];
-        const freshnessBySchedule = new Map<string, ScheduleFreshness>();
-        for (const schedule of command.snapshot.schedules) {
-          const existing = existingRows.get(schedule.id);
-          if (existing !== undefined && existing.account_id !== command.accountId) {
-            throw new LocalAccountMismatchError();
+      // withExclusiveTransactionAsync 会另开一条物理连接（useNewConnection），
+      // 必须整段进队列：里面调用的仓储方法自己也走这个队列，而队列的持有者
+      // （比如守护任务）用的是共享连接——不排队的话，这里的独立连接握着写锁等
+      // 队列，队列持有者又在等这把写锁，直接死锁。
+      await withDatabaseAccess(() =>
+        this.database.withExclusiveTransactionAsync(async (transaction) => {
+          const existingRows = await loadExistingRows(transaction, command.snapshot.schedules);
+          const schedulesToApply: ScheduleSnapshot[] = [];
+          const freshnessBySchedule = new Map<string, ScheduleFreshness>();
+          for (const schedule of command.snapshot.schedules) {
+            const existing = existingRows.get(schedule.id);
+            if (existing !== undefined && existing.account_id !== command.accountId) {
+              throw new LocalAccountMismatchError();
+            }
+            if (existing === undefined || existing.cloud_revision < schedule.revision) {
+              schedulesToApply.push(schedule);
+              freshnessBySchedule.set(schedule.id, 'newer');
+            } else if (existing.cloud_revision === schedule.revision) {
+              freshnessBySchedule.set(schedule.id, 'same');
+            } else {
+              freshnessBySchedule.set(schedule.id, 'stale');
+            }
           }
-          if (existing === undefined || existing.cloud_revision < schedule.revision) {
-            schedulesToApply.push(schedule);
-            freshnessBySchedule.set(schedule.id, 'newer');
-          } else if (existing.cloud_revision === schedule.revision) {
-            freshnessBySchedule.set(schedule.id, 'same');
-          } else {
-            freshnessBySchedule.set(schedule.id, 'stale');
-          }
-        }
-        await assertReferencedRowsDoNotCrossAccount(transaction, command);
+          await assertReferencedRowsDoNotCrossAccount(transaction, command);
 
-        const repository = new ScheduleLocalRepository(transaction);
-        for (const schedule of schedulesToApply) {
-          if (!(await repository.applyCloudSchedule(toCloudRow(schedule)))) {
-            throw new Error(`Could not apply cloud schedule ${schedule.id}`);
+          const repository = new ScheduleLocalRepository(transaction, true);
+          for (const schedule of schedulesToApply) {
+            if (!(await repository.applyCloudSchedule(toCloudRow(schedule)))) {
+              throw new Error(`Could not apply cloud schedule ${schedule.id}`);
+            }
+            changedScheduleIds.add(schedule.id);
           }
-          changedScheduleIds.add(schedule.id);
-        }
-        for (const override of command.snapshot.occurrence_overrides) {
-          const freshness = freshnessBySchedule.get(override.schedule_id);
-          if (
-            freshness === undefined ||
-            !(await shouldApplyOverride(transaction, command.accountId, override, freshness))
-          ) {
-            continue;
+          for (const override of command.snapshot.occurrence_overrides) {
+            const freshness = freshnessBySchedule.get(override.schedule_id);
+            if (
+              freshness === undefined ||
+              !(await shouldApplyOverride(transaction, command.accountId, override, freshness))
+            ) {
+              continue;
+            }
+            if (
+              !(await repository.upsertOccurrenceOverride(
+                command.accountId,
+                toLocalOverride(override),
+              ))
+            ) {
+              throw new Error(`Could not apply occurrence override ${override.id}`);
+            }
+            changedScheduleIds.add(override.schedule_id);
           }
-          if (
-            !(await repository.upsertOccurrenceOverride(
-              command.accountId,
-              toLocalOverride(override),
-            ))
-          ) {
-            throw new Error(`Could not apply occurrence override ${override.id}`);
-          }
-          changedScheduleIds.add(override.schedule_id);
-        }
-      });
+        }),
+      );
     } catch (error) {
       return failed(
         command.messageId,
@@ -185,86 +192,89 @@ export class SqliteScheduleSyncService
     const changedScheduleIds = new Set<string>();
     const removedScheduleIds = new Set<string>();
     try {
-      await this.database.withExclusiveTransactionAsync(async (transaction) => {
-        const existingRows = await loadExistingRows(transaction, command.snapshot.schedules);
-        const freshnessBySchedule = new Map<string, ScheduleFreshness>();
-        for (const schedule of command.snapshot.schedules) {
-          const existing = existingRows.get(schedule.id);
-          if (existing !== undefined && existing.account_id !== command.accountId) {
-            throw new LocalAccountMismatchError();
-          }
-          freshnessBySchedule.set(
-            schedule.id,
-            existing === undefined
-              ? 'newer'
-              : existing.cloud_revision < schedule.revision
-                ? 'newer'
-                : existing.cloud_revision === schedule.revision
-                  ? 'same'
-                  : 'stale',
-          );
-        }
-        await assertReferencedRowsDoNotCrossAccount(transaction, command);
-
-        const repository = new ScheduleLocalRepository(transaction);
-        const localOverrides = await repository.listOccurrenceOverrides(command.accountId);
-        const protectedScheduleIds = new Set<string>();
-        for (const override of localOverrides) {
-          if (freshnessBySchedule.get(override.schedule_id) === 'stale') {
-            protectedScheduleIds.add(override.schedule_id);
-            if (override.replacement_schedule_id !== null) {
-              protectedScheduleIds.add(override.replacement_schedule_id);
+      // 同上：另开连接的事务必须整段进队列，否则会跟共享连接上的调用方死锁。
+      await withDatabaseAccess(() =>
+        this.database.withExclusiveTransactionAsync(async (transaction) => {
+          const existingRows = await loadExistingRows(transaction, command.snapshot.schedules);
+          const freshnessBySchedule = new Map<string, ScheduleFreshness>();
+          for (const schedule of command.snapshot.schedules) {
+            const existing = existingRows.get(schedule.id);
+            if (existing !== undefined && existing.account_id !== command.accountId) {
+              throw new LocalAccountMismatchError();
             }
-            continue;
+            freshnessBySchedule.set(
+              schedule.id,
+              existing === undefined
+                ? 'newer'
+                : existing.cloud_revision < schedule.revision
+                  ? 'newer'
+                  : existing.cloud_revision === schedule.revision
+                    ? 'same'
+                    : 'stale',
+            );
           }
-          if (!(await purgeOccurrenceOverride(transaction, command.accountId, override.id))) {
-            throw new Error(`Could not purge occurrence override ${override.id}`);
-          }
-          changedScheduleIds.add(override.schedule_id);
-        }
+          await assertReferencedRowsDoNotCrossAccount(transaction, command);
 
-        const incomingScheduleIds = new Set(
-          command.snapshot.schedules.map((schedule) => schedule.id),
-        );
-        for (const localSchedule of await repository.listSchedules(command.accountId)) {
-          if (
-            incomingScheduleIds.has(localSchedule.id) ||
-            protectedScheduleIds.has(localSchedule.id)
-          ) {
-            continue;
+          const repository = new ScheduleLocalRepository(transaction, true);
+          const localOverrides = await repository.listOccurrenceOverrides(command.accountId);
+          const protectedScheduleIds = new Set<string>();
+          for (const override of localOverrides) {
+            if (freshnessBySchedule.get(override.schedule_id) === 'stale') {
+              protectedScheduleIds.add(override.schedule_id);
+              if (override.replacement_schedule_id !== null) {
+                protectedScheduleIds.add(override.replacement_schedule_id);
+              }
+              continue;
+            }
+            if (!(await purgeOccurrenceOverride(transaction, command.accountId, override.id))) {
+              throw new Error(`Could not purge occurrence override ${override.id}`);
+            }
+            changedScheduleIds.add(override.schedule_id);
           }
-          if (!(await repository.purgeSchedule(command.accountId, localSchedule.id))) {
-            throw new Error(`Could not purge stale schedule ${localSchedule.id}`);
-          }
-          changedScheduleIds.add(localSchedule.id);
-          removedScheduleIds.add(localSchedule.id);
-        }
 
-        for (const schedule of command.snapshot.schedules) {
-          if (freshnessBySchedule.get(schedule.id) === 'stale') {
-            continue;
+          const incomingScheduleIds = new Set(
+            command.snapshot.schedules.map((schedule) => schedule.id),
+          );
+          for (const localSchedule of await repository.listSchedules(command.accountId)) {
+            if (
+              incomingScheduleIds.has(localSchedule.id) ||
+              protectedScheduleIds.has(localSchedule.id)
+            ) {
+              continue;
+            }
+            if (!(await repository.purgeSchedule(command.accountId, localSchedule.id))) {
+              throw new Error(`Could not purge stale schedule ${localSchedule.id}`);
+            }
+            changedScheduleIds.add(localSchedule.id);
+            removedScheduleIds.add(localSchedule.id);
           }
-          if (!(await repository.applyCloudSchedule(toCloudRow(schedule)))) {
-            throw new Error(`Could not apply cloud schedule ${schedule.id}`);
-          }
-          changedScheduleIds.add(schedule.id);
-        }
 
-        for (const override of command.snapshot.occurrence_overrides) {
-          if (freshnessBySchedule.get(override.schedule_id) === 'stale') {
-            continue;
+          for (const schedule of command.snapshot.schedules) {
+            if (freshnessBySchedule.get(schedule.id) === 'stale') {
+              continue;
+            }
+            if (!(await repository.applyCloudSchedule(toCloudRow(schedule)))) {
+              throw new Error(`Could not apply cloud schedule ${schedule.id}`);
+            }
+            changedScheduleIds.add(schedule.id);
           }
-          if (
-            !(await repository.upsertOccurrenceOverride(
-              command.accountId,
-              toLocalOverride(override),
-            ))
-          ) {
-            throw new Error(`Could not apply occurrence override ${override.id}`);
+
+          for (const override of command.snapshot.occurrence_overrides) {
+            if (freshnessBySchedule.get(override.schedule_id) === 'stale') {
+              continue;
+            }
+            if (
+              !(await repository.upsertOccurrenceOverride(
+                command.accountId,
+                toLocalOverride(override),
+              ))
+            ) {
+              throw new Error(`Could not apply occurrence override ${override.id}`);
+            }
+            changedScheduleIds.add(override.schedule_id);
           }
-          changedScheduleIds.add(override.schedule_id);
-        }
-      });
+        }),
+      );
     } catch (error) {
       return failedFullSnapshot(
         error instanceof LocalAccountMismatchError

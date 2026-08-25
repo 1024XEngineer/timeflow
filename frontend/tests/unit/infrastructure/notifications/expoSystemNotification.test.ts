@@ -70,13 +70,13 @@ describe('ExpoSystemNotification (fake native notifications module injected)', (
     expect(receipt).toEqual({ notification_id: 'n1', shown: true });
     expect(setNotificationChannelAsync).toHaveBeenCalledTimes(1);
     expect(setNotificationChannelAsync).toHaveBeenCalledWith(
-      'timeflow-reminders',
-      expect.objectContaining({ name: '日程提醒' }),
+      'timeflow-reminders-quiet',
+      expect.objectContaining({ name: '日程提醒（静音）', sound: null }),
     );
     expect(scheduleNotificationAsync).toHaveBeenCalledWith({
       identifier: 'n1',
       content: { title: '标题', body: '内容', sound: false },
-      trigger: null,
+      trigger: { channelId: 'timeflow-reminders-quiet' },
     });
   });
 
