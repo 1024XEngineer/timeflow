@@ -1,3 +1,4 @@
+import type { ClientTelemetryPort } from '../../../../shared/observability';
 import type {
   LocalReminderSchedule,
   LocationSample,
@@ -22,6 +23,8 @@ export type ReminderApplicationDependencies = {
   recovery: import('./ReminderRecoveryPort').ReminderRecoveryPort;
   state: import('./ReminderStateStore').ReminderStateStore;
   dispositionSync: import('./ReminderDispositionSyncPort').ReminderDispositionSyncPort;
+  /** 客户端埋点；缺省为 NoOp，单测不用接 Sentry。 */
+  telemetry?: ClientTelemetryPort;
 };
 
 export type ReminderSnoozeRequest = {

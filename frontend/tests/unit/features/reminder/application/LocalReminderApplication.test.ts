@@ -22,6 +22,12 @@ import type {
   ReminderRuntimeState,
   ReminderStrength,
 } from '../../../../../src/features/reminder/domain';
+import type {
+  ClientTelemetryPort,
+  DeviceTelemetryContext,
+  ReminderDeliveryTelemetry,
+  ReminderPermissionBlockedTelemetry,
+} from '../../../../../src/shared/observability';
 
 /** 事件订阅回调是 fire-and-forget（void handleNativeAlarmEvent(event)），背后
  * 排了好几层 await（enqueueOp → teardownDelivery 的 6 个串行任务 → state 读写
@@ -1757,4 +1763,289 @@ describe('LocalReminderApplication', () => {
       expect(deps.vibration.vibrate).not.toHaveBeenCalled();
     });
   });
+
+  describe('client telemetry', () => {
+    it('records native_ok when the native alarm fires', async () => {
+      const schedule = fixtureSchedule({ id: 's1' });
+      const telemetry = new RecordingTelemetry();
+      const listenerRef: { current: ((event: AlarmNativeEvent) => void) | null } = {
+        current: null,
+      };
+      const { alarms } = createFakeAlarms({
+        subscribe: jest.fn((listener: (event: AlarmNativeEvent) => void) => {
+          listenerRef.current = listener;
+          return () => {
+            listenerRef.current = null;
+          };
+        }),
+      });
+      const deps = createDeps({
+        alarms,
+        schedules: new FakeScheduleReader([schedule]),
+        telemetry,
+      });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+
+      listenerRef.current?.({
+        type: 'fired',
+        schedule_id: 's1',
+        alarm_id: 'alarm-1',
+        title: schedule.title,
+        at: '2026-08-18T10:00:00.000Z',
+      });
+      await flushAsync();
+
+      expect(telemetry.deliveries).toEqual([
+        expect.objectContaining({
+          channel: 'native_full_screen',
+          manufacturer: 'other',
+          outcome: 'native_ok',
+          overlay_failed: false,
+          schedule_type: 'time',
+          strength: 'medium',
+          used_fallback_audio: false,
+        }),
+      ]);
+    });
+
+    it('does not record native_ok when hydrating a pending native disposition', async () => {
+      const telemetry = new RecordingTelemetry();
+      const { alarms } = createFakeAlarms({
+        peekNativeDispositions: jest.fn(async () => [
+          {
+            schedule_id: 's1',
+            alarm_id: 'alarm-1',
+            state: 'pending' as const,
+            updated_at: '2026-08-18T09:30:00.000Z',
+          },
+        ]),
+      });
+      const deps = createDeps({ alarms, telemetry });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      expect(telemetry.deliveries).toEqual([]);
+    });
+
+    it('records js_channel for a location reminder that used the JS popup path', async () => {
+      const telemetry = new RecordingTelemetry();
+      const schedule = fixtureSchedule({
+        id: 's1',
+        schedule_type: 'location',
+        latitude: 31.2304,
+        longitude: 121.4737,
+        reminder: {
+          reminder_type: 'arrive_location',
+          reminder_trigger_at: null,
+          reminder_offset_minutes: null,
+          reminder_strength: 'high',
+        },
+      });
+      const deps = createDeps({
+        schedules: new FakeScheduleReader([schedule]),
+        telemetry,
+      });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+
+      await app.deliver({
+        reminder_id: 'r1',
+        schedule_id: 's1',
+        reason: 'arrive_location',
+        triggered_at: '2026-08-18T10:00:00.000Z',
+      });
+
+      expect(telemetry.deliveries).toEqual([
+        expect.objectContaining({
+          channel: 'popup',
+          outcome: 'js_channel',
+          schedule_type: 'location',
+          strength: 'high',
+          used_fallback_audio: true,
+        }),
+      ]);
+      expect(JSON.stringify(telemetry.deliveries)).not.toContain('喝水');
+    });
+
+    it('does not record js_channel when a native alarm already owns the ring UI', async () => {
+      const telemetry = new RecordingTelemetry();
+      const schedule = fixtureSchedule({ id: 's1' });
+      const listenerRef: { current: ((event: AlarmNativeEvent) => void) | null } = {
+        current: null,
+      };
+      const { alarms } = createFakeAlarms({
+        subscribe: jest.fn((listener: (event: AlarmNativeEvent) => void) => {
+          listenerRef.current = listener;
+          return () => {
+            listenerRef.current = null;
+          };
+        }),
+      });
+      const deps = createDeps({
+        alarms,
+        schedules: new FakeScheduleReader([schedule]),
+        telemetry,
+      });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+
+      listenerRef.current?.({
+        type: 'fired',
+        schedule_id: 's1',
+        alarm_id: 'alarm-1',
+        title: schedule.title,
+        at: '2026-08-18T10:00:00.000Z',
+      });
+      await flushAsync();
+
+      await app.deliver({
+        reminder_id: 'r1',
+        schedule_id: 's1',
+        reason: 'at_time',
+        triggered_at: '2026-08-18T10:00:00.000Z',
+      });
+
+      expect(telemetry.deliveries).toEqual([
+        expect.objectContaining({
+          channel: 'native_full_screen',
+          outcome: 'native_ok',
+        }),
+      ]);
+    });
+
+    it('records native_declined when a time schedule cannot be hung on the native alarm', async () => {
+      const telemetry = new RecordingTelemetry();
+      const schedule = fixtureSchedule({ id: 's1' });
+      const { alarms } = createFakeAlarms({
+        schedule: jest.fn(async (request: AlarmScheduleRequest) => ({
+          alarm_id: '',
+          schedule_id: request.schedule_id,
+          scheduled: false,
+        })),
+      });
+      const deps = createDeps({
+        alarms,
+        device: {
+          getStatus: jest.fn(async () => ({
+            platform: 'android' as const,
+            supported: true,
+            permissions: {
+              notifications: true,
+              exact_alarm: false,
+              overlay: true,
+              full_screen: true,
+              battery_optimization: true,
+              location_foreground: true,
+              location_background: true,
+              microphone: true,
+            },
+            background_execution: true,
+            oemGuidance: {
+              manufacturer: 'xiaomi' as const,
+              autostartGuided: false,
+              backgroundPopupGuided: false,
+              lastOverlayFailed: false,
+            },
+          })),
+          onAppActive: jest.fn(() => () => {}),
+          openOemSettings: jest.fn(async () => true),
+          openSettings: jest.fn(async () => true),
+          requestPermission: jest.fn(async () => true),
+        },
+        schedules: new FakeScheduleReader([schedule]),
+        telemetry,
+      });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      telemetry.deliveries.length = 0;
+      telemetry.permissions.length = 0;
+
+      await app.register(schedule);
+      await flushAsync();
+
+      expect(telemetry.deliveries).toEqual([
+        expect.objectContaining({
+          channel: 'native_full_screen',
+          manufacturer: 'xiaomi',
+          outcome: 'native_declined',
+          schedule_type: 'time',
+        }),
+      ]);
+      expect(telemetry.permissions).toEqual([
+        expect.objectContaining({
+          manufacturer: 'xiaomi',
+          missing: ['exact_alarm'],
+        }),
+      ]);
+    });
+
+    it('does not re-record permission gaps during rebuild', async () => {
+      const telemetry = new RecordingTelemetry();
+      const schedule = fixtureSchedule({ id: 's1' });
+      const deps = createDeps({
+        device: {
+          getStatus: jest.fn(async () => ({
+            platform: 'android' as const,
+            supported: true,
+            permissions: {
+              notifications: true,
+              exact_alarm: false,
+              overlay: true,
+              full_screen: true,
+              battery_optimization: true,
+              location_foreground: true,
+              location_background: true,
+              microphone: true,
+            },
+            background_execution: true,
+            oemGuidance: {
+              manufacturer: null,
+              autostartGuided: false,
+              backgroundPopupGuided: false,
+              lastOverlayFailed: false,
+            },
+          })),
+          onAppActive: jest.fn(() => () => {}),
+          openOemSettings: jest.fn(async () => true),
+          openSettings: jest.fn(async () => true),
+          requestPermission: jest.fn(async () => true),
+        },
+        schedules: new FakeScheduleReader([schedule]),
+        telemetry,
+      });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      await app.register(schedule);
+      await flushAsync();
+      const permissionCount = telemetry.permissions.length;
+
+      await app.rebuild();
+      await flushAsync();
+
+      expect(telemetry.permissions).toHaveLength(permissionCount);
+    });
+  });
 });
+
+class RecordingTelemetry implements ClientTelemetryPort {
+  readonly deliveries: ReminderDeliveryTelemetry[] = [];
+  readonly permissions: ReminderPermissionBlockedTelemetry[] = [];
+  readonly errors: string[] = [];
+  readonly contexts: DeviceTelemetryContext[] = [];
+
+  setDeviceContext(context: DeviceTelemetryContext): void {
+    this.contexts.push(context);
+  }
+
+  recordReminderDelivery(event: ReminderDeliveryTelemetry): void {
+    this.deliveries.push(event);
+  }
+
+  recordReminderPermissionBlocked(event: ReminderPermissionBlockedTelemetry): void {
+    this.permissions.push(event);
+  }
+
+  recordUnexpectedError(kind: 'reminder_delivery'): void {
+    this.errors.push(kind);
+  }
+}

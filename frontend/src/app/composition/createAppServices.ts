@@ -28,6 +28,7 @@ import {
   ReactNativeVibration,
 } from '../../infrastructure/notifications';
 import { IntervalTimeListener } from '../../infrastructure/time';
+import { SentryClientTelemetry } from '../../infrastructure/observability';
 import { ScheduleViewStore } from '../../features/schedule/presentation';
 
 export interface CreateAppServicesOptions {
@@ -78,6 +79,7 @@ export function createAppServices(options: CreateAppServicesOptions = {}): AppSe
     recovery: new LocalReminderRecovery(),
     state: reminderState,
     dispositionSync: new ReminderDispositionHttpSync(auth.protectedClient),
+    telemetry: new SentryClientTelemetry(),
     ...restOverrides,
     schedules,
     presenter,

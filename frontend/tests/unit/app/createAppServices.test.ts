@@ -9,6 +9,7 @@ import {
 import { subscribeGuardTaskEvents } from '../../../src/infrastructure/location/reminderGuardTask';
 import { FakeAuthSessionStore } from '../../fakes/FakeAuthSessionStore';
 
+jest.mock('@sentry/react-native');
 jest.mock('../../../src/infrastructure/location/reminderGuardTask', () => {
   const actual = jest.requireActual<
     typeof import('../../../src/infrastructure/location/reminderGuardTask')

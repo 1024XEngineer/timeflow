@@ -18,7 +18,7 @@ import { openTimeflowDatabase } from '../../../src/infrastructure/database';
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ bottom: 0, left: 0, right: 0, top: 0 }),
 }));
-
+jest.mock('@sentry/react-native');
 jest.mock('../../../src/infrastructure/database', () => ({
   openTimeflowDatabase: jest
     .fn<() => Promise<unknown>>()

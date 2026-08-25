@@ -1,3 +1,14 @@
+import {
+  NOOP_CLIENT_TELEMETRY,
+  boundManufacturer,
+  boundOs,
+  boundPermissions,
+  type ClientTelemetryPort,
+  type ReminderDeliveryOutcome,
+  type ReminderTelemetryChannel,
+  type TelemetryManufacturer,
+  type TelemetryOs,
+} from '../../../shared/observability';
 import type {
   ReminderApplicationDependencies,
   ReminderApplicationPort,
@@ -9,6 +20,7 @@ import type {
   LocationWatchHandle,
   AlarmScheduleReceipt,
   AlarmNativeEvent,
+  DeviceCapabilityStatus,
   DevicePermission,
 } from './interfaces';
 import type {
@@ -43,6 +55,34 @@ const EMPTY_CHANNELS: ReminderDeliveryReceipt['channels'] = [];
 /** 跟 reminderGuardTask.ts 的同名常量保持一致——两处合起来覆盖会话存活/已死两种场景。 */
 const STUCK_PENDING_THRESHOLD_MS = 2 * 60_000;
 
+type DeviceTelemetrySnapshot = {
+  manufacturer: TelemetryManufacturer;
+  os: TelemetryOs;
+  overlayFailed: boolean;
+  permissions: DeviceCapabilityStatus['permissions'];
+  platform: DeviceCapabilityStatus['platform'];
+  supported: boolean;
+};
+
+const DENIED_PERMISSIONS: DeviceCapabilityStatus['permissions'] = {
+  battery_optimization: false,
+  exact_alarm: false,
+  full_screen: false,
+  location_background: false,
+  location_foreground: false,
+  microphone: false,
+  notifications: false,
+  overlay: false,
+};
+
+const CHANNEL_PRIORITY: readonly DeliveryChannel[] = [
+  'popup',
+  'system_notification',
+  'tts',
+  'local_sound',
+  'vibration',
+];
+
 function emptyRegistration(scheduleId: string): ReminderRegistration {
   return {
     schedule_id: scheduleId,
@@ -73,8 +113,11 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   /** 每次 stop / 失败回滚自增；停机前开始的工作持有旧世代，重启后仍视为已取消。 */
   private generation = 0;
   private acceptingWork = true;
+  private readonly telemetry: ClientTelemetryPort;
 
-  constructor(readonly dependencies: ReminderApplicationDependencies) {}
+  constructor(readonly dependencies: ReminderApplicationDependencies) {
+    this.telemetry = dependencies.telemetry ?? NOOP_CLIENT_TELEMETRY;
+  }
 
   async start(): Promise<void> {
     return this.enqueueOp(() => this.startInternal());
@@ -808,6 +851,17 @@ export class LocalReminderApplication implements ReminderApplicationPort {
           return this.stoppedReceipt(trigger);
         }
 
+        if (presentedNatively) {
+          await this.recordNativeOk(schedule.id);
+        } else if (!this.nativePresented.has(schedule.id) && channels.length > 0) {
+          await this.recordJsChannelDelivery(
+            schedule,
+            request.strength,
+            channels,
+            usedFallbackAudio,
+          );
+        }
+
         return {
           delivery_id: deliveryId,
           schedule_id: schedule.id,
@@ -836,6 +890,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     try {
       await this.track(this.runDeliver(trigger, generation));
     } catch {
+      this.telemetry.recordUnexpectedError('reminder_delivery');
       // 单条送达失败不阻断其余日程。
     }
   }
@@ -864,6 +919,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     if (!event.schedule_id) return;
     if (event.type === 'fired') {
       await this.acknowledgeNativeFire(event.schedule_id, event.at);
+      await this.recordNativeOk(event.schedule_id);
       return;
     }
     if (event.type === 'snoozed') {
@@ -1118,6 +1174,9 @@ export class LocalReminderApplication implements ReminderApplicationPort {
       'battery_optimization',
       'notifications',
     ]);
+    if (!receipt.scheduled) {
+      await this.recordNativeScheduleFailure(schedule);
+    }
     return receipt;
   }
 
@@ -1131,12 +1190,97 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     permissions: readonly DevicePermission[],
   ): Promise<void> {
     const status = await this.dependencies.device.getStatus();
+    this.syncDeviceContext(status);
     if (status.platform !== 'android') return;
     const missing = permissions.filter((permission) => !status.permissions[permission]);
     if (missing.length === 0) return;
+    this.telemetry.recordReminderPermissionBlocked({
+      manufacturer: boundManufacturer(status.oemGuidance.manufacturer),
+      missing: boundPermissions(missing),
+    });
     for (const listener of this.permissionBlockedListeners) {
       listener({ schedule_id: scheduleId, missing });
     }
+  }
+
+  private async recordJsChannelDelivery(
+    schedule: LocalReminderSchedule,
+    strength: ReminderDeliveryRequest['strength'],
+    channels: readonly DeliveryChannel[],
+    usedFallbackAudio: boolean,
+  ): Promise<void> {
+    const snapshot = await this.snapshotDevice();
+    this.telemetry.recordReminderDelivery({
+      channel: primaryDeliveryChannel(channels),
+      manufacturer: snapshot.manufacturer,
+      outcome: 'js_channel',
+      overlay_failed: snapshot.overlayFailed,
+      schedule_type: schedule.schedule_type,
+      strength,
+      used_fallback_audio: usedFallbackAudio,
+    });
+  }
+
+  private async recordNativeOk(scheduleId: string): Promise<void> {
+    const schedule =
+      (await this.dependencies.schedules.getReminderSchedule(scheduleId)) ??
+      this.registrations.get(scheduleId)?.schedule;
+    const snapshot = await this.snapshotDevice();
+    this.telemetry.recordReminderDelivery({
+      channel: 'native_full_screen',
+      manufacturer: snapshot.manufacturer,
+      outcome: 'native_ok',
+      overlay_failed: snapshot.overlayFailed,
+      schedule_type: schedule?.schedule_type ?? 'time',
+      strength: schedule?.reminder?.reminder_strength ?? 'medium',
+      used_fallback_audio: false,
+    });
+  }
+
+  private async recordNativeScheduleFailure(schedule: LocalReminderSchedule): Promise<void> {
+    const snapshot = await this.snapshotDevice();
+    const outcome = classifyNativeScheduleFailure(snapshot);
+    if (outcome == null) return;
+    this.telemetry.recordReminderDelivery({
+      channel: 'native_full_screen',
+      manufacturer: snapshot.manufacturer,
+      outcome,
+      overlay_failed: snapshot.overlayFailed,
+      schedule_type: 'time',
+      strength: schedule.reminder?.reminder_strength ?? 'medium',
+      used_fallback_audio: false,
+    });
+  }
+
+  private async snapshotDevice(): Promise<DeviceTelemetrySnapshot> {
+    try {
+      const status = await this.dependencies.device.getStatus();
+      this.syncDeviceContext(status);
+      return {
+        manufacturer: boundManufacturer(status.oemGuidance.manufacturer),
+        os: boundOs(status.platform),
+        overlayFailed: status.oemGuidance.lastOverlayFailed,
+        permissions: status.permissions,
+        platform: status.platform,
+        supported: status.supported,
+      };
+    } catch {
+      return {
+        manufacturer: 'other',
+        os: 'other',
+        overlayFailed: false,
+        permissions: DENIED_PERMISSIONS,
+        platform: 'unknown',
+        supported: false,
+      };
+    }
+  }
+
+  private syncDeviceContext(status: DeviceCapabilityStatus): void {
+    this.telemetry.setDeviceContext({
+      manufacturer: boundManufacturer(status.oemGuidance.manufacturer),
+      os: boundOs(status.platform),
+    });
   }
 
   private buildTrigger(
@@ -1185,6 +1329,24 @@ function toDeliveryRequest(
     strength: schedule.reminder?.reminder_strength ?? 'medium',
     trigger,
   };
+}
+
+function primaryDeliveryChannel(channels: readonly DeliveryChannel[]): ReminderTelemetryChannel {
+  for (const candidate of CHANNEL_PRIORITY) {
+    if (channels.includes(candidate)) return candidate;
+  }
+  return channels[0] ?? 'popup';
+}
+
+function classifyNativeScheduleFailure(
+  snapshot: DeviceTelemetrySnapshot,
+): ReminderDeliveryOutcome | null {
+  if (snapshot.platform !== 'android') return null;
+  if (!snapshot.supported) return 'native_unavailable';
+  if (!snapshot.permissions.exact_alarm || !snapshot.permissions.notifications) {
+    return 'native_declined';
+  }
+  return 'native_unavailable';
 }
 
 /**

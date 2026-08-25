@@ -69,6 +69,22 @@ module.exports = {
           defaultChannel: 'timeflow-reminders',
         },
       ],
+      ...sentryPlugin(),
     ],
   },
 };
+
+function sentryPlugin() {
+  if (!process.env.SENTRY_ORG || !process.env.SENTRY_PROJECT) {
+    return [];
+  }
+  return [
+    [
+      '@sentry/react-native',
+      {
+        organization: process.env.SENTRY_ORG,
+        project: process.env.SENTRY_PROJECT,
+      },
+    ],
+  ];
+}
