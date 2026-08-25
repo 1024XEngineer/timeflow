@@ -25,6 +25,8 @@ from timeflow.intelligence.conversation.llm import (
     LlmStreamCompleted,
     TextDelta,
     ToolCallDelta,
+    ToolDefinition,
+    ToolResultMessage,
 )
 from timeflow.intelligence.conversation.tools import ToolRegistry, request_user_input_definition
 from timeflow.intelligence.ports import (
@@ -35,6 +37,7 @@ from timeflow.intelligence.ports import (
     Transcript,
 )
 from timeflow.intelligence.speech.tts import SpeechSegment, TtsAudioChunk, TtsCompleted
+from timeflow.intelligence.telemetry import NoOpVoiceTelemetry
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +145,14 @@ class RecordingSink:
 
     async def deliver_session_end(self, stream: Any) -> None:
         self.calls.append(("session_end", stream.session_id))
+
+
+class InterruptTelemetry(NoOpVoiceTelemetry):
+    def __init__(self) -> None:
+        self.interrupts: list[str] = []
+
+    def record_interrupt(self, session_id: str) -> None:
+        self.interrupts.append(session_id)
 
 
 async def chunks(payload: bytes = b"a" * 3200) -> AsyncIterator[bytes]:
@@ -941,6 +952,162 @@ def test_continuous_speech_started_interrupts_playing_tts() -> None:
     asyncio.run(scenario())
 
 
+def test_continuous_speech_started_cancels_after_tts_send_while_playback_remains() -> None:
+    """Barge-in after the server finished sending still cancels audible leftover audio."""
+
+    class LongTts:
+        def stream(self, segments: AsyncIterable[SpeechSegment]) -> AsyncIterator[Any]:
+            async def events() -> AsyncIterator[Any]:
+                async for _segment in segments:
+                    # 24 kHz 16-bit mono: 48000 bytes is one second of playback.
+                    yield TtsAudioChunk(b"a" * 48_000)
+                yield TtsCompleted(1)
+
+            return events()
+
+    class BlockingSink(RecordingSink):
+        def __init__(self) -> None:
+            super().__init__()
+            self.audio_ended = asyncio.Event()
+
+        async def deliver_audio(
+            self,
+            value: AudioReply,
+            chunks: AsyncIterator[bytes],
+            stream: Any,
+        ) -> None:
+            self.calls.append(("audio_start", value))
+            async for chunk in chunks:
+                self.calls.append(("audio", chunk))
+            self.calls.append(("audio_end", value.audio_id))
+            self.audio_ended.set()
+
+    class LateBargeAsr:
+        def __init__(self, audio_ended: asyncio.Event) -> None:
+            self._audio_ended = audio_ended
+
+        def stream(self, audio: AsyncIterable[bytes]) -> AsyncIterator[Any]:
+            async def events() -> AsyncIterator[Any]:
+                async for _ in audio:
+                    pass
+                yield SpeechStarted()
+                yield TranscriptCompleted("第一句")
+                await self._audio_ended.wait()
+                # Let _deliver_speech clear active_audio so barge-in must use leftover
+                # playable_until, not the in-flight send path.
+                await asyncio.sleep(0.01)
+                yield SpeechStarted()
+                yield TranscriptCompleted("第二句")
+
+            return events()
+
+    async def scenario() -> None:
+        sink = BlockingSink()
+        agent = ComposedVoiceAgent(
+            LateBargeAsr(sink.audio_ended),
+            lambda account_id, observer, client_location: Agent(
+                FakeLlm(
+                    [
+                        [TextDelta("第一句回复。"), completed()],
+                        [TextDelta("第二句回复。"), completed()],
+                    ]
+                ),
+                ToolRegistry([]),
+            ),
+            LongTts(),
+            sink,
+        )
+
+        await agent.handle_audio(chunks(), Stream(voice_mode="continuous"))
+
+        kinds = [kind for kind, _ in sink.calls]
+        assert "audio_canceled" in kinds
+        assert sum(1 for kind, _ in sink.calls if kind == "transcript") == 2
+
+    asyncio.run(scenario())
+
+
+def test_continuous_speech_after_playback_window_is_a_new_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once leftover playback has expired, the next utterance is a new command, not a barge-in."""
+
+    import timeflow.intelligence.composed.agent as composed_agent
+
+    monkeypatch.setattr(composed_agent, "_MIN_PLAYABLE_SECONDS", 0.0)
+
+    class TinyTts:
+        def stream(self, segments: AsyncIterable[SpeechSegment]) -> AsyncIterator[Any]:
+            async def events() -> AsyncIterator[Any]:
+                async for _segment in segments:
+                    yield TtsAudioChunk(b"aa")
+                yield TtsCompleted(1)
+
+            return events()
+
+    class EndedSink(RecordingSink):
+        def __init__(self) -> None:
+            super().__init__()
+            self.audio_ended = asyncio.Event()
+
+        async def deliver_audio(
+            self,
+            value: AudioReply,
+            chunks: AsyncIterator[bytes],
+            stream: Any,
+        ) -> None:
+            self.calls.append(("audio_start", value))
+            async for chunk in chunks:
+                self.calls.append(("audio", chunk))
+            self.calls.append(("audio_end", value.audio_id))
+            self.audio_ended.set()
+
+    class AfterPlaybackAsr:
+        def __init__(self, audio_ended: asyncio.Event) -> None:
+            self._audio_ended = audio_ended
+
+        def stream(self, audio: AsyncIterable[bytes]) -> AsyncIterator[Any]:
+            async def events() -> AsyncIterator[Any]:
+                async for _ in audio:
+                    pass
+                yield TranscriptCompleted("第一句")
+                await self._audio_ended.wait()
+                await asyncio.sleep(0.02)
+                yield SpeechStarted()
+                yield TranscriptCompleted("取消")
+
+            return events()
+
+    async def scenario() -> None:
+        sink = EndedSink()
+        telemetry = InterruptTelemetry()
+        agent = ComposedVoiceAgent(
+            AfterPlaybackAsr(sink.audio_ended),
+            lambda account_id, observer, client_location: Agent(
+                FakeLlm(
+                    [
+                        [TextDelta("第一句回复。"), completed()],
+                        [TextDelta("好的，已取消。"), completed()],
+                        [TextDelta("好的。"), completed()],
+                    ]
+                ),
+                ToolRegistry([]),
+            ),
+            TinyTts(),
+            sink,
+            telemetry=telemetry,
+        )
+
+        await agent.handle_audio(chunks(), Stream(voice_mode="continuous"))
+
+        transcripts = [value.text for kind, value in sink.calls if kind == "transcript"]
+        assert transcripts == ["第一句", "取消"]
+        assert all(kind != "audio_canceled" for kind, _ in sink.calls)
+        assert telemetry.interrupts == []
+
+    asyncio.run(scenario())
+
+
 def test_continuous_end_conversation_waits_for_farewell_audio() -> None:
     """Session end follows farewell text, audio, and voice.tts.end."""
 
@@ -1383,53 +1550,164 @@ def test_continuous_repeated_speech_markers_keep_first_timestamp() -> None:
     asyncio.run(scenario())
 
 
-def test_continuous_speech_started_before_tts_is_ignored() -> None:
-    """A speech_started while the LLM is still generating (no active TTS) is ignored."""
+def test_continuous_speech_started_during_llm_interrupts_the_turn() -> None:
+    """Speech during LLM cancels that turn so a later '取消' is not waiting on it."""
 
     llm_started = asyncio.Event()
-    release_llm = asyncio.Event()
 
-    class GatedLlm:
+    class GatedThenFastLlm:
+        def __init__(self) -> None:
+            self.calls = 0
+
         def stream(self, messages: Any, tools: Any) -> AsyncIterator[Any]:
             del tools
+            self.calls += 1
+            call = self.calls
 
             async def events() -> AsyncIterator[Any]:
-                llm_started.set()
-                yield TextDelta("慢速回复")
-                await release_llm.wait()
+                if call == 1:
+                    llm_started.set()
+                    await asyncio.Event().wait()
+                    yield TextDelta("慢速回复")
+                    yield completed()
+                    return
+                yield TextDelta("好的，已取消。")
                 yield completed()
 
             return events()
 
-    class EarlySpeechAsr:
-        def __init__(self, llm_started: asyncio.Event) -> None:
-            self._llm_started = llm_started
-
+    class CancelDuringLlmAsr:
         def stream(self, audio: AsyncIterable[bytes]) -> AsyncIterator[Any]:
             async def events() -> AsyncIterator[Any]:
                 async for _ in audio:
                     pass
-                yield TranscriptCompleted("你好")
-                await self._llm_started.wait()
+                yield TranscriptCompleted("创建日程")
+                await llm_started.wait()
                 yield SpeechStarted()
+                yield TranscriptCompleted("取消")
 
             return events()
 
     async def scenario() -> None:
         sink = RecordingSink()
+        telemetry = InterruptTelemetry()
         agent = ComposedVoiceAgent(
-            EarlySpeechAsr(llm_started),
-            lambda account_id, observer, client_location: Agent(GatedLlm(), ToolRegistry([])),
+            CancelDuringLlmAsr(),
+            lambda account_id, observer, client_location: Agent(
+                GatedThenFastLlm(), ToolRegistry([])
+            ),
             FakeTts(),
             sink,
+            telemetry=telemetry,
         )
-        task = asyncio.create_task(agent.handle_audio(chunks(), Stream(voice_mode="continuous")))
-        await asyncio.wait_for(llm_started.wait(), 2)
-        await asyncio.sleep(0.01)
-        release_llm.set()
-        await task
+        await asyncio.wait_for(
+            agent.handle_audio(chunks(), Stream(voice_mode="continuous")),
+            timeout=2,
+        )
 
+        transcripts = [value.text for kind, value in sink.calls if kind == "transcript"]
+        assert transcripts == ["创建日程", "取消"]
+        assert telemetry.interrupts == ["session_1"]
         assert all(kind != "audio_canceled" for kind, _ in sink.calls)
+
+    asyncio.run(scenario())
+
+
+def test_continuous_speech_started_during_tool_keeps_committed_result() -> None:
+    """Barge-in during a shielded tool cannot un-commit; the next turn sees the tool result."""
+
+    tool_started = asyncio.Event()
+    cancel_seen = asyncio.Event()
+    release_tool = asyncio.Event()
+    result = '{"status":"ok","id":"schedule_1"}'
+
+    @dataclass
+    class ShieldedCreateTool:
+        definition: Any = field(
+            default_factory=lambda: ToolDefinition(
+                "schedule_create", "创建日程", {"type": "object"}
+            )
+        )
+        started: asyncio.Event = field(default_factory=lambda: tool_started)
+        cancel_seen: asyncio.Event = field(default_factory=lambda: cancel_seen)
+        release: asyncio.Event = field(default_factory=lambda: release_tool)
+        committed: bool = False
+
+        async def execute(self, arguments: Any) -> str:
+            del arguments
+            work = asyncio.create_task(self._commit())
+            cancelled = False
+            try:
+                payload = await asyncio.shield(work)
+            except asyncio.CancelledError:
+                cancelled = True
+                self.cancel_seen.set()
+                payload = await work
+            self.committed = True
+            if cancelled:
+                error = asyncio.CancelledError()
+                error.result = payload  # type: ignore[attr-defined]
+                raise error
+            return payload
+
+        async def _commit(self) -> str:
+            self.started.set()
+            await self.release.wait()
+            return result
+
+    class CancelDuringToolAsr:
+        def stream(self, audio: AsyncIterable[bytes]) -> AsyncIterator[Any]:
+            async def events() -> AsyncIterator[Any]:
+                async for _ in audio:
+                    pass
+                yield TranscriptCompleted("创建日程")
+                await tool_started.wait()
+                yield SpeechStarted()
+                await cancel_seen.wait()
+                release_tool.set()
+                yield TranscriptCompleted("取消")
+
+            return events()
+
+    async def scenario() -> None:
+        sink = RecordingSink()
+        llm = FakeLlm(
+            [
+                [
+                    ToolCallDelta(0, "call_1", "schedule_create", '{"title":"开会"}'),
+                    LlmStreamCompleted("tool_calls", None),
+                ],
+                [TextDelta("好的，已取消。"), completed()],
+            ]
+        )
+        tool = ShieldedCreateTool()
+        telemetry = InterruptTelemetry()
+        agent = ComposedVoiceAgent(
+            CancelDuringToolAsr(),
+            lambda account_id, observer, client_location: Agent(
+                llm, ToolRegistry([tool])
+            ),
+            FakeTts(),
+            sink,
+            telemetry=telemetry,
+        )
+        await asyncio.wait_for(
+            agent.handle_audio(chunks(), Stream(voice_mode="continuous")),
+            timeout=2,
+        )
+
+        transcripts = [value.text for kind, value in sink.calls if kind == "transcript"]
+        assert transcripts == ["创建日程", "取消"]
+        assert tool.committed is True
+        assert any(
+            isinstance(message, ToolResultMessage) and message.content == result
+            for snapshot in llm.messages
+            for message in snapshot
+        )
+        assert telemetry.interrupts == ["session_1"]
+        assert all(kind != "audio_canceled" for kind, _ in sink.calls)
+        replies = [value.text for kind, value in sink.calls if kind == "reply"]
+        assert "已创建" not in "".join(replies)
 
     asyncio.run(scenario())
 

@@ -41,5 +41,11 @@ class ComposedSession:
     active_turn: TurnState | None = None
     active_audio_id: str | None = None
     active_audio_stream: StreamInfo | None = None
+    last_audio_id: str | None = None
+    last_audio_stream: StreamInfo | None = None
+    playable_until: float = 0.0
+    reply_audio_bytes: int = 0
+    reply_sample_rate_hz: int = 24_000
+    playback_canceled: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     turn_lock: asyncio.Lock = field(default_factory=asyncio.Lock)

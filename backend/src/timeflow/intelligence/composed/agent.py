@@ -63,6 +63,9 @@ logger = logging.getLogger(__name__)
 # delete that commits the first few schedules then hits the cap). The earlier tool calls
 # have already committed, so the user must be told the rest were not processed.
 _TOOL_ROUND_LIMIT_MESSAGE = "一次操作太多了，请拆成几次再试。"
+# After the server finishes sending TTS, the phone may still be playing it. Keep a
+# barge-in window of at least this long so a quick "取消" is not treated as a new turn.
+_MIN_PLAYABLE_SECONDS = 0.75
 
 
 def _client_location_from_stream(stream: AudioStreamInfo) -> ClientLocation | None:
@@ -240,12 +243,13 @@ class ComposedVoiceAgent:
             session.generation += 1
             turn = session.active_turn
             session.active_turn = None
-            audio_id = session.active_audio_id
-            audio_stream = session.active_audio_stream
-            session.active_audio_id = None
-            session.active_audio_stream = None
-        if session.voice_mode == "continuous" and audio_id is not None and audio_stream is not None:
-            await self._result_sink.deliver_canceled(AudioCanceled(audio_id), audio_stream)
+        canceled = False
+        if session.voice_mode == "continuous":
+            canceled = await self._cancel_playable_reply(session)
+        if not canceled:
+            async with session.lock:
+                session.active_audio_id = None
+                session.active_audio_stream = None
         self._telemetry.set_session_stage(session_id, "waiting_user")
         await self._cancel(turn)
 
@@ -332,8 +336,11 @@ class ComposedVoiceAgent:
         """Run one Agent turn per server-VAD final within a single long audio stream.
 
         A pump task consumes the ASR stream, forwarding finals to the main loop and
-        flagging the start of new speech; when speech starts while a turn's TTS is
-        playing, that turn is cancelled so the next final takes over immediately.
+        flagging the start of new speech. New speech while a turn is still running —
+        LLM, tool, or TTS — cancels that turn so the next final takes over immediately.
+        A tool that already started still commits; its result stays in the conversation
+        and TTS is skipped. After leftover playback has expired, the next final is a
+        new command.
         """
         events = self._asr.stream(chunks)
         completed_queue: asyncio.Queue[
@@ -369,6 +376,7 @@ class ComposedVoiceAgent:
                         if speech_started_at is None:
                             speech_started_at = self._monotonic()
                         self._telemetry.set_session_stage(stream.session_id, "asr")
+                        await self._cancel_playable_reply(session)
                         barge_in.set()
                     elif isinstance(event, SpeechStopped):
                         if speech_stopped_at is None:
@@ -421,13 +429,16 @@ class ComposedVoiceAgent:
                     status = await self._finish_continuous_turn(turn_task, stream)
                     self._log_timing(stream, status, timing, turn_span)
                 else:
+                    # Speech started while this turn is still running — including LLM or
+                    # tool execution, not only TTS. Skip leftover TTS; a tool that already
+                    # started still commits, and the next final sees that result.
+                    cut = await self._cancel_playable_reply(session)
                     async with session.lock:
-                        audio_id = session.active_audio_id
-                        audio_stream = session.active_audio_stream
-                    if audio_id is not None and audio_stream is not None:
-                        await self._result_sink.deliver_canceled(
-                            AudioCanceled(audio_id), audio_stream
-                        )
+                        cut = cut or session.playback_canceled
+                        session.playback_canceled = False
+                    if not turn_task.done():
+                        if not cut:
+                            self._telemetry.record_interrupt(stream.session_id)
                         turn_task.cancel()
                         await asyncio.gather(turn_task, return_exceptions=True)
                         self._log_timing(stream, "interrupted", timing, turn_span)
@@ -465,6 +476,31 @@ class ComposedVoiceAgent:
                 extra={"session_id": stream.session_id, "stream_id": stream.stream_id},
             )
             return "failed"
+
+    async def _cancel_playable_reply(self, session: ComposedSession) -> bool:
+        """Cancel a reply still being sent, or one the phone may still be playing."""
+        now = self._monotonic()
+        async with session.lock:
+            if session.active_audio_id is not None and session.active_audio_stream is not None:
+                audio_id = session.active_audio_id
+                stream = session.active_audio_stream
+            elif (
+                session.last_audio_id is not None
+                and session.last_audio_stream is not None
+                and now < session.playable_until
+            ):
+                audio_id = session.last_audio_id
+                stream = session.last_audio_stream
+            else:
+                return False
+            session.active_audio_id = None
+            session.active_audio_stream = None
+            session.last_audio_id = None
+            session.last_audio_stream = None
+            session.playable_until = 0.0
+            session.playback_canceled = True
+        await self._result_sink.deliver_canceled(AudioCanceled(audio_id), stream)
+        return True
 
     async def _act_on_transcript(
         self,
@@ -750,6 +786,11 @@ class ComposedVoiceAgent:
                             return
                         session.active_audio_id = event.audio_id
                         session.active_audio_stream = stream
+                        session.last_audio_id = event.audio_id
+                        session.last_audio_stream = stream
+                        session.reply_audio_bytes = 0
+                        session.reply_sample_rate_hz = max(event.sample_rate_hz, 1)
+                        session.playback_canceled = False
                     delivery = asyncio.create_task(
                         self._result_sink.deliver_audio(reply, self._audio_chunks(queue), stream)
                     )
@@ -758,6 +799,8 @@ class ComposedVoiceAgent:
                         raise ValueError("Speech audio chunk arrived before start")
                     if delivery is not None and delivery.done():
                         delivery.result()
+                    async with session.lock:
+                        session.reply_audio_bytes += len(event.data)
                     await queue.put(event.data)
                 elif isinstance(event, SpeechAudioCompleted):
                     if queue is None or delivery is None:
@@ -766,6 +809,14 @@ class ComposedVoiceAgent:
                     await queue.put(None)
                     await delivery
                     async with session.lock:
+                        duration = session.reply_audio_bytes / max(
+                            session.reply_sample_rate_hz * 2, 1
+                        )
+                        # Remaining playback from *now*, matching realtime: generation
+                        # often finishes before the phone has sounded the last byte.
+                        session.playable_until = self._monotonic() + max(
+                            duration, _MIN_PLAYABLE_SECONDS
+                        )
                         if session.active_audio_id == event.audio_id:
                             session.active_audio_id = None
                             session.active_audio_stream = None
