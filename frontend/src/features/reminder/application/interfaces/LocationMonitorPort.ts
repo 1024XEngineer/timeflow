@@ -1,25 +1,17 @@
 import type { GeoPoint, LocationSample } from '../../domain';
 
-export type LocationWatchMode = 'arrive' | 'return';
-
 /**
  * 围栏重建目标：携带 watch 所需几何参数，避免 infrastructure 依赖完整领域日程，
- * 同时保证冷启动 rebuild 能重新挂上系统围栏。
+ * 同时保证冷启动 rebuild 能重新恢复所有地点监听。
  */
 export type LocationRebuildTarget = {
   schedule_id: string;
   center: GeoPoint;
-  radius_meters: number;
-  mode: LocationWatchMode;
-  background: boolean;
 };
 
 export type LocationWatchRequest = {
   schedule_id: string;
   center: GeoPoint;
-  radius_meters: number;
-  mode: LocationWatchMode;
-  background: boolean;
 };
 
 export type LocationWatchHandle = {
@@ -30,7 +22,6 @@ export type LocationWatchHandle = {
 export type LocationMonitorEvent = {
   schedule_id: string;
   sample: LocationSample;
-  phase: 'inside' | 'outside' | 'entered' | 'left';
 };
 
 /** 定位采样和系统围栏能力；此处不做提醒触发判断。 */

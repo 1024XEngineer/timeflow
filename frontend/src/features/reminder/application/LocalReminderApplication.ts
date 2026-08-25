@@ -341,16 +341,9 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     const locationTargets = active
       .filter((schedule) => schedule.schedule_type === 'location')
       .map((schedule) => {
-        const mode = resolveWatchMode(schedule);
-        const center = resolveGeofenceCenter(schedule, mode);
+        const center = resolveGeofenceCenter(schedule, resolveWatchMode(schedule));
         if (center == null) return null;
-        return {
-          schedule_id: schedule.id,
-          center,
-          radius_meters: schedule.geofence_radius_meters,
-          mode,
-          background: true,
-        };
+        return { schedule_id: schedule.id, center };
       })
       .filter((target): target is NonNullable<typeof target> => target != null);
     const locationHandles = await this.dependencies.location.rebuild(
@@ -1094,17 +1087,10 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   private async watchLocationSchedule(
     schedule: LocalReminderSchedule,
   ): Promise<LocationWatchHandle | null> {
-    const mode = resolveWatchMode(schedule);
-    const center = resolveGeofenceCenter(schedule, mode);
+    const center = resolveGeofenceCenter(schedule, resolveWatchMode(schedule));
     if (center == null) return null;
     const handle = await this.dependencies.location.watch(
-      {
-        schedule_id: schedule.id,
-        center,
-        radius_meters: schedule.geofence_radius_meters,
-        mode,
-        background: true,
-      },
+      { schedule_id: schedule.id, center },
       async (event) => {
         await this.handleLocationMonitorEvent(event);
       },

@@ -852,7 +852,6 @@ describe('LocalReminderApplication', () => {
 
       await initialListener?.({
         schedule_id: 's1',
-        phase: 'inside',
         sample: {
           latitude: 31.2304,
           longitude: 121.4737,
@@ -883,7 +882,6 @@ describe('LocalReminderApplication', () => {
 
       await initialListener?.({
         schedule_id: 's1',
-        phase: 'inside',
         sample: {
           latitude: 40,
           longitude: 121.4737,
@@ -914,7 +912,6 @@ describe('LocalReminderApplication', () => {
           await Promise.resolve(
             listener({
               schedule_id: target.schedule_id,
-              phase: 'inside',
               sample: {
                 latitude: 31.2304,
                 longitude: 121.4737,
@@ -995,7 +992,6 @@ describe('LocalReminderApplication', () => {
       let watchListener:
         | ((event: {
             schedule_id: string;
-            phase: string;
             sample: {
               latitude: number;
               longitude: number;
@@ -1014,7 +1010,6 @@ describe('LocalReminderApplication', () => {
 
       await watchListener?.({
         schedule_id: 's1',
-        phase: 'inside',
         sample: {
           latitude: 40,
           longitude: 121.4737,
@@ -1032,7 +1027,6 @@ describe('LocalReminderApplication', () => {
       let watchListener:
         | ((event: {
             schedule_id: string;
-            phase: string;
             sample: {
               latitude: number;
               longitude: number;
@@ -1053,7 +1047,6 @@ describe('LocalReminderApplication', () => {
       await expect(
         watchListener?.({
           schedule_id: 's1',
-          phase: 'inside',
           sample: {
             latitude: 40,
             longitude: 121.4737,

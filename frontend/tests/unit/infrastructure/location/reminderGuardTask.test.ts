@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { AppState } from 'react-native';
 
 /**
  * 跟 geofenceTask.test.ts 同一条约束：真正碰数据库的那段（openDatabase() → loadStorageModules()
@@ -20,6 +21,15 @@ jest.mock('expo-task-manager', () => ({
 }));
 
 jest.mock('expo-location', () => ({}));
+
+/**
+ * 不能 jest.mock('react-native')——整个模块被替换掉之后 expo-modules-core 拿不到
+ * Platform.select，jest-expo 的 setup 会在 resetModules 时直接炸。这里只改真实
+ * AppState 上的那一个属性。
+ */
+function setAppState(state: string): void {
+  Object.defineProperty(AppState, 'currentState', { value: state, configurable: true });
+}
 
 type Sample = {
   latitude: number;
@@ -81,6 +91,28 @@ describe('resolveNextPollIntervalMs', () => {
   });
 });
 
+describe('isAppForegrounded', () => {
+  /**
+   * 这个判定决定 refreshGuardRegistration() 每次重注册带不带 foregroundService，
+   * 而 expo-location 对两种形态的前台要求正好相反（带着在后台会抛、不带在前台
+   * 会把常驻服务拆掉），所以它必须严格等价于"AppState 是不是 active"，
+   * inactive（iOS 来电/下拉通知栏那种过渡态）不能算前台。
+   */
+  it('only treats the active AppState as foreground', () => {
+    const { module } = loadModule();
+    for (const [state, expected] of [
+      ['active', true],
+      ['background', false],
+      ['inactive', false],
+      ['unknown', false],
+    ] as const) {
+      setAppState(state);
+      expect(module.isAppForegrounded()).toBe(expected);
+    }
+    setAppState('active');
+  });
+});
+
 describe('guard task definition and subscription', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -127,22 +159,25 @@ describe('guard task executor routing', () => {
     await expect(executor({ data: undefined, error: new Error('boom') })).resolves.toBeUndefined();
   });
 
-  it('runs the fallback passes when woken with no location payload', async () => {
-    const { module, executor } = loadModule();
-    const listener = jest.fn();
-    module.subscribeGuardTaskEvents(listener);
+  it('runs the fallback passes when woken with no location payload and no live listener', async () => {
+    const { executor } = loadModule();
 
-    // 没有位置样本时不喂任何 listener；但时间型兜底 + 卡住扫描这两个 pass 无条件执行（拿 null 即返回）。
+    // 没有位置样本、也没有活着的会话（taskListener 为空）→ 地点判定那一支什么都不
+    // 分发，但时间型兜底 + 卡住扫描这两个 pass 跟地点样本无关，照样无条件执行
+    // （openDatabase 拿 null 即返回，这里只验证不会抛错）。
     await expect(executor({ data: undefined, error: null })).resolves.toBeUndefined();
-    expect(listener).not.toHaveBeenCalled();
   });
 
-  it('dispatches the last location sample to every live listener', async () => {
+  it('dispatches the last location sample to the current listener, superseding any earlier one', async () => {
+    // 单槽、后来者顶掉前任。这个语义是为了防泄漏：ReminderGuardCoordinator 在
+    // createAppServices() 里构造，而 AppRoot 的 useMemo 会在 Fast Refresh 时把整个
+    // 服务容器重建一遍且不销毁旧实例——用 Set 的话订阅者只增不减（围栏那边真机上
+    // 实测涨到 3 个，同一事件被处理三遍）。
     const { module, executor } = loadModule();
-    const first = jest.fn();
-    const second = jest.fn();
-    module.subscribeGuardTaskEvents(first);
-    module.subscribeGuardTaskEvents(second);
+    const stale = jest.fn();
+    const current = jest.fn();
+    module.subscribeGuardTaskEvents(stale);
+    module.subscribeGuardTaskEvents(current);
 
     await executor({ data: locationPayload({ ts: 1_752_000_000_000, accuracy: 10 }), error: null });
 
@@ -152,8 +187,22 @@ describe('guard task executor routing', () => {
       accuracy_meters: 10,
       observed_at: new Date(1_752_000_000_000).toISOString(),
     };
-    expect(first).toHaveBeenCalledWith(expected);
-    expect(second).toHaveBeenCalledWith(expected);
+    expect(current).toHaveBeenCalledWith(expected);
+    expect(stale).not.toHaveBeenCalled();
+  });
+
+  it('a superseded listener cannot clear the current slot on its late unsubscribe', async () => {
+    const { module, executor } = loadModule();
+    const stale = jest.fn();
+    const current = jest.fn();
+    const disposeStale = module.subscribeGuardTaskEvents(stale);
+    module.subscribeGuardTaskEvents(current);
+    // 旧实例迟到的退订不能把现役 listener 一起清掉——否则会掉进 headless 分支。
+    disposeStale();
+
+    await executor({ data: locationPayload(), error: null });
+
+    expect(current).toHaveBeenCalledTimes(1);
   });
 
   it('falls back to accuracy 0 when the location sample omits accuracy', async () => {
@@ -166,10 +215,28 @@ describe('guard task executor routing', () => {
     expect(listener).toHaveBeenCalledWith(expect.objectContaining({ accuracy_meters: 0 }));
   });
 
-  it('completes a headless pass without live listeners (openDatabase returns null)', async () => {
+  it('completes a headless location pass when there is no listener and the app is backgrounded', async () => {
+    setAppState('background');
     const { executor } = loadModule();
-    // 没有任何订阅者 → listeners.size === 0 → 走 headless 分支，openDatabase 拿到 null 即返回，
-    // 接着无条件跑 runTimeFallbackPass/runStuckPendingPass（同样拿 null 即返回）。
+    // 没有订阅者 且 App 不在前台 → 走 headless 地点判定，openDatabase 拿到 null 即
+    // 返回，接着无条件跑 runTimeFallbackPass/runStuckPendingPass（同样拿 null 即返回）。
     await expect(executor({ data: locationPayload(), error: null })).resolves.toBeUndefined();
+    setAppState('active');
+  });
+
+  it('skips the headless location pass when there is no listener but the app is foregrounded', async () => {
+    // 槽位空不等于会话已死。真机上实测：App 开在前台、界面正常渲染，槽位却连续
+    // 8 个 tick 是空的（旧 coordinator 已退订、新的还没 start 到位的窗口期）。这时
+    // 走 headless 地点判定会绕过 LocalReminderApplication 的内存锁去认领并弹提醒，
+    // 正是这个仓库反复出现的"同一条提醒弹好几遍"。宁可漏一次轮询。时间型兜底 +
+    // 卡住扫描不受影响，照样会跑（跟地点判定完全独立，见源码里的说明）。
+    setAppState('active');
+    const { module, executor } = loadModule();
+    const listener = jest.fn();
+    const dispose = module.subscribeGuardTaskEvents(listener);
+    dispose();
+
+    await expect(executor({ data: locationPayload(), error: null })).resolves.toBeUndefined();
+    expect(listener).not.toHaveBeenCalled();
   });
 });

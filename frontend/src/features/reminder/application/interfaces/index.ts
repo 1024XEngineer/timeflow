@@ -25,7 +25,6 @@ export type {
   LocationMonitorPort,
   LocationRebuildTarget,
   LocationWatchHandle,
-  LocationWatchMode,
   LocationWatchRequest,
 } from './LocationMonitorPort';
 export type {

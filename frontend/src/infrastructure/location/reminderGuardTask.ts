@@ -1,6 +1,7 @@
 import * as Location from 'expo-location';
 import type { SQLiteDatabase } from 'expo-sqlite';
 import * as TaskManager from 'expo-task-manager';
+import { AppState } from 'react-native';
 
 import { withDatabaseAccess } from '../database/accessGate';
 import {
@@ -21,6 +22,33 @@ import type {
 
 export const GUARD_TASK_NAME = 'timeflow-reminder-guard';
 export const GUARD_NOTIFICATION_TITLE = 'Timeflow 提醒守护';
+export const GUARD_NOTIFICATION_BODY = '提醒守护运行中';
+
+/**
+ * 这个任务的注册形态必须跟 App 的前后台状态严格对齐——expo-location 原生侧对
+ * "带不带 foregroundService"有两条方向相反的硬约束，挑任何一个固定值都会踩坑：
+ *
+ * 1. App 不在前台时**带** foregroundService 注册 → LocationModule.kt 直接抛
+ *    ForegroundServiceStartNotAllowedException。
+ * 2. App 在前台、常驻服务正在跑时，用**不带** foregroundService 的同名注册重注册
+ *    → LocationTaskConsumer.maybeStartForegroundService() 命中
+ *    `if (mService != null && !useForegroundService) stopForegroundService()`，
+ *    把常驻前台服务当场拆掉。
+ *
+ * 注意 2 的对偶：App 在后台时那个方法在更前面就 early return 了（"Foreground
+ * location task cannot be started while the app is in the background!"），走不到
+ * 拆除分支——也就是说后台不带 foregroundService 是安全的，前台不带才是致命的。
+ *
+ * 真机实测过的故障链（守护通知出现约 1.2 秒后消失、之后重启都起不来）：
+ * ReminderGuardCoordinator 带 foregroundService 建起服务 → 任务第一次唤醒 →
+ * 末尾 refreshGuardRegistration() 不带 foregroundService 重注册 → 命中约束 2 →
+ * 服务被拆。而 hasStartedLocationUpdatesAsync() 分辨不出这种"注册还在、服务没了"
+ * 的降级态，协调器就此永远早退；这份降级注册还会被 expo-task-manager 持久化，
+ * force-stop / 冷启动都清不掉，只有热重载（真的 unregister 一次）才碰巧修好。
+ */
+export function isAppForegrounded(): boolean {
+  return AppState.currentState === 'active';
+}
 /** 卡在 pending 超过这么久还没被确认/延后，当成"响了但没送达"重新弹一次。 */
 const STUCK_PENDING_THRESHOLD_MS = 2 * 60_000;
 
@@ -32,13 +60,22 @@ export type GuardTaskSample = {
 };
 
 type GuardTaskListener = (sample: GuardTaskSample) => unknown;
-const listeners = new Set<GuardTaskListener>();
+
+/**
+ * 单槽，不是集合——这个任务只该有一个消费者（ReminderGuardCoordinator），而
+ * AppRoot 的 `useMemo(() => createAppServices())` 会在 Fast Refresh 时重建整个服务
+ * 容器、不销毁旧实例。用 Set 的话订阅者只增不减：真机上量到过订阅者涨到 3 个、
+ * 同一个事件被处理三遍，也量到过槽位被清空后长时间没人补上（连续 8 个 tick 为空）。
+ */
+let taskListener: GuardTaskListener | null = null;
 
 /** 订阅常驻前台服务的位置心跳；须在应用入口尽早 import 本模块以完成 defineTask。 */
 export function subscribeGuardTaskEvents(listener: GuardTaskListener): () => void {
-  listeners.add(listener);
+  taskListener = listener;
+  // 只有还占着槽位的那个 listener 才能把槽位清空——不加这个判断的话，一个早已
+  // 被顶掉的旧实例调用自己的退订函数时，会把现役 listener 一起清掉。
   return () => {
-    listeners.delete(listener);
+    if (taskListener === listener) taskListener = null;
   };
 }
 
@@ -46,7 +83,7 @@ export function subscribeGuardTaskEvents(listener: GuardTaskListener): () => voi
  * 拿全应用共用的那一条连接，不自己 openDatabaseAsync——重复打开同一个库会让
  * 原生对象被提前释放、把主会话那条连接一起弄废（详见 infrastructure/database/
  * sqlite.ts 的说明）。懒加载是为了避免顶层 import 在测试环境直接抛错，参照
- * geofenceTask.ts 的同类做法。
+ * 这个仓库里原生相关的按需依赖一律走动态 import 的既有约定。
  */
 async function openDatabase(): Promise<SQLiteDatabase | null> {
   try {
@@ -95,27 +132,49 @@ if (!TaskManager.isTaskDefined(GUARD_TASK_NAME)) {
     // 主会话那条持有同一个对象的连接会跟着一起失效。
     if (sample == null) {
       console.warn('[guard] task woken with no location payload', payload);
-    } else if (listeners.size > 0) {
-      console.warn('[guard] dispatching sample to', listeners.size, 'live listener(s)');
-      for (const listener of listeners) {
-        await listener(sample);
-      }
+    } else if (taskListener != null) {
+      console.warn('[guard] dispatching sample to the live listener');
+      await taskListener(sample);
+    } else if (isAppForegrounded()) {
+      // 槽位空**不等于**会话已死，这是下面那条 headless 通道原来的判定错误所在。
+      // 真机上实测：App 开在前台、界面正常渲染，槽位却连续 8 个 tick 是空的
+      // （旧 coordinator 已退订、新的还没 start 到位的窗口期）。这时候如果照旧走
+      // headless 地点判定，就会绕过 LocalReminderApplication 的内存锁去认领并弹
+      // 提醒——那条通道的全部设计前提是"App 真的被系统杀了"，判错的代价正是这个
+      // 仓库反复出现的"同一条提醒弹好几遍"。
+      //
+      // 所以前台时宁可地点判定这一跳什么都不做：漏一次轮询只是晚 30 秒，重复弹是
+      // 用户直接可见的故障。真正的结构性修法是让数据库的认领成为唯一权威（弹之前
+      // 先落 pending），那样这个 gate 退化成纯性能优化、判错也无害——但那要动
+      // 提醒引擎，不在这次改动范围内。
+      console.warn('[guard] no listener but app is foregrounded, skipping headless location pass');
     } else if (accountId == null) {
-      console.warn('[guard] no persisted account session, skipping headless pass');
+      console.warn('[guard] no persisted account session, skipping headless location pass');
     } else {
-      console.warn('[guard] no live listeners, taking headless location pass', sample);
+      console.warn(
+        '[guard] no live listener and app backgrounded, taking headless location pass',
+        sample,
+      );
       await withDatabaseAccess(async () => {
         const database = await openDatabase();
         if (database == null) return;
         await runHeadlessLocationPass(database, sample, accountId);
+      });
+    }
 
-        // 时间型兜底 + 卡住扫描：只在会话没存活（App 真的被系统杀了，没有
-        // LocalReminderApplication 在管）时才跑，所以就放在这个分支里。会话存活时
-        // 这两件事完全没必要——JS 30s 轮询、原生闹钟已经够用——硬跑反而会跟
-        // LocalReminderApplication 自己内存里的 activeDeliveries/deliverLocks 抢同一
-        // 条日程：JS 那边已经在内存里认领、还没来得及写数据库的窗口期，这边从数据库
-        // 看还是"没人认领"，两边各自独立弹一次，互不知道对方存在——这正是真机上
-        // "同一条提醒弹好几遍、弹出来又被对方收尾逻辑关掉"的根源。
+    // 时间型兜底 + 卡住扫描：跟上面的地点判定完全独立，只要 taskListener 是空的
+    // （没有活着的会话在管）就该跑，不管这次唤醒有没有位置样本、App 在不在前台。
+    // 这两个 pass 全靠"认领即权威"的条件 UPDATE 自保护（disposition_updated_at /
+    // reminder_disposition_state 都带 WHERE 条件），跟 LocalReminderApplication
+    // 自己的 JS 30s tick 并发执行最多互相抢一次 changes=0、不会脏写——不像上面的
+    // 地点判定那样，判错前台/后台会直接导致重复弹窗，所以不需要对"前台但槽位空"
+    // 的过渡态那么谨慎，一起跳过反而会让这段短暂的过渡期连时间型日程和卡住重弹
+    // 都漏掉。真正需要避免重复的只有 taskListener != null 这一种情况：那意味着
+    // 会话确实活着，JS tick 本来就在覆盖这两件事，硬跑只会增加一次无意义的抢锁。
+    if (taskListener == null && accountId != null) {
+      await withDatabaseAccess(async () => {
+        const database = await openDatabase();
+        if (database == null) return;
         await runTimeFallbackPass(database, accountId);
         await runStuckPendingPass(database, accountId);
       });
@@ -219,7 +278,8 @@ async function runHeadlessLocationPass(
       }
       console.warn('[guard] TRIGGERED, claiming and presenting', row.id, row.title);
 
-      // 先消耗边沿再送达，失败也不恢复 armed——跟 geofenceTask.ts 的既有约定一致。
+      // 先消耗边沿再送达，失败也不恢复 armed：宁可漏一次，也不要因为送达失败就
+      // 让下一个心跳再判定一次 triggered、重复弹同一条提醒。
       await database.runAsync(`UPDATE local_schedules SET geofence_armed = 0 WHERE id = ?`, row.id);
 
       // 先"认领"这一行再展示，不是反过来——这条查询和 LocalReminderApplication
@@ -587,21 +647,29 @@ async function refreshGuardRegistration(
       sample == null ? null : { latitude: sample.latitude, longitude: sample.longitude };
     const intervalMs = resolveNextPollIntervalMs(currentSample, targets);
 
+    // 这次调用发生在 GUARD_TASK_NAME 自己的 headless 回调里，App 在不在前台都有
+    // 可能，所以 foregroundService 这个字段必须跟着当前前后台状态走，不能固定
+    // 传或固定不传——两个方向的原生约束见 isAppForegrounded() 的注释。
+    //
+    // 上一版这里固定**不传**，理由是"headless 回调时大概率不在前台，传了会抛"。
+    // 前半句没错，但漏了前台那一半：任务在前台唤醒时（冷启动后的第一次唤醒、
+    // 用户正开着 App 的每一次唤醒）不传 foregroundService，原生会把它理解成
+    // "不要常驻服务了"，直接把 ReminderGuardCoordinator 刚建起来的前台服务拆掉，
+    // 而且拆掉之后再也建不回来。改成按前台状态选形态之后，两条路径都安全：
+    // 前台带上 → 服务被保留/重建；后台不带 → 原生 early return，什么都不动。
+    const foregroundService = isAppForegrounded()
+      ? {
+          notificationTitle: GUARD_NOTIFICATION_TITLE,
+          notificationBody: GUARD_NOTIFICATION_BODY,
+        }
+      : undefined;
+
     try {
-      // 这次调用发生在 GUARD_TASK_NAME 自己的 headless 回调里——这时候 App 进程
-      // 大概率不在前台。expo-location 原生侧只要 options 带了 foregroundService，
-      // 就会无条件检查 AppForegroundedSingleton.isForegrounded，不在前台直接抛
-      // ForegroundServiceStartNotAllowedException，把整个 guard 任务打崩。
-      // 不带 foregroundService 这条分支不查这个前台状态，只查后台定位权限
-      // （isMissingBackgroundPermissions）——产品侧现在把"始终允许"定位权限设为
-      // 必需项（假设用户已经授予），所以这里可以放心不传 foregroundService，换
-      // 纯后台任务的路径来改轮询间隔。常驻通知仍然由 ReminderGuardCoordinator.
-      // ensureLocationUpdates() 首次注册时带 foregroundService 建立，这里只是
-      // 调整间隔，不需要也不应该重新触发那条前台服务专属检查。
       await Location.startLocationUpdatesAsync(GUARD_TASK_NAME, {
-        accuracy: Location.Accuracy.Balanced,
+        accuracy: Location.Accuracy.High,
         timeInterval: intervalMs,
         distanceInterval: 0,
+        ...(foregroundService == null ? {} : { foregroundService }),
       });
     } catch (error) {
       console.warn('[guard] refresh startLocationUpdatesAsync failed', error);
