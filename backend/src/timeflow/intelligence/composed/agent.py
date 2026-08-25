@@ -19,6 +19,7 @@ from timeflow.intelligence.conversation.agent import (
     AgentQuestion,
     AgentSessionEnd,
     AgentTextDelta,
+    AgentToolRoundLimitError,
     AgentTurnContext,
 )
 from timeflow.intelligence.conversation.asr import (
@@ -56,6 +57,11 @@ from .delivery import ScheduleResultDelivery
 from .session import ComposedSession, ConversationState, TurnState
 
 logger = logging.getLogger(__name__)
+
+# Spoken instead of silence when one turn exhausts the tool-round budget (e.g. a batch
+# delete that commits the first few schedules then hits the cap). The earlier tool calls
+# have already committed, so the user must be told the rest were not processed.
+_TOOL_ROUND_LIMIT_MESSAGE = "一次操作太多了，请拆成几次再试。"
 
 
 def _client_location_from_stream(stream: AudioStreamInfo) -> ClientLocation | None:
@@ -549,6 +555,19 @@ class ComposedVoiceAgent:
                         session_ends = True
                         continue
                     await asyncio.gather(delivery_queue.put(event), speech_queue.put(event))
+            except AgentToolRoundLimitError:
+                # 批量操作把单轮工具预算用尽时（比如逐条删除几十个日程，前几个已经
+                # 提交），给用户一句语音提示，而不是让异常冒上去、只留日志一片沉默。
+                if await self._is_current(session, generation):
+                    fallback = AgentTextDelta(_TOOL_ROUND_LIMIT_MESSAGE)
+                    await asyncio.gather(
+                        delivery_queue.put(fallback),
+                        speech_queue.put(fallback),
+                    )
+                    await asyncio.gather(
+                        delivery_queue.put(AgentCompleted(None)),
+                        speech_queue.put(AgentCompleted(None)),
+                    )
             finally:
                 timing.agent_completed_at = self._monotonic()
                 await asyncio.gather(delivery_queue.put(None), speech_queue.put(None))

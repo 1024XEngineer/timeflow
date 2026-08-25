@@ -19,7 +19,7 @@ from timeflow.business.calendar import (
 )
 from timeflow.intelligence.composed import ComposedVoiceAgent
 from timeflow.intelligence.composed.agent import _client_location_from_stream
-from timeflow.intelligence.conversation.agent import Agent
+from timeflow.intelligence.conversation.agent import Agent, AgentToolRoundLimitError
 from timeflow.intelligence.conversation.asr import SpeechStarted, SpeechStopped, TranscriptCompleted
 from timeflow.intelligence.conversation.llm import (
     LlmStreamCompleted,
@@ -237,6 +237,41 @@ def test_composed_turn_delivers_transcript_reply_and_tts() -> None:
         assert tts.segments[0].text == "好，记下了。"
         assert "当前本地时间：2026-08-12T14:00:00+08:00" in llm.system_prompts[0]
         assert asr.closed == 1
+
+    asyncio.run(scenario())
+
+
+def test_tool_round_limit_becomes_a_spoken_fallback() -> None:
+    """Exhausting the tool-round budget surfaces as speech, not a silent turn failure."""
+
+    class RoundLimitAgent:
+        def run_turn(
+            self, conversation: Any, user_text: str, *, turn_context: Any = None
+        ) -> AsyncIterator[Any]:
+            async def events() -> AsyncIterator[Any]:
+                raise AgentToolRoundLimitError("Agent tool round limit exceeded")
+                yield  # pragma: no cover
+
+            return events()
+
+    async def scenario() -> None:
+        tts = FakeTts()
+        sink = RecordingSink()
+        agent = ComposedVoiceAgent(
+            FakeAsr(["删除这些日程"]),
+            lambda account_id, observer, client_location: RoundLimitAgent(),
+            tts,
+            sink,
+            reply_id_factory=lambda: "reply_1",
+        )
+
+        await agent.handle_audio(chunks(), Stream())
+
+        replies = [value for kind, value in sink.calls if kind == "reply"]
+        assert replies and replies[-1].done is True
+        assert replies[-1].speech_text == "一次操作太多了，请拆成几次再试。"
+        assert any(kind == "audio_end" for kind, _ in sink.calls)
+        assert tts.segments and tts.segments[-1].text == "一次操作太多了，请拆成几次再试。"
 
     asyncio.run(scenario())
 
