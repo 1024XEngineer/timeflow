@@ -177,6 +177,7 @@ export function AssistantVoiceOverlay({
             isRecording={ptt.state.phase === 'recording'}
             onPressIn={ptt.startTurn}
             onPressOut={ptt.endTurn}
+            onCancel={ptt.cancelTurn}
             soundLevel={ptt.soundLevel}
           />
         </View>

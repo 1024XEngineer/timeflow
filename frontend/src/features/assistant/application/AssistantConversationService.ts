@@ -54,6 +54,12 @@ export class AssistantConversationService implements AssistantApplicationPort {
   // streamId/conversationId 还没就绪时执行。endTurn() 等这个 promise，把两者
   // 重新串成先后顺序，而不是让 endTurn() 在它们仍是 null 时静默不做事。
   private pendingStartTurn: Promise<void> | null = null;
+  /** 每次按下都有独立代次；取消旧代次不会影响紧接着开始的新一轮。 */
+  private nextTurnId = 0;
+  private activeTurnId = 0;
+  private readonly canceledTurnIds = new Set<number>();
+  /** 取消时后台停止录音；下一轮只等待这个本地清理，不等待旧连接握手。 */
+  private captureCleanup: Promise<void> | null = null;
   /** Category events can arrive before the command result creates their local row. */
   private readonly pendingCategoryUpdates = new Map<string, ScheduleCategory>();
   /** 串起每条 voice.command.result 的本地落库，见 AssistantContinuousConversationService
@@ -97,7 +103,12 @@ export class AssistantConversationService implements AssistantApplicationPort {
   }
 
   async startTurn(): Promise<void> {
-    const run = this._startTurn();
+    if (this.pendingStartTurn !== null) {
+      return;
+    }
+    const turnId = ++this.nextTurnId;
+    this.activeTurnId = turnId;
+    const run = this._startTurn(turnId);
     this.pendingStartTurn = run;
     try {
       await run;
@@ -113,13 +124,19 @@ export class AssistantConversationService implements AssistantApplicationPort {
     }
   }
 
-  private async _startTurn(): Promise<void> {
+  private async _startTurn(turnId: number): Promise<void> {
     this.replyText = null;
     this.soundLevel = null;
+    const previousCaptureCleanup = this.captureCleanup;
     if (this.connection === null) {
       this.setState({ phase: 'connecting' });
-      await this.connect();
     }
+    await previousCaptureCleanup?.catch(() => undefined);
+    this.throwIfCanceled(turnId);
+    if (this.connection === null) {
+      await this.connect(turnId);
+    }
+    this.throwIfCanceled(turnId);
     const connection = this.requireConnection();
 
     // 权限必须在 voice.stream.start 之前拿到并检查结果：这条消息一旦发出并被
@@ -127,6 +144,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
     // 被发现拒绝，我们没有办法清理（没收到 voice.stream.started 就没有
     // stream_id，发不了 voice.stream.end），这条 session 就再也开不了新流了。
     const permissionGranted = await this.deps.capture.requestPermission();
+    this.throwIfCanceled(turnId);
     if (!permissionGranted) {
       this.setState({ message: '没有麦克风权限', phase: 'error' });
       throw new Error('麦克风权限被拒绝');
@@ -151,14 +169,19 @@ export class AssistantConversationService implements AssistantApplicationPort {
       type: 'voice.stream.start',
     });
     const conversationId = await started;
+    this.throwIfCanceled(turnId);
 
     try {
       await this.deps.capture.start((chunk, soundLevel) => {
+        if (this.isTurnCanceled(turnId) || this.streamId === null) return;
         connection.sendAudioFrame(chunk);
         this.soundLevel = soundLevel;
         this.notifyListeners();
       });
     } catch (error) {
+      if (this.isTurnCanceled(turnId)) {
+        throw error;
+      }
       // 服务端这时候已经确认开流了（stream_id 拿到手了）；采集本身失败也要把
       // 这条流关掉，不然跟权限被拒是一样的后果——session 卡在"有一条活跃流"。
       if (this.streamId !== null) {
@@ -168,6 +191,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
       this.setState({ message: '录音启动失败', phase: 'error' });
       throw error;
     }
+    this.throwIfCanceled(turnId);
     this.setState({ conversationId, phase: 'recording' });
   }
 
@@ -190,6 +214,34 @@ export class AssistantConversationService implements AssistantApplicationPort {
     }
   }
 
+  async cancelTurn(): Promise<void> {
+    const canceledTurnId = this.activeTurnId;
+    this.canceledTurnIds.add(canceledTurnId);
+    this.activeTurnId = ++this.nextTurnId;
+    this.rejectPendingStreamStart(new Error('语音已取消'));
+    const pendingStart = this.pendingStartTurn;
+    this.pendingStartTurn = null;
+    this.soundLevel = null;
+    this.replyText = null;
+    this.currentAudioId = null;
+
+    const connection = this.connection;
+    this.unsubscribeConnection?.();
+    this.unsubscribeConnection = null;
+    this.connection = null;
+    this.streamId = null;
+    this.conversationId = null;
+    try {
+      connection?.close();
+    } catch {
+      // 取消的最终目标是回到可重新按下的 idle，连接关闭失败也不能阻塞 UI。
+    }
+    if (!this.disposed) {
+      this.setState({ phase: 'idle' });
+    }
+    this.startCancellationCleanup(pendingStart);
+  }
+
   async dismissReply(): Promise<void> {
     this.replyText = null;
     this.currentAudioId = null;
@@ -207,7 +259,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
     this.connection = null;
   }
 
-  private async connect(): Promise<void> {
+  private async connect(turnId: number): Promise<void> {
     // 拿不到定位（超时或权限拒绝）就不带，transport.connect() 收到 null 会跳过
     // session.hello 里的 latitude/longitude，不阻塞连接本身。定位那边先拿到就
     // 清掉超时定时器，不然赢了比赛的那次调用还会留一个挂到 2s 之后才触发的
@@ -224,10 +276,18 @@ export class AssistantConversationService implements AssistantApplicationPort {
     // session.hello → session.ready 的握手已经在 transport.connect() 内部完成
     // （共享的 AuthenticatedWebSocketClient 负责），这里拿到的就是已经 ready 的连接。
     const connection = await this.deps.transport.connect(sample);
+    if (this.isTurnCanceled(turnId)) {
+      connection.close();
+      return;
+    }
     this.connection = connection;
-    const unsubscribeMessage = connection.onMessage((message) => this.handleMessage(message));
-    const unsubscribeAudio = connection.onAudioFrame((chunk) => this.handleAudioFrame(chunk));
-    const unsubscribeClose = connection.onClose((event) => this.handleClose(event));
+    const unsubscribeMessage = connection.onMessage((message) =>
+      this.handleMessage(message, connection),
+    );
+    const unsubscribeAudio = connection.onAudioFrame((chunk) =>
+      this.handleAudioFrame(chunk, connection),
+    );
+    const unsubscribeClose = connection.onClose((event) => this.handleClose(event, connection));
     // 三个都要收，其中 onClose 转发到共享的 AuthenticatedWebSocketClient 上，
     // 不解绑就会在那条常驻连接上一直攒监听器（dispose()/换账号时尤其明显）。
     this.unsubscribeConnection = () => {
@@ -237,7 +297,11 @@ export class AssistantConversationService implements AssistantApplicationPort {
     };
   }
 
-  private handleMessage(message: AssistantServerMessage): void {
+  private handleMessage(
+    message: AssistantServerMessage,
+    sourceConnection: VoiceTransportConnection,
+  ): void {
+    if (sourceConnection !== this.connection) return;
     if (isTransportError(message)) {
       this.setState({ message: message.error.message, phase: 'error' });
       this.rejectPendingStreamStart(new Error(message.error.message));
@@ -261,7 +325,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
           status: message.payload.status,
         };
         // 状态立刻回到 idle，不等写库；message.ack 必须等写库成功才发（AGENTS.md §6）。
-        this.queueCommandResult(command, message.message_id);
+        this.queueCommandResult(command, message.message_id, sourceConnection);
         this.setState({ phase: 'idle' });
         return;
       }
@@ -319,15 +383,20 @@ export class AssistantConversationService implements AssistantApplicationPort {
    * promise 没有任何 handler，Node 的 unhandled rejection 检测在下一次调用到达前
    * 就已经判定"没人接"，直接把整个进程带崩——不是理论风险，用一个会抛的 state
    * 订阅者复现过。 */
-  private queueCommandResult(command: AppliedCommand, messageId: string): void {
+  private queueCommandResult(
+    command: AppliedCommand,
+    messageId: string,
+    sourceConnection: VoiceTransportConnection,
+  ): void {
     this.commandResultChain = this.commandResultChain
-      .then(() => this.applyCommandResultLocally(command, messageId))
+      .then(() => this.applyCommandResultLocally(command, messageId, sourceConnection))
       .catch(() => {});
   }
 
   private async applyCommandResultLocally(
     command: AppliedCommand,
     messageId: string,
+    sourceConnection: VoiceTransportConnection,
   ): Promise<void> {
     if (this.disposed) return;
     try {
@@ -338,7 +407,9 @@ export class AssistantConversationService implements AssistantApplicationPort {
     }
     this.lastAppliedCommand = command;
     this.markScheduleDataChanged();
-    this.connection?.send({ message_id: messageId, status: 'applied', type: 'message.ack' });
+    if (this.connection === sourceConnection) {
+      sourceConnection.send({ message_id: messageId, status: 'applied', type: 'message.ack' });
+    }
     const schedules = command.schedules ?? (command.schedule ? [command.schedule] : []);
     await this.applyPendingCategoryUpdates(
       schedules.flatMap((schedule) => (typeof schedule.id === 'string' ? [schedule.id] : [])),
@@ -396,14 +467,18 @@ export class AssistantConversationService implements AssistantApplicationPort {
     this.notifyListeners();
   }
 
-  private handleAudioFrame(chunk: ArrayBuffer): void {
-    if (this.currentAudioId === null) {
+  private handleAudioFrame(chunk: ArrayBuffer, sourceConnection: VoiceTransportConnection): void {
+    if (sourceConnection !== this.connection || this.currentAudioId === null) {
       return;
     }
     this.deps.playback.pushChunk(chunk).catch(() => {});
   }
 
-  private handleClose(event: { code: number; reason: string }): void {
+  private handleClose(
+    event: { code: number; reason: string },
+    sourceConnection: VoiceTransportConnection,
+  ): void {
+    if (sourceConnection !== this.connection) return;
     // 必须真的执行：切到连续对话时共享 WS 会因 voiceMode 不同断开重连，只置空的话
     // 旧服务仍订阅着新连接的 TTS/PCM，同一句话会被两个服务重复送进播放器。
     this.unsubscribeConnection?.();
@@ -427,6 +502,28 @@ export class AssistantConversationService implements AssistantApplicationPort {
       throw new Error('startTurn called without an open connection');
     }
     return this.connection;
+  }
+
+  private isTurnCanceled(turnId: number): boolean {
+    return this.disposed || turnId !== this.activeTurnId || this.canceledTurnIds.has(turnId);
+  }
+
+  private throwIfCanceled(turnId: number): void {
+    if (this.isTurnCanceled(turnId)) {
+      throw new Error('语音已取消');
+    }
+  }
+
+  private startCancellationCleanup(pendingStart: Promise<void> | null): void {
+    void pendingStart?.catch(() => undefined);
+    const stopCapture = this.deps.capture.stop().catch(() => {});
+    this.captureCleanup = stopCapture;
+    void stopCapture.finally(() => {
+      if (this.captureCleanup === stopCapture) {
+        this.captureCleanup = null;
+      }
+    });
+    void this.deps.playback.stop().catch(() => {});
   }
 
   private setState(state: ConversationTurnState): void {

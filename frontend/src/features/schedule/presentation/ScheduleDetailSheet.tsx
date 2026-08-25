@@ -58,7 +58,7 @@ export function DetailSection({
   primary,
   secondary,
 }: {
-  icon: string;
+  icon: ReactNode;
   label: string;
   primary: string;
   secondary?: string;
@@ -66,7 +66,7 @@ export function DetailSection({
   return (
     <View style={styles.section}>
       <View accessible={false} style={styles.sectionIcon}>
-        <Text style={styles.sectionIconText}>{icon}</Text>
+        {typeof icon === 'string' ? <Text style={styles.sectionIconText}>{icon}</Text> : icon}
       </View>
       <View style={styles.sectionCopy}>
         <Text style={styles.sectionLabel}>{label}</Text>

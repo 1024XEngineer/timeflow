@@ -252,10 +252,30 @@ describe('ScheduleCalendarScreen location schedules', () => {
     ).toMatchObject({ flexShrink: 1, minWidth: 0 });
     expect(
       StyleSheet.flatten(screen.getByTestId('schedule-account-actions').props.style),
-    ).toMatchObject({ marginLeft: 'auto', maxWidth: 240, minWidth: 0 });
+    ).toMatchObject({ marginLeft: 'auto', maxWidth: 168, minWidth: 0 });
 
     fireEvent.press(screen.getByRole('button', { name: '退出登录' }));
     expect(onSignOut).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the selected date fully visible when the header is narrow', async () => {
+    const service = createService();
+    render(
+      <ScheduleCalendarScreen
+        accountId="account-a"
+        onOpenPermissions={() => {}}
+        onSignOut={() => {}}
+        service={service}
+        timezone="Asia/Shanghai"
+        username="zhangsan-with-an-extremely-long-account-name"
+      />,
+    );
+
+    await waitFor(() => expect(service.getSchedulesByRange).toHaveBeenCalled());
+    const selectedDate = screen.getByTestId('schedule-selected-date');
+    expect(selectedDate.props.children).toBeTruthy();
+    expect(selectedDate.props.numberOfLines).toBeUndefined();
+    expect(selectedDate.props.style).toMatchObject({ flex: 1, flexShrink: 1, minWidth: 0 });
   });
 
   it('opens permissions when the user pill is pressed', async () => {
