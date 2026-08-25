@@ -276,6 +276,49 @@ def test_tool_round_limit_becomes_a_spoken_fallback() -> None:
     asyncio.run(scenario())
 
 
+def test_round_limit_fallback_is_skipped_when_session_is_stale() -> None:
+    """A turn that hit the round limit must not speak if its session is already stale."""
+
+    async def scenario() -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class RoundLimitAgent:
+            def run_turn(
+                self, conversation: Any, user_text: str, *, turn_context: Any = None
+            ) -> AsyncIterator[Any]:
+                async def events() -> AsyncIterator[Any]:
+                    started.set()
+                    await release.wait()
+                    raise AgentToolRoundLimitError("Agent tool round limit exceeded")
+                    yield  # pragma: no cover
+
+                return events()
+
+        sink = RecordingSink()
+        agent = ComposedVoiceAgent(
+            FakeAsr(["删除这些日程"]),
+            lambda account_id, observer, client_location: RoundLimitAgent(),
+            FakeTts(),
+            sink,
+            reply_id_factory=lambda: "reply_1",
+        )
+
+        task = asyncio.create_task(agent.handle_audio(chunks(), Stream()))
+        await started.wait()
+        # 模拟 turn 已被打断/关闭：推进 generation，使会话过期。
+        session = agent._sessions["session_1"]
+        async with session.lock:
+            session.generation += 1
+        release.set()
+        await task
+
+        # 会话已过期，不应再播报兜底文案。
+        assert [kind for kind, _ in sink.calls if kind == "reply"] == []
+
+    asyncio.run(scenario())
+
+
 def test_push_to_talk_ignores_speech_started() -> None:
     """A VAD speech_started event before the final is ignored in push-to-talk mode."""
 
