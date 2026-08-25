@@ -10,7 +10,7 @@ import jwt
 JWT_ALGORITHM: Final = "HS256"
 JWT_ISSUER: Final = "timeflow-api"
 JWT_AUDIENCE: Final = "timeflow-app"
-JWT_ACCESS_TTL_SECONDS: Final = 3600
+JWT_ACCESS_TTL_SECONDS: Final = 30 * 24 * 60 * 60  # 默认一个月（30 天）
 MINIMUM_SECRET_BYTES: Final = 32
 REQUIRED_CLAIMS: Final = ("sub", "iat", "exp", "iss", "aud")
 
@@ -130,8 +130,8 @@ class JwtAccessTokenService:
             raise ValueError("JWT issuer must match the v1 contract")
         if audience != JWT_AUDIENCE:
             raise ValueError("JWT audience must match the v1 contract")
-        if access_ttl_seconds != JWT_ACCESS_TTL_SECONDS:
-            raise ValueError("JWT access TTL must match the v1 contract")
+        if access_ttl_seconds <= 0:
+            raise ValueError("JWT access TTL must be greater than zero")
 
 
 def _is_numeric_date(value: object) -> bool:
