@@ -9,6 +9,10 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from timeflow.gateway.observability.sessions import (
+    NOOP_SESSION_TRACKER,
+    VoiceSessionTracker,
+)
 from timeflow.gateway.observability.websocket import (
     observe_audio_queue_depth,
     record_audio_chunk,
@@ -73,11 +77,17 @@ class VoiceStreamHandlers:
         queue_max_chunks: int = 32,
         stream_id_factory: Callable[[], str] | None = None,
         conversation_id_factory: Callable[[], str] | None = None,
+        sessions: VoiceSessionTracker | None = None,
+        agent_mode: str = "realtime",
     ) -> None:
         """Store the sink plus the audio limits and id seams.
 
         The duration budget is sized for one press-and-hold; continuous mode has no such
         bound and can run for minutes, so it gets a much larger budget of its own.
+
+        Hangup occupancy is classified when a continuous stream ends: the shared
+        authenticated WebSocket stays open after the client hangs up the call, so
+        WebSocket disconnect is not the hangup signal.
         """
         self._audio_sink = audio_sink
         self._max_audio_duration_ms = max_audio_duration_ms
@@ -85,6 +95,8 @@ class VoiceStreamHandlers:
         self._queue_max_chunks = queue_max_chunks
         self._stream_id_factory = stream_id_factory or new_stream_id
         self._conversation_id_factory = conversation_id_factory or new_conversation_id
+        self._sessions = sessions if sessions is not None else NOOP_SESSION_TRACKER
+        self._agent_mode = agent_mode
         self._active_streams: dict[str, _ActiveStream] = {}
         self._tasks: dict[str, set[asyncio.Task[None]]] = {}
 
@@ -113,6 +125,10 @@ class VoiceStreamHandlers:
 
         if isinstance(self._audio_sink, AudioSessionLifecycle):
             await self._audio_sink.interrupt(session.session_id, "new_audio_stream")
+
+        self._sessions.attach(
+            session.session_id, voice_mode=session.voice_mode, agent_mode=self._agent_mode
+        )
 
         audio_config = AudioConfig(
             audio_format=payload.audio_format,
@@ -166,10 +182,12 @@ class VoiceStreamHandlers:
         if stream.total_audio_bytes == 0:
             record_audio_truncated("empty_stream")
             await self._abort(session.session_id, stream)
+            self._finish_continuous_call(session)
             return self._error(request_id, "The audio stream carried no audio", stream)
 
         self._active_streams.pop(session.session_id, None)
         await stream.queue.put(None)
+        self._finish_continuous_call(session)
         return None
 
     async def handle_binary(self, chunk: bytes, session: SessionContext) -> dict[str, Any] | None:
@@ -259,6 +277,16 @@ class VoiceStreamHandlers:
                 self._tasks.pop(session_id, None)
 
         task.add_done_callback(discard)
+
+    def _finish_continuous_call(self, session: SessionContext) -> None:
+        """Classify hangup when the continuous microphone stream ends.
+
+        Push-to-talk ends a stream on every button release; that is not a hangup.
+        The shared WebSocket also stays open after a continuous hangup, so this is
+        the signal occupancy must use.
+        """
+        if session.voice_mode == "continuous":
+            self._sessions.finish(session.session_id)
 
     def _duration_ms_for(self, voice_mode: str) -> int:
         """Return the duration budget that applies to a stream's voice mode."""

@@ -13,6 +13,10 @@ from opentelemetry import context as otel_context
 from opentelemetry.trace import SpanKind, Status, StatusCode, get_tracer, set_span_in_context
 
 from timeflow.gateway.auth_diagnostics import log_sanitized_exception
+from timeflow.gateway.observability.sessions import (
+    NOOP_SESSION_TRACKER,
+    VoiceSessionTracker,
+)
 from timeflow.gateway.observability.websocket import (
     dec_ws_connections,
     inc_ws_connections,
@@ -81,8 +85,11 @@ async def run_websocket_session(
     handshake_timeout_seconds: float,
     binary_handler: BinaryFrameHandler | None = None,
     disconnect_handler: DisconnectHandler | None = None,
+    agent_mode: str = "realtime",
+    sessions: VoiceSessionTracker | None = None,
 ) -> None:
     """Serve one WebSocket connection from accept to close."""
+    occupancy = sessions if sessions is not None else NOOP_SESSION_TRACKER
     started = time.perf_counter()
     if not limiter.try_acquire():
         record_ws_handshake("rejected_limiter", time.perf_counter() - started)
@@ -134,6 +141,7 @@ async def run_websocket_session(
             otel_context.detach(token)
 
     assert session is not None
+    occupancy.attach(session.session_id, voice_mode=session.voice_mode, agent_mode=agent_mode)
     try:
         connections.register(session.session_id, websocket, session.account_id)
         await _serve_frames(websocket, session, router, connections, binary_handler)
@@ -150,6 +158,7 @@ async def run_websocket_session(
                 await disconnect_handler(session)
         finally:
             connections.unregister(session.session_id, websocket)
+            occupancy.finish(session.session_id, server_error=disconnect_reason == "error")
             record_ws_disconnect(disconnect_reason)
             span.set_attribute("timeflow.ws.disconnect_reason", disconnect_reason)
             span.end()

@@ -10,6 +10,10 @@ class TurnObserver(Protocol):
         """The model reported what the user said."""
         ...
 
+    async def user_started_speaking(self) -> None:
+        """The vendor detected user speech, including a barge-in."""
+        ...
+
     async def spoke(self, text: str) -> None:
         """The model reported the words it is saying."""
         ...

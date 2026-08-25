@@ -10,6 +10,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from timeflow.gateway.observability.http import install_http_observability
+from timeflow.infrastructure.observability.sessions import VoiceSessionOccupancy
 from timeflow.infrastructure.observability.tracing import reset_tracing_for_tests, start_span
 from timeflow.observability import PrometheusOtelVoiceTelemetry
 
@@ -131,6 +132,43 @@ def test_unknown_tools_collapse_to_other_and_failed_turns_mark_error() -> None:
         )
         == other_before + 1
     )
+
+
+def test_session_stage_updates_occupancy_without_session_id_labels() -> None:
+    occupancy = VoiceSessionOccupancy()
+    telemetry = PrometheusOtelVoiceTelemetry(occupancy=occupancy)
+    waiting_before = metric_value(
+        "timeflow_voice_sessions",
+        {"stage": "waiting_user", "voice_mode": "continuous", "agent_mode": "composed"},
+    )
+    asr_before = metric_value(
+        "timeflow_voice_sessions",
+        {"stage": "asr", "voice_mode": "continuous", "agent_mode": "composed"},
+    )
+    occupancy.attach("occ-telemetry", voice_mode="continuous", agent_mode="composed")
+    try:
+        telemetry.set_session_stage("occ-telemetry", "asr")
+        telemetry.record_interrupt("occ-telemetry")
+        assert (
+            metric_value(
+                "timeflow_voice_sessions",
+                {
+                    "stage": "waiting_user",
+                    "voice_mode": "continuous",
+                    "agent_mode": "composed",
+                },
+            )
+            == waiting_before
+        )
+        assert (
+            metric_value(
+                "timeflow_voice_sessions",
+                {"stage": "asr", "voice_mode": "continuous", "agent_mode": "composed"},
+            )
+            == asr_before + 1
+        )
+    finally:
+        occupancy.finish("occ-telemetry")
 
 
 def test_voice_turn_starts_a_new_trace_while_a_websocket_session_is_open() -> None:

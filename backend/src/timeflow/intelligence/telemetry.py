@@ -75,6 +75,12 @@ class VoiceTelemetry(Protocol):
     ) -> None:
         """Record the Agent's LLM-versus-tool phase breakdown."""
 
+    def set_session_stage(self, session_id: str, stage: str) -> None:
+        """Move live occupancy into a bounded stage. Session ids are never labels."""
+
+    def record_interrupt(self, session_id: str) -> None:
+        """Count a barge-in that cut a spoken reply short."""
+
 
 class _NoOpToolSpan:
     def finish(self, *, status: str, error_kind: str = "none") -> None:
@@ -112,6 +118,12 @@ class NoOpVoiceTelemetry:
         llm_final_text_ms: float,
     ) -> None:
         del agent_mode, llm_tool_call_ms, tool_execution_ms, llm_final_text_ms
+
+    def set_session_stage(self, session_id: str, stage: str) -> None:
+        del session_id, stage
+
+    def record_interrupt(self, session_id: str) -> None:
+        del session_id
 
 
 NOOP_TELEMETRY = NoOpVoiceTelemetry()

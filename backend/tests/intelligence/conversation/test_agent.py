@@ -40,6 +40,7 @@ from timeflow.intelligence.conversation.tools import (
     ToolRegistry,
     request_user_input_definition,
 )
+from timeflow.intelligence.telemetry import NoOpVoiceTelemetry
 
 
 class FakeLlm:
@@ -1089,3 +1090,42 @@ def test_confirmation_affirmative_detection(answer: str, expected: bool) -> None
     from timeflow.intelligence.conversation.agent import _is_affirmative
 
     assert _is_affirmative(answer) is expected
+
+
+class RecordingTelemetry(NoOpVoiceTelemetry):
+    def __init__(self) -> None:
+        self.stages: list[tuple[str, str]] = []
+
+    def set_session_stage(self, session_id: str, stage: str) -> None:
+        self.stages.append((session_id, stage))
+
+
+@pytest.mark.asyncio
+async def test_schedule_tool_execution_occupies_the_tool_stage() -> None:
+    tool = RecordingTool(
+        ToolDefinition("schedule_create", "创建日程", {"type": "object"}),
+        result='{"status":"ok"}',
+    )
+    llm = FakeLlm(
+        [
+            tool_events("schedule_create", "{}"),
+            [TextDelta("记下了。"), completed()],
+        ]
+    )
+    telemetry = RecordingTelemetry()
+    context = AgentTurnContext(
+        datetime(2026, 8, 20, 12, 0, tzinfo=UTC),
+        "Asia/Shanghai",
+        session_id="session_tool",
+    )
+
+    _ = [
+        event
+        async for event in Agent(llm, ToolRegistry([tool]), telemetry=telemetry).run_turn(
+            AgentConversation(),
+            "创建日程",
+            turn_context=context,
+        )
+    ]
+
+    assert telemetry.stages == [("session_tool", "tool"), ("session_tool", "llm")]

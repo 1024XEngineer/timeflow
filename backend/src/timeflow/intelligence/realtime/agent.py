@@ -157,6 +157,7 @@ class RealtimeAgent:
                 reply_id_factory=self._reply_id_factory,
                 message_id_factory=self._message_id_factory,
                 question_id_factory=self._question_id_factory,
+                telemetry=self._telemetry,
             )
             forwarding = asyncio.create_task(self._forward_audio(chunks, held.session, turn))
             pumping = asyncio.create_task(held.session.pump(turn))
@@ -325,6 +326,7 @@ class _Turn:
         reply_id_factory: Callable[[], str],
         message_id_factory: Callable[[], str],
         question_id_factory: Callable[[], str],
+        telemetry: VoiceTelemetry,
     ) -> None:
         """Start a stream that has heard nothing and said nothing yet."""
         self._result_sink = result_sink
@@ -335,6 +337,7 @@ class _Turn:
         self._reply_id_factory = reply_id_factory
         self._message_id_factory = message_id_factory
         self._question_id_factory = question_id_factory
+        self._telemetry = telemetry
         # None between replies; assigned on first use so each reply gets a fresh id.
         self._audio_id: str | None = None
         # Survives the reset below so a late barge-in can still name the audio the
@@ -357,6 +360,10 @@ class _Turn:
         """
         self._input_bytes += chunk_bytes
 
+    async def user_started_speaking(self) -> None:
+        """Occupy ASR while the vendor is hearing the user, including barge-ins."""
+        self._telemetry.set_session_stage(self._stream.session_id, "asr")
+
     async def heard(self, text: str) -> None:
         """Push what the user was heard to say."""
         if not text:
@@ -371,6 +378,7 @@ class _Turn:
             ),
             self._stream,
         )
+        self._telemetry.set_session_stage(self._stream.session_id, "llm")
         self._input_bytes = 0
 
     async def spoke(self, text: str) -> None:
@@ -403,7 +411,14 @@ class _Turn:
             )
             return
 
-        result = await self._tools.run(name, arguments)
+        occupy_tool = name not in {"end_conversation", "request_user_input"}
+        if occupy_tool:
+            self._telemetry.set_session_stage(self._stream.session_id, "tool")
+        try:
+            result = await self._tools.run(name, arguments)
+        finally:
+            if occupy_tool:
+                self._telemetry.set_session_stage(self._stream.session_id, "llm")
         if result.outcome is not None:
             outcome = result.outcome
             await self._result_sink.deliver_result(

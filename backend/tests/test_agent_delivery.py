@@ -33,6 +33,44 @@ class _Identity:
     request_id: str | None = "req_voice_001"
 
 
+@dataclass(frozen=True, slots=True)
+class _Canceled:
+    audio_id: str = "audio_001"
+
+
+class RecordingSessionTracker:
+    """Capture occupancy calls without touching the process-wide Prometheus gauges."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, ...]] = []
+
+    def attach(self, session_id: str, *, voice_mode: str, agent_mode: str) -> None:
+        self.calls.append(("attach", session_id, voice_mode, agent_mode))
+
+    def finish(self, session_id: str, *, server_error: bool = False) -> None:
+        self.calls.append(("finish", session_id, server_error))
+
+    def set_stage(self, session_id: str, stage: str) -> None:
+        self.calls.append(("set_stage", session_id, stage))
+
+    def set_stage_if_current(
+        self, session_id: str, stage: str, *, current: tuple[str, ...]
+    ) -> None:
+        self.calls.append(("set_stage_if_current", session_id, stage, current))
+
+    def hold_speaking(self, session_id: str, remaining_seconds: float) -> None:
+        self.calls.append(("hold_speaking", session_id, remaining_seconds))
+
+    def mark_activity(self, session_id: str) -> None:
+        self.calls.append(("mark_activity", session_id))
+
+    def mark_tool_end(self, session_id: str) -> None:
+        self.calls.append(("mark_tool_end", session_id))
+
+    def record_interrupt(self, session_id: str) -> None:
+        self.calls.append(("record_interrupt", session_id))
+
+
 class RecordingConnection:
     """A stand-in socket that records the frames written to it."""
 
@@ -569,5 +607,59 @@ def test_every_documented_question_kind_is_accepted() -> None:
         assert [frame["payload"]["question_kind"] for frame in connection.frames] == list(
             QUESTION_KINDS
         )
+
+    asyncio.run(scenario())
+
+
+def test_result_sink_marks_asr_activity_and_tool_end() -> None:
+    async def scenario() -> None:
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register(SESSION_ID, connection)
+        tracker = RecordingSessionTracker()
+        sink = WebSocketResultSink(connections, sessions=tracker)
+
+        await sink.deliver_transcript(_transcript("明天下午三点开会"), _Identity())
+        await sink.deliver_session_end(_Identity())
+
+        assert tracker.calls == [
+            ("mark_activity", SESSION_ID),
+            ("mark_tool_end", SESSION_ID),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_result_sink_moves_occupancy_through_tts_and_speaking() -> None:
+    async def scenario() -> None:
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register(SESSION_ID, connection)
+        tracker = RecordingSessionTracker()
+        sink = WebSocketResultSink(connections, sessions=tracker)
+
+        await sink.deliver_audio(_reply(), _chunks(b"aa"), _Identity())
+
+        assert tracker.calls == [
+            ("set_stage", SESSION_ID, "tts"),
+            ("set_stage", SESSION_ID, "speaking"),
+            ("mark_activity", SESSION_ID),
+            ("set_stage_if_current", SESSION_ID, "waiting_user", ("tts", "speaking")),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_result_sink_records_an_interrupt_when_tts_is_canceled() -> None:
+    async def scenario() -> None:
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register(SESSION_ID, connection)
+        tracker = RecordingSessionTracker()
+        sink = WebSocketResultSink(connections, sessions=tracker)
+
+        await sink.deliver_canceled(_Canceled(), _Identity())
+
+        assert tracker.calls == [("record_interrupt", SESSION_ID)]
 
     asyncio.run(scenario())

@@ -9,8 +9,10 @@ from timeflow.infrastructure.observability.external import ExternalCall
 from timeflow.infrastructure.observability.metrics import (
     bound_db_operation,
     bound_dependency,
+    bound_end_reason,
     bound_error_kind,
     bound_realtime_event,
+    bound_session_stage,
     bound_stage,
     bound_status,
 )
@@ -122,6 +124,10 @@ def test_closed_enumerations_drop_unbounded_values() -> None:
     assert bound_realtime_event("response.audio.delta") == "other"
     assert bound_db_operation("   ") == "OTHER"
     assert bound_stage("tts_first_audio_ms") == "tts_first_audio"
+    assert bound_session_stage("waiting_user") == "waiting_user"
+    assert bound_session_stage("leak-a-session-id") == "other"
+    assert bound_end_reason("idle_timeout") == "idle_timeout"
+    assert bound_end_reason("account-id") == "other"
 
 
 def test_external_call_records_cancellation_without_exception_text() -> None:

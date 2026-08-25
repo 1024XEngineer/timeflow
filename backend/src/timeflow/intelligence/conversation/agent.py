@@ -86,6 +86,7 @@ class AgentTurnContext:
 
     now: datetime
     timezone: str
+    session_id: str = ""
 
     def system_message(self) -> str:
         """Describe the same instant in UTC and the session's local timezone."""
@@ -241,6 +242,7 @@ class Agent:
         turn_context: AgentTurnContext | None,
     ) -> AsyncIterator[AgentEvent]:
         self._prepare_turn(conversation, user_text, turn_context)
+        session_id = turn_context.session_id if turn_context is not None else ""
         tool_rounds = 0
         usages: list[LlmUsage] = []
         usage_complete = True
@@ -401,11 +403,16 @@ class Agent:
                 tool_span.finish(status="error", error_kind="exception")
                 raise AgentToolError(f"Unknown Agent tool: {tool_call.name}") from exc
             exec_started = self._monotonic()
+            if session_id:
+                self._telemetry.set_session_stage(session_id, "tool")
             try:
                 result = await tool.execute(arguments)
             except Exception as exc:
                 tool_span.finish(status="error", error_kind="exception")
                 raise AgentToolError(f"Agent tool execution failed: {tool_call.name}") from exc
+            finally:
+                if session_id:
+                    self._telemetry.set_session_stage(session_id, "llm")
             tool_execution_ms += round((self._monotonic() - exec_started) * 1000, 1)
             if not isinstance(result, str):
                 tool_span.finish(status="error", error_kind="exception")

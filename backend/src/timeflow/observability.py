@@ -28,6 +28,10 @@ from timeflow.infrastructure.observability.metrics import (
     bound_turn_status,
     bound_voice_mode,
 )
+from timeflow.infrastructure.observability.sessions import (
+    VOICE_SESSION_OCCUPANCY,
+    VoiceSessionOccupancy,
+)
 from timeflow.infrastructure.observability.tracing import get_tracer
 from timeflow.intelligence.telemetry import (
     PROMETHEUS_TOOL_NAMES,
@@ -144,6 +148,9 @@ class _TurnSpan:
 class PrometheusOtelVoiceTelemetry:
     """Record voice-turn Prometheus samples and Tempo spans from intelligence ports."""
 
+    def __init__(self, occupancy: VoiceSessionOccupancy | None = None) -> None:
+        self._occupancy = occupancy if occupancy is not None else VOICE_SESSION_OCCUPANCY
+
     def start_turn(self, *, agent_mode: str, voice_mode: str) -> TurnSpan:
         return _TurnSpan(agent_mode, voice_mode)
 
@@ -170,6 +177,12 @@ class PrometheusOtelVoiceTelemetry:
         AGENT_PHASE_DURATION.labels(mode, bound_agent_phase("llm_final_text")).observe(
             llm_final_text_ms / 1000.0
         )
+
+    def set_session_stage(self, session_id: str, stage: str) -> None:
+        self._occupancy.set_stage(session_id, stage)
+
+    def record_interrupt(self, session_id: str) -> None:
+        self._occupancy.record_interrupt(session_id)
 
 
 VOICE_TELEMETRY: VoiceTelemetry = PrometheusOtelVoiceTelemetry()

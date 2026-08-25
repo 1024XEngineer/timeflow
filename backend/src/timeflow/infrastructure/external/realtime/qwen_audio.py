@@ -63,6 +63,10 @@ class Observer(Protocol):
         """The model reported what the user said."""
         ...
 
+    async def user_started_speaking(self) -> None:
+        """The vendor detected user speech, including a barge-in."""
+        ...
+
     async def spoke(self, text: str) -> None:
         """The model reported the words it is saying."""
         ...
@@ -346,6 +350,7 @@ class QwenAudioSession:
             if kind == "input_audio_buffer.speech_started":
                 # A real barge-in even once generation has finished: the phone can still
                 # be sounding out audio that was already fully sent (see _playable_until).
+                await observer.user_started_speaking()
                 if not suppressed and (self._responding or self._clock() < self._playable_until):
                     suppressed = True
                     await self.cancel_response()

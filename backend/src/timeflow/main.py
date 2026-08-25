@@ -54,6 +54,7 @@ from timeflow.infrastructure.external.realtime.qwen_audio import (
     QwenAudioSessionFactory,
 )
 from timeflow.infrastructure.observability.runtime import configure_observability
+from timeflow.infrastructure.observability.sessions import VOICE_SESSION_OCCUPANCY
 from timeflow.infrastructure.security import Argon2PasswordHasher, JwtAccessTokenService
 from timeflow.infrastructure.settings import Settings, get_settings
 from timeflow.intelligence.fake_agent import FakeAgent
@@ -161,7 +162,7 @@ def create_app(
 
     if audio_sink is None:
         assert session_factory is not None
-        result_sink = WebSocketResultSink(connections)
+        result_sink = WebSocketResultSink(connections, sessions=VOICE_SESSION_OCCUPANCY)
         if settings.voice_agent_mode == "1":
             audio_sink = AgentAudioSink(
                 _build_realtime_agent(settings, result_sink, session_factory, location_service)
@@ -182,6 +183,8 @@ def create_app(
         max_audio_duration_ms=settings.ws_max_audio_duration_ms,
         max_continuous_audio_duration_ms=settings.ws_max_continuous_audio_duration_ms,
         queue_max_chunks=settings.ws_audio_queue_max_chunks,
+        sessions=VOICE_SESSION_OCCUPANCY,
+        agent_mode=_voice_agent_mode_label(settings),
     )
     router = MessageRouter()
     router.register("voice.stream.start", voice_streams.handle_start)
@@ -233,6 +236,8 @@ def create_app(
             handshake_timeout_seconds=settings.ws_handshake_timeout_seconds,
             binary_handler=voice_streams.handle_binary,
             disconnect_handler=voice_streams.handle_disconnect,
+            agent_mode=_voice_agent_mode_label(settings),
+            sessions=VOICE_SESSION_OCCUPANCY,
         )
 
     return application
@@ -334,6 +339,10 @@ def _build_realtime_agent(
         extra={"needs": "TIMEFLOW_ALIYUN_AUDIO_API_KEY and TIMEFLOW_ALIYUN_AUDIO_WORKSPACE_ID"},
     )
     return FakeAgent(result_sink)
+
+
+def _voice_agent_mode_label(settings: Settings) -> str:
+    return "composed" if settings.voice_agent_mode == "2" else "realtime"
 
 
 def _configured_state(configured: bool) -> str:

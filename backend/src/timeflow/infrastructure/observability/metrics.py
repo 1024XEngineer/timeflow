@@ -42,6 +42,26 @@ VOICE_TURNS = Counter(
     "Completed voice turns by agent mode, voice mode, and outcome.",
     ("agent_mode", "voice_mode", "status"),
 )
+VOICE_SESSIONS = Gauge(
+    "timeflow_voice_sessions",
+    "Authenticated voice sessions currently occupying a bounded stage.",
+    ("stage", "voice_mode", "agent_mode"),
+)
+VOICE_SESSION_ENDS = Counter(
+    "timeflow_voice_session_ends_total",
+    "Voice session endings by bounded reason, voice mode, and agent mode.",
+    ("reason", "voice_mode", "agent_mode"),
+)
+VOICE_INTERRUPTS = Counter(
+    "timeflow_voice_interrupts_total",
+    "Successful barge-ins that cut a spoken reply short.",
+    ("voice_mode", "agent_mode"),
+)
+VOICE_STAGE_ENTERS = Counter(
+    "timeflow_voice_stage_enters_total",
+    "Times a live session entered a bounded occupancy stage.",
+    ("stage", "voice_mode", "agent_mode"),
+)
 VOICE_STAGE_DURATION = Histogram(
     "timeflow_voice_stage_duration_seconds",
     "Voice-turn stage durations in seconds.",
@@ -214,6 +234,10 @@ BOUNDED_STAGES = frozenset(
     }
 )
 BOUNDED_AGENT_PHASES = frozenset({"llm_tool_call", "tool_execution", "llm_final_text"})
+BOUNDED_SESSION_STAGES = frozenset(
+    {"waiting_user", "asr", "llm", "tool", "tts", "speaking", "other"}
+)
+BOUNDED_END_REASONS = frozenset({"tool_end", "idle_timeout", "ui_hangup", "server_error"})
 BOUNDED_DB_OPERATIONS = frozenset(
     {"SELECT", "INSERT", "UPDATE", "DELETE", "BEGIN", "COMMIT", "ROLLBACK", "OTHER"}
 )
@@ -293,6 +317,16 @@ def bound_agent_phase(value: str) -> str:
     return bound_label(phase, BOUNDED_AGENT_PHASES)
 
 
+def bound_session_stage(value: str) -> str:
+    """Map a live-session occupancy name onto the closed stage set."""
+    return bound_label(value, BOUNDED_SESSION_STAGES)
+
+
+def bound_end_reason(value: str) -> str:
+    """Map a hangup classification onto the closed end-reason set."""
+    return bound_label(value, BOUNDED_END_REASONS)
+
+
 def bound_operation(value: str) -> str:
     """Map an outbound operation onto the closed Prometheus operation set."""
     return bound_label(value, BOUNDED_OPERATIONS)
@@ -307,6 +341,30 @@ def bound_db_operation(statement: str) -> str:
     """Classify a SQL string by its leading keyword only; never keep the statement."""
     token = statement.lstrip().split(None, 1)[0].upper() if statement.strip() else "OTHER"
     return token if token in BOUNDED_DB_OPERATIONS else "OTHER"
+
+
+def prime_voice_session_series() -> None:
+    """Export zero samples so Grafana can graph stages and hangups before the first event.
+
+    Prometheus ``increase()`` drops the first increment of a brand-new series. Gauges
+    for unused stages are also absent until someone occupies them. Zero-fill the
+    closed enumerations once at import.
+    """
+    for stage in sorted(BOUNDED_SESSION_STAGES):
+        for voice_mode in sorted(BOUNDED_VOICE_MODES):
+            for agent_mode in sorted(BOUNDED_AGENT_MODES):
+                VOICE_SESSIONS.labels(stage, voice_mode, agent_mode).set(0)
+                VOICE_STAGE_ENTERS.labels(stage, voice_mode, agent_mode).inc(0)
+    for reason in sorted(BOUNDED_END_REASONS):
+        for voice_mode in sorted(BOUNDED_VOICE_MODES):
+            for agent_mode in sorted(BOUNDED_AGENT_MODES):
+                VOICE_SESSION_ENDS.labels(reason, voice_mode, agent_mode).inc(0)
+    for voice_mode in sorted(BOUNDED_VOICE_MODES):
+        for agent_mode in sorted(BOUNDED_AGENT_MODES):
+            VOICE_INTERRUPTS.labels(voice_mode, agent_mode).inc(0)
+
+
+prime_voice_session_series()
 
 
 __all__ = [
@@ -330,16 +388,23 @@ __all__ = [
     "TOOL_DURATION",
     "TTS_CONNECTIONS",
     "TTS_CONNECT_DURATION",
+    "VOICE_INTERRUPTS",
+    "VOICE_SESSIONS",
+    "VOICE_SESSION_ENDS",
     "VOICE_STAGE_DURATION",
+    "VOICE_STAGE_ENTERS",
     "VOICE_TURNS",
+    "prime_voice_session_series",
     "bound_agent_mode",
     "bound_agent_phase",
     "bound_db_operation",
     "bound_dependency",
+    "bound_end_reason",
     "bound_operation",
     "bound_realtime_event",
     "bound_error_kind",
     "bound_label",
+    "bound_session_stage",
     "bound_stage",
     "bound_status",
     "bound_turn_status",

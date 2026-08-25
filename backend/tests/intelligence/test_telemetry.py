@@ -35,3 +35,5 @@ def test_noop_telemetry_accepts_turn_and_tool_calls() -> None:
         tool_execution_ms=2.0,
         llm_final_text_ms=3.0,
     )
+    NOOP_TELEMETRY.set_session_stage("session_1", "asr")
+    NOOP_TELEMETRY.record_interrupt("session_1")

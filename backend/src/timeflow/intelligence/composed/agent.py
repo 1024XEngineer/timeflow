@@ -240,6 +240,7 @@ class ComposedVoiceAgent:
             session.active_audio_stream = None
         if session.voice_mode == "continuous" and audio_id is not None and audio_stream is not None:
             await self._result_sink.deliver_canceled(AudioCanceled(audio_id), audio_stream)
+        self._telemetry.set_session_stage(session_id, "waiting_user")
         await self._cancel(turn)
 
     async def close_session(self, session_id: str) -> None:
@@ -296,6 +297,7 @@ class ComposedVoiceAgent:
         turn_span = self._telemetry.start_turn(agent_mode="composed", voice_mode=stream.voice_mode)
         status = "failed"
         try:
+            self._telemetry.set_session_stage(stream.session_id, "asr")
             transcript, audio_bytes = await self._transcribe(chunks, timing)
             timing.audio_duration_ms = self._duration_ms(stream, audio_bytes)
             status = await self._act_on_transcript(session, generation, transcript, stream, timing)
@@ -356,6 +358,7 @@ class ComposedVoiceAgent:
                     elif isinstance(event, SpeechStarted):
                         if speech_started_at is None:
                             speech_started_at = self._monotonic()
+                        self._telemetry.set_session_stage(stream.session_id, "asr")
                         barge_in.set()
                     elif isinstance(event, SpeechStopped):
                         if speech_stopped_at is None:
@@ -375,6 +378,7 @@ class ComposedVoiceAgent:
                 event, speech_started_at, speech_stopped_at, asr_completed_at = item
                 text = event.text.strip()
                 if not text:
+                    self._telemetry.set_session_stage(stream.session_id, "waiting_user")
                     continue
                 timing = _TurnTiming(
                     speech_started_at if speech_started_at is not None else asr_completed_at
@@ -460,15 +464,18 @@ class ComposedVoiceAgent:
     ) -> str:
         """Deliver one finalized utterance, run its Agent turn, and speak the result."""
         if not transcript.strip():
+            self._telemetry.set_session_stage(stream.session_id, "waiting_user")
             return "empty_transcript"
         if not await self._is_current(session, generation):
             return "stale"
+        self._telemetry.set_session_stage(stream.session_id, "asr")
         await self._result_sink.deliver_transcript(
             Transcript(transcript, "zh", timing.audio_duration_ms or 0),
             stream,
         )
         if not await self._is_current(session, generation):
             return "stale"
+        self._telemetry.set_session_stage(stream.session_id, "llm")
         conversation = await self._conversation(
             session,
             generation,
@@ -478,7 +485,9 @@ class ComposedVoiceAgent:
         events = conversation.agent.run_turn(
             conversation.conversation,
             transcript,
-            turn_context=AgentTurnContext(self._clock(), session.timezone),
+            turn_context=AgentTurnContext(
+                self._clock(), session.timezone, session_id=stream.session_id
+            ),
         )
         await self._deliver_agent_events(session, generation, events, stream, timing)
         return "completed"
