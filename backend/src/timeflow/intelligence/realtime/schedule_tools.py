@@ -47,6 +47,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 
+# A voice query rarely needs more than a handful spoken back; anything past this
+# is dead context the model pays for every turn without ever reading it aloud.
+MAX_SCHEDULES_FOR_MODEL = 20
+
 # Tool names from the conversation contract; names reach the client, so keep them.
 SCHEDULE_CREATE = "schedule_create"
 SCHEDULE_QUERY = "schedule_query"
@@ -372,12 +376,15 @@ class ToolBox:
         result = await asyncio.to_thread(
             partial(self._service.find_schedules, account_id=self._account_id, query=query)
         )
-        schedules_with_local_time = [_for_model(s, self._timezone) for s in result.schedules]
+        total = len(result.schedules)
+        shown = result.schedules[:MAX_SCHEDULES_FOR_MODEL]
+        schedules_with_local_time = [_for_model(s, self._timezone) for s in shown]
+        payload: dict[str, Any] = {"count": total, "schedules": schedules_with_local_time}
+        if total > MAX_SCHEDULES_FOR_MODEL:
+            payload["truncated"] = True
+            payload["shown"] = len(shown)
         return ToolResult(
-            output=json.dumps(
-                {"count": len(result.schedules), "schedules": schedules_with_local_time},
-                ensure_ascii=False,
-            ),
+            output=json.dumps(payload, ensure_ascii=False),
             outcome={
                 "operation": "list_schedules",
                 "status": "applied",

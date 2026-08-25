@@ -70,6 +70,10 @@ class Observer(Protocol):
         """The session cannot continue."""
         ...
 
+    async def usage_reported(self, usage: dict[str, Any]) -> None:
+        """One response finished; report the tokens the vendor says it cost."""
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class QwenAudioConfig:
@@ -288,6 +292,9 @@ class QwenAudioSession:
                     return
                 await observer.tool_requested(**requested)
             elif kind == "response.done":
+                usage = _parse_usage(event)
+                if usage is not None:
+                    await observer.usage_reported(usage)
                 # Not the turn's end if a tool asked for a follow-up: the next response
                 # is the one that speaks. A tool that ended the conversation instead
                 # (respond=False, _followup_suppressed) has no follow-up coming -- that
@@ -359,6 +366,9 @@ class QwenAudioSession:
                     return
                 await observer.tool_requested(**requested)
             elif kind == "response.done":
+                usage = _parse_usage(event)
+                if usage is not None:
+                    await observer.usage_reported(usage)
                 if self._open_responses > 0:
                     self._open_responses -= 1
                 # A tool call inside the response that just finished may have asked for
@@ -452,6 +462,35 @@ def _error_message(event: dict[str, Any]) -> str:
         if isinstance(message, str) and message:
             return message
     return "realtime session reported an error"
+
+
+def _parse_usage(event: dict[str, Any]) -> dict[str, Any] | None:
+    """Flatten a response.done event's usage block, or None when it has none.
+
+    The vendor only includes usage once response.status is "completed" -- a
+    cancelled or failed response reports nothing here, which is not an error.
+    """
+    response = event.get("response")
+    if not isinstance(response, dict):
+        return None
+    usage = response.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    input_details = usage.get("input_tokens_details")
+    if not isinstance(input_details, dict):
+        input_details = {}
+    output_details = usage.get("output_tokens_details")
+    if not isinstance(output_details, dict):
+        output_details = {}
+    return {
+        "total_tokens": usage.get("total_tokens"),
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("output_tokens"),
+        "input_text_tokens": input_details.get("text_tokens"),
+        "input_audio_tokens": input_details.get("audio_tokens"),
+        "output_text_tokens": output_details.get("text_tokens"),
+        "output_audio_tokens": output_details.get("audio_tokens"),
+    }
 
 
 class QwenAudioSessionFactory:
