@@ -56,7 +56,6 @@ export type {
   LocationMonitorPort,
   LocationRebuildTarget,
   LocationWatchHandle,
-  LocationWatchMode,
   LocationWatchRequest,
   OemGuidance,
   OemManufacturer,

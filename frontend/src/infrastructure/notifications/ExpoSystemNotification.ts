@@ -22,7 +22,7 @@ async function ensureAndroidChannel(Notifications: NotificationsModule): Promise
     return;
   }
   channelReady = (async () => {
-    // 独立渠道 ID，不跟 geofenceTask.ts 的 'timeflow-reminders'（故意要出声）共用——
+    // 独立渠道 ID，不跟 reminderGuardTask.ts 的 'timeflow-reminders'（故意要出声）共用——
     // Android 8+ 声音是渠道级别、创建后不可变，两边共用一个渠道 ID 会导致谁先创建
     // 谁的声音设置就永久生效，另一边的 sound 参数全部失效。这个渠道要保持静音，
     // 所以 sound 在这里就必须显式传 null，不能留给默认值。
