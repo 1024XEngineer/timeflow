@@ -136,7 +136,7 @@ Compose 会在启动 Uvicorn 前执行 `alembic upgrade head`。确认健康检�
 curl http://127.0.0.1:8000/api/v1/health
 ```
 
-期望 `status` 为可用，且 `checks.database` 为 `ok`。未配置语音或地图时，对应检查为 `unconfigured`，这在开发环境是正常的。
+期望返回 `{"status":"ok"}`。这只表示进程存活，不包含数据库或语音/地图供应商是否已配置。
 
 停止：
 
@@ -275,7 +275,7 @@ npm run test:coverage
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `GET` | `/api/v1/health` | 进程存活与依赖是否已配置 |
+| `GET` | `/api/v1/health` | 进程存活，响应为 `{"status":"ok"}` |
 | `POST` | `/api/v1/auth/access` | 登录或注册，返回 JWT |
 | `GET` | `/api/v1/schedule/snapshot` | 当前账号的日程快照（需 Bearer Token） |
 | `PUT` | `/api/v1/schedule/reminder-state` | 确认提醒处置（需 Bearer Token） |

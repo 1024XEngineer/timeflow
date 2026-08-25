@@ -136,7 +136,7 @@ Compose runs `alembic upgrade head` before Uvicorn. Check health:
 curl http://127.0.0.1:8000/api/v1/health
 ```
 
-Expect a healthy `status` and `checks.database` of `ok`. Voice or maps showing `unconfigured` is normal in development until you add keys.
+Expect `{"status":"ok"}`. That is process liveness only; it does not report whether the database or voice/maps providers are configured.
 
 Stop:
 
@@ -274,7 +274,7 @@ npm run test:coverage
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/v1/health` | Process liveness and whether dependencies are configured |
+| `GET` | `/api/v1/health` | Process liveness; body is `{"status":"ok"}` |
 | `POST` | `/api/v1/auth/access` | Sign in or register; returns a JWT |
 | `GET` | `/api/v1/schedule/snapshot` | Schedule snapshot for the token’s account |
 | `PUT` | `/api/v1/schedule/reminder-state` | Confirm reminder disposition |
