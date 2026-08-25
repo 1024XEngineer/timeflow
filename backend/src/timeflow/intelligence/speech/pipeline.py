@@ -207,16 +207,19 @@ class SpeechPipeline:
             normalized = text.strip()
             if not normalized or truncated:
                 return
-            remaining = self._max_total_characters - submitted_characters
+            # 为「，后面省略」预留长度，保证一旦截断就一定能播报省略提示，而不是
+            # 在累计恰好达到上限时把后续内容静默丢弃。
+            remaining = (
+                self._max_total_characters - len(_TRUNCATION_NOTICE) - submitted_characters
+            )
             if len(normalized) <= remaining:
                 await queue.put(SpeechSegment(next_index, normalized, purpose))
                 next_index += 1
                 submitted_characters += len(normalized)
                 return
-            if remaining > len(_TRUNCATION_NOTICE):
-                head = normalized[: remaining - len(_TRUNCATION_NOTICE)]
-                await queue.put(SpeechSegment(next_index, head + _TRUNCATION_NOTICE, purpose))
-                next_index += 1
+            head = normalized[:remaining] if remaining > 0 else ""
+            await queue.put(SpeechSegment(next_index, head + _TRUNCATION_NOTICE, purpose))
+            next_index += 1
             truncated = True
 
         cancelled = False
