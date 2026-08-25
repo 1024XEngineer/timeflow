@@ -140,6 +140,28 @@ async def test_text_deltas_are_segmented_and_synthesized_as_one_turn() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reply_is_truncated_at_total_character_cap() -> None:
+    tts = FakeTts()
+    pipeline = SpeechPipeline(tts, max_total_characters=15)
+
+    output = [
+        event
+        async for event in pipeline.stream(
+            agent_events(
+                AgentTextDelta("这是一段很长的回复文本内容用于测试截断功能"),
+                AgentCompleted(LlmUsage(1, 2, 3)),
+            )
+        )
+    ]
+
+    segments = tts.requests[0]
+    total = sum(len(segment.text) for segment in segments)
+    assert total <= 15
+    assert segments[-1].text.endswith("，后面省略")
+    assert any(isinstance(event, SpeechAudioCompleted) for event in output)
+
+
+@pytest.mark.asyncio
 async def test_question_is_one_complete_dialogue_segment() -> None:
     tts = FakeTts()
     pipeline = SpeechPipeline(tts)

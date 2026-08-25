@@ -64,6 +64,10 @@ class _EndOfSegments:
 
 _END_OF_SEGMENTS = _EndOfSegments()
 
+# Suffixed once a turn's spoken text hits the total-character cap, so the user hears
+# that the rest was dropped rather than the transcript silently ending mid-list.
+_TRUNCATION_NOTICE = "，后面省略"
+
 
 @dataclass(slots=True)
 class _StreamMetadata:
@@ -81,13 +85,17 @@ class SpeechPipeline:
         target_segment_length: int = 20,
         max_segment_length: int = 120,
         segment_queue_size: int = 8,
+        max_total_characters: int = 100,
     ) -> None:
         if segment_queue_size <= 0:
             raise ValueError("segment_queue_size must be positive")
+        if max_total_characters <= 0:
+            raise ValueError("max_total_characters must be positive")
         self._tts = tts
         self._target_segment_length = target_segment_length
         self._max_segment_length = max_segment_length
         self._segment_queue_size = segment_queue_size
+        self._max_total_characters = max_total_characters
 
     def stream(self, events: AsyncIterable[AgentEvent]) -> AsyncIterator[SpeechPipelineEvent]:
         """Process one Agent turn into a single ordered spoken reply."""
@@ -183,6 +191,8 @@ class SpeechPipeline:
             max_length=self._max_segment_length,
         )
         next_index = 0
+        submitted_characters = 0
+        truncated = False
 
         def note_purpose(purpose: SpeechPurpose) -> None:
             """Record the turn's purpose and signal that speech is coming."""
@@ -193,12 +203,21 @@ class SpeechPipeline:
                 raise ValueError("One speech turn cannot mix question and reply text")
 
         async def submit(text: str, purpose: SpeechPurpose) -> None:
-            nonlocal next_index
+            nonlocal next_index, submitted_characters, truncated
             normalized = text.strip()
-            if not normalized:
+            if not normalized or truncated:
                 return
-            await queue.put(SpeechSegment(next_index, normalized, purpose))
-            next_index += 1
+            remaining = self._max_total_characters - submitted_characters
+            if len(normalized) <= remaining:
+                await queue.put(SpeechSegment(next_index, normalized, purpose))
+                next_index += 1
+                submitted_characters += len(normalized)
+                return
+            if remaining > len(_TRUNCATION_NOTICE):
+                head = normalized[: remaining - len(_TRUNCATION_NOTICE)]
+                await queue.put(SpeechSegment(next_index, head + _TRUNCATION_NOTICE, purpose))
+                next_index += 1
+            truncated = True
 
         cancelled = False
         try:
