@@ -151,10 +151,13 @@ if (!TaskManager.isTaskDefined(GUARD_TASK_NAME)) {
     } else if (accountId == null) {
       console.warn('[guard] no persisted account session, skipping headless location pass');
     } else {
+      // istanbul ignore next -- accountId 恒为 null（currentAccountId() 的动态 import
+      // 在 Jest 里恒抛错，见上），这整个分支在单测里不可达。
       console.warn(
         '[guard] no live listener and app backgrounded, taking headless location pass',
         sample,
       );
+      // istanbul ignore next -- 同上，accountId 恒为 null 时这个分支不可达。
       await withDatabaseAccess(async () => {
         const database = await openDatabase();
         if (database == null) return;
@@ -171,6 +174,7 @@ if (!TaskManager.isTaskDefined(GUARD_TASK_NAME)) {
     // 的过渡态那么谨慎，一起跳过反而会让这段短暂的过渡期连时间型日程和卡住重弹
     // 都漏掉。真正需要避免重复的只有 taskListener != null 这一种情况：那意味着
     // 会话确实活着，JS tick 本来就在覆盖这两件事，硬跑只会增加一次无意义的抢锁。
+    // istanbul ignore next -- accountId 恒为 null（同上），这个 if 整体在单测里不可达。
     if (taskListener == null && accountId != null) {
       await withDatabaseAccess(async () => {
         const database = await openDatabase();

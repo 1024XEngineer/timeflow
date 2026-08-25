@@ -216,8 +216,11 @@ describe('guard task executor routing', () => {
   });
 
   it('completes a headless location pass when there is no listener and the app is backgrounded', async () => {
-    setAppState('background');
+    // setAppState 必须在 loadModule() 之后调用——loadModule() 内部 jest.resetModules()
+    // 会让 react-native 也被重新 require 一遍，先 setAppState 再 loadModule 等于改了
+    // 一个马上被丢弃的旧模块实例，新模块读到的还是默认值，不会真的生效。
     const { executor } = loadModule();
+    setAppState('background');
     // 没有订阅者 且 App 不在前台 → 走 headless 地点判定，openDatabase 拿到 null 即
     // 返回，接着无条件跑 runTimeFallbackPass/runStuckPendingPass（同样拿 null 即返回）。
     await expect(executor({ data: locationPayload(), error: null })).resolves.toBeUndefined();
@@ -230,8 +233,10 @@ describe('guard task executor routing', () => {
     // 走 headless 地点判定会绕过 LocalReminderApplication 的内存锁去认领并弹提醒，
     // 正是这个仓库反复出现的"同一条提醒弹好几遍"。宁可漏一次轮询。时间型兜底 +
     // 卡住扫描不受影响，照样会跑（跟地点判定完全独立，见源码里的说明）。
-    setAppState('active');
+    //
+    // setAppState 必须在 loadModule() 之后调用，理由同上一个用例。
     const { module, executor } = loadModule();
+    setAppState('active');
     const listener = jest.fn();
     const dispose = module.subscribeGuardTaskEvents(listener);
     dispose();

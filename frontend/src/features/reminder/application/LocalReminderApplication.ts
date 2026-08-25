@@ -1095,7 +1095,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         await this.handleLocationMonitorEvent(event);
       },
     );
-    void this.reportPermissionGaps(schedule.id, ['location_foreground', 'location_background']);
+    void this.reportPermissionGaps(schedule.id, ['location_foreground']);
     return handle;
   }
 
