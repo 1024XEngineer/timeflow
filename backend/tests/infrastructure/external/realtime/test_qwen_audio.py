@@ -1423,9 +1423,9 @@ def test_continuous_reports_usage_with_computed_latency() -> None:
         clock_reads = iter([0.0, 0.0, 1.0, 1.2, 1.5, 1.5])
         observer = RecordingObserver()
 
-        await QwenAudioSession(
-            transport, CONFIG, CONTINUOUS, clock=lambda: next(clock_reads)
-        ).pump(observer)
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS, clock=lambda: next(clock_reads)).pump(
+            observer
+        )
 
         usage_calls = [call for call in observer.calls if call[0] == "usage_reported"]
         assert len(usage_calls) == 1
@@ -1472,9 +1472,9 @@ def test_a_second_audio_delta_does_not_re_stamp_first_audio_time() -> None:
         clock_reads = iter([0.0, 0.2, 0.5, 0.5])
         observer = RecordingObserver()
 
-        await QwenAudioSession(
-            transport, CONFIG, CONTINUOUS, clock=lambda: next(clock_reads)
-        ).pump(observer)
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS, clock=lambda: next(clock_reads)).pump(
+            observer
+        )
 
         usage = next(call[1] for call in observer.calls if call[0] == "usage_reported")
         assert usage["latency_first_audio_ms"] == 200.0

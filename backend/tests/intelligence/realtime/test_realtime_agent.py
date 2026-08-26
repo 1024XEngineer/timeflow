@@ -733,7 +733,9 @@ def test_a_session_over_the_token_budget_is_replaced_on_the_next_turn() -> None:
     """
 
     async def scenario() -> None:
-        first_session = ScriptedSession([("usage_reported", ({"total_tokens": SESSION_MAX_TOKENS},))])
+        first_session = ScriptedSession(
+            [("usage_reported", ({"total_tokens": SESSION_MAX_TOKENS},))]
+        )
         second_session = ScriptedSession([])
         sessions = iter([first_session, second_session])
 
