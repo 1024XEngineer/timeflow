@@ -3,6 +3,7 @@
 from observability_support import metric_value
 
 from timeflow.gateway.observability import record_ws_handshake
+from timeflow.gateway.observability.sessions import NOOP_SESSION_TRACKER
 from timeflow.gateway.observability.websocket import (
     dec_ws_connections,
     inc_ws_connections,
@@ -12,6 +13,17 @@ from timeflow.gateway.observability.websocket import (
     record_ws_disconnect,
     set_online_sessions,
 )
+
+
+def test_noop_session_tracker_accepts_every_occupancy_call() -> None:
+    NOOP_SESSION_TRACKER.attach("s", voice_mode="continuous", agent_mode="composed")
+    NOOP_SESSION_TRACKER.set_stage("s", "asr")
+    NOOP_SESSION_TRACKER.set_stage_if_current("s", "tts", current=("asr",))
+    NOOP_SESSION_TRACKER.hold_speaking("s", 0.4)
+    NOOP_SESSION_TRACKER.mark_activity("s")
+    NOOP_SESSION_TRACKER.mark_tool_end("s")
+    NOOP_SESSION_TRACKER.record_interrupt("s")
+    NOOP_SESSION_TRACKER.finish("s", server_error=True)
 
 
 def test_handshake_and_disconnect_use_bounded_labels() -> None:

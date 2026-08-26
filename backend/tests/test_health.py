@@ -2,7 +2,7 @@
 
 from fastapi.testclient import TestClient
 
-from timeflow.main import app
+from timeflow.main import _database_readiness, app
 
 
 def test_health_endpoint() -> None:
@@ -34,6 +34,10 @@ def test_metrics_endpoint_exposes_prometheus_text() -> None:
     assert "timeflow_http_requests_total" in text
     assert "timeflow_health_liveness_total" in text
     assert "/api/v1/health" in text
+
+
+def test_database_readiness_is_skipped_without_an_engine() -> None:
+    assert _database_readiness(None) == "skipped"
 
 
 def test_unversioned_health_endpoint_is_not_exposed() -> None:

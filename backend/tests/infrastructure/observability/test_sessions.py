@@ -188,6 +188,64 @@ def test_hold_speaking_expires_to_waiting_user_after_playback() -> None:
         occupancy.finish("occ-hold-timer")
 
 
+def test_set_stage_if_current_moves_when_the_session_is_still_in_current() -> None:
+    occupancy = VoiceSessionOccupancy()
+    waiting_before = _stage("waiting_user")
+    occupancy.attach("occ-if-current", voice_mode="continuous", agent_mode="composed")
+    try:
+        occupancy.set_stage("occ-if-current", "speaking")
+        occupancy.set_stage_if_current(
+            "occ-if-current", "waiting_user", current=("tts", "speaking")
+        )
+        assert _stage("waiting_user") == waiting_before + 1
+    finally:
+        occupancy.finish("occ-if-current")
+
+
+def test_hold_speaking_ignores_unknown_or_non_playback_sessions() -> None:
+    occupancy = VoiceSessionOccupancy()
+    waiting_before = _stage("waiting_user")
+    occupancy.hold_speaking("missing", 1.0)
+    occupancy.attach("occ-hold-skip", voice_mode="continuous", agent_mode="composed")
+    try:
+        occupancy.hold_speaking("occ-hold-skip", 1.0)
+        assert _stage("waiting_user") == waiting_before + 1
+    finally:
+        occupancy.finish("occ-hold-skip")
+
+
+def test_attach_is_idempotent_for_the_same_session() -> None:
+    occupancy = VoiceSessionOccupancy()
+    waiting_before = _stage("waiting_user")
+    occupancy.attach("occ-dup", voice_mode="continuous", agent_mode="composed")
+    occupancy.attach("occ-dup", voice_mode="continuous", agent_mode="composed")
+    try:
+        assert _stage("waiting_user") == waiting_before + 1
+    finally:
+        occupancy.finish("occ-dup")
+
+
+def test_playback_timer_is_ignored_after_the_session_finishes() -> None:
+    occupancy = VoiceSessionOccupancy()
+    waiting_before = _stage("waiting_user")
+    occupancy.attach("occ-hold-gone", voice_mode="continuous", agent_mode="composed")
+    occupancy.set_stage("occ-hold-gone", "speaking")
+    occupancy.hold_speaking("occ-hold-gone", 0.2)
+    occupancy.finish("occ-hold-gone")
+    time.sleep(0.35)
+    assert _stage("waiting_user") == waiting_before
+
+
+def test_playback_elapsed_ignores_stale_or_missing_sessions() -> None:
+    occupancy = VoiceSessionOccupancy()
+    occupancy._playback_elapsed("missing", 0)
+    occupancy.attach("occ-stale", voice_mode="continuous", agent_mode="composed")
+    try:
+        occupancy._playback_elapsed("occ-stale", -1)
+    finally:
+        occupancy.finish("occ-stale")
+
+
 def test_stage_enters_count_each_transition() -> None:
     occupancy = VoiceSessionOccupancy()
     waiting_enters = _enters("waiting_user")

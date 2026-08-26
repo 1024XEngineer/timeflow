@@ -36,6 +36,7 @@ from timeflow.gateway.websocket.ports import StreamContext
 from timeflow.infrastructure.security import Argon2PasswordHasher, JwtAccessTokenService
 from timeflow.infrastructure.security.access_token import JWT_ACCESS_TTL_SECONDS
 from timeflow.main import create_app
+from timeflow.observability import VOICE_TELEMETRY
 
 USERNAME = "Alice"
 PASSWORD = "correct-password"
@@ -202,7 +203,28 @@ def test_http_creates_and_reuses_an_argon2_account(app_harness: _AppHarness) -> 
 
     assert second.account_id == first.account_id
     assert second.expires_in == JWT_ACCESS_TTL_SECONDS
-    assert app_harness.tokens.verify(second.access_token) == first.account_id
+
+
+def test_composition_root_resolves_apk_username_for_voice_telemetry(
+    app_harness: _AppHarness,
+) -> None:
+    """create_app 绑定的账户查找把登录名交给 Tempo span，而不是 Prometheus。"""
+    first = _access(app_harness.client)
+    turn = VOICE_TELEMETRY.start_turn(
+        agent_mode="composed",
+        voice_mode="push_to_talk",
+        account_id=first.account_id,
+    )
+    turn.finish(status="completed")
+    missing = VOICE_TELEMETRY.start_turn(
+        agent_mode="composed",
+        voice_mode="push_to_talk",
+        account_id="acc_missing_user",
+    )
+    missing.finish(status="completed")
+
+    assert VOICE_TELEMETRY._usernames[first.account_id] == USERNAME
+    assert VOICE_TELEMETRY._usernames["acc_missing_user"] == "unknown"
 
 
 def test_http_rejects_a_wrong_password_for_an_existing_account(

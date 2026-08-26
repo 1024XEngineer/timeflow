@@ -293,3 +293,53 @@ def test_turn_and_tool_spans_carry_apk_login_username_for_tempo_filters() -> Non
 
     assert "account_id" not in VOICE_TURNS._labelnames
     assert "username" not in VOICE_TURNS._labelnames
+
+
+def test_username_lookup_is_cached_and_can_be_rebound() -> None:
+    exporter = _span_exporter()
+    calls: list[str] = []
+
+    def lookup(account_id: str) -> str | None:
+        calls.append(account_id)
+        return "alice" if account_id == "acc_alice" else None
+
+    telemetry = PrometheusOtelVoiceTelemetry()
+    telemetry.bind_username_lookup(lookup)
+    first = telemetry.start_turn(
+        agent_mode="composed",
+        voice_mode="push_to_talk",
+        account_id="acc_alice",
+    )
+    first.finish(status="completed")
+    second = telemetry.start_turn(
+        agent_mode="composed",
+        voice_mode="push_to_talk",
+        account_id="acc_alice",
+    )
+    second.finish(status="completed")
+    telemetry.bind_username_lookup(lookup)
+    rebound = telemetry.start_turn(
+        agent_mode="composed",
+        voice_mode="push_to_talk",
+        account_id="acc_alice",
+    )
+    rebound.finish(status="completed")
+
+    names = [
+        span.attributes[USERNAME_ATTRIBUTE]
+        for span in exporter.get_finished_spans()
+        if span.name == "voice.turn"
+    ]
+    assert names == ["alice", "alice", "alice"]
+    assert calls == ["acc_alice", "acc_alice"]
+
+
+def test_tool_span_without_an_open_turn_uses_unknown_identity() -> None:
+    exporter = _span_exporter()
+    telemetry = PrometheusOtelVoiceTelemetry()
+    tool = telemetry.start_tool("schedule_query", agent_mode="composed")
+    tool.finish(status="ok")
+
+    span = next(span for span in exporter.get_finished_spans() if span.name.startswith("tool."))
+    assert span.attributes[ACCOUNT_ID_ATTRIBUTE] == "unknown"
+    assert span.attributes[USERNAME_ATTRIBUTE] == "unknown"

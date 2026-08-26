@@ -443,6 +443,67 @@ class RecordingSessionTracker:
         self.calls.append(("record_interrupt", session_id))
 
 
+def test_non_json_frame_after_hello_returns_a_protocol_error() -> None:
+    client = TestClient(_build_app())
+
+    with client.websocket_connect("/ws?device_id=device_001") as websocket:
+        websocket.send_json(VALID_HELLO)
+        assert websocket.receive_json()["type"] == "session.ready"
+        websocket.send_text("not json at all")
+        reply = websocket.receive_json()
+
+    assert reply["type"] == "protocol.error"
+    assert reply["error"]["code"] == "MALFORMED_MESSAGE"
+
+
+def test_handshake_crash_after_accept_records_an_internal_failure() -> None:
+    async def explode(*_args: object, **_kwargs: object) -> tuple[None, str]:
+        raise RuntimeError("handshake exploded")
+
+    with mock.patch("timeflow.gateway.websocket.endpoint._authenticate", side_effect=explode):
+        client = TestClient(_build_app())
+        with raises(RuntimeError, match="handshake exploded"):
+            with client.websocket_connect("/ws?device_id=device_001"):
+                pass
+
+
+def test_serve_frames_crash_marks_the_session_as_a_server_error() -> None:
+    tracker = RecordingSessionTracker()
+
+    async def explode(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("serve exploded")
+
+    with mock.patch("timeflow.gateway.websocket.endpoint._serve_frames", side_effect=explode):
+        client = TestClient(_build_app(sessions=tracker, agent_mode="composed"))
+        with raises(RuntimeError, match="serve exploded"):
+            with client.websocket_connect("/ws?device_id=device_001") as websocket:
+                websocket.send_json(VALID_HELLO)
+                assert websocket.receive_json()["type"] == "session.ready"
+
+    assert tracker.calls == [
+        ("attach", "ws_session_test", "push_to_talk", "composed"),
+        ("finish", "ws_session_test", True),
+    ]
+
+
+def test_client_disconnect_during_serve_is_not_a_server_error() -> None:
+    tracker = RecordingSessionTracker()
+
+    async def hangup(*_args: object, **_kwargs: object) -> None:
+        raise WebSocketDisconnect(code=1000)
+
+    with mock.patch("timeflow.gateway.websocket.endpoint._serve_frames", side_effect=hangup):
+        client = TestClient(_build_app(sessions=tracker, agent_mode="composed"))
+        with client.websocket_connect("/ws?device_id=device_001") as websocket:
+            websocket.send_json(VALID_HELLO)
+            assert websocket.receive_json()["type"] == "session.ready"
+
+    assert tracker.calls == [
+        ("attach", "ws_session_test", "push_to_talk", "composed"),
+        ("finish", "ws_session_test", False),
+    ]
+
+
 def test_authenticated_session_attaches_occupancy_and_finishes_as_client_close() -> None:
     tracker = RecordingSessionTracker()
     client = TestClient(_build_app(sessions=tracker, agent_mode="composed"))

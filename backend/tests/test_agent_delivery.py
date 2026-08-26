@@ -630,6 +630,44 @@ def test_result_sink_marks_asr_activity_and_tool_end() -> None:
     asyncio.run(scenario())
 
 
+def test_result_sink_skips_empty_audio_chunks() -> None:
+    async def scenario() -> None:
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register(SESSION_ID, connection)
+        tracker = RecordingSessionTracker()
+        sink = WebSocketResultSink(connections, sessions=tracker)
+
+        await sink.deliver_audio(_reply(), _chunks(b"", b"aa"), _Identity())
+
+        assert [frame["type"] for frame in connection.frames] == [
+            "voice.tts.start",
+            "audio",
+            "voice.tts.end",
+        ]
+        assert ("set_stage", SESSION_ID, "speaking") in tracker.calls
+
+    asyncio.run(scenario())
+
+
+def test_result_sink_holds_speaking_while_playback_would_still_run() -> None:
+    async def scenario() -> None:
+        connections = ConnectionManager()
+        connection = RecordingConnection()
+        connections.register(SESSION_ID, connection)
+        tracker = RecordingSessionTracker()
+        sink = WebSocketResultSink(connections, sessions=tracker)
+
+        await sink.deliver_audio(_reply(), _chunks(b"a" * 8000), _Identity())
+
+        hold = [call for call in tracker.calls if call[0] == "hold_speaking"]
+        assert len(hold) == 1
+        assert hold[0][1] == SESSION_ID
+        assert hold[0][2] > 0.05
+
+    asyncio.run(scenario())
+
+
 def test_result_sink_moves_occupancy_through_tts_and_speaking() -> None:
     async def scenario() -> None:
         connections = ConnectionManager()
