@@ -221,6 +221,45 @@ def test_configure_in_continuous_mode_uses_the_configured_turn_detection() -> No
     asyncio.run(scenario())
 
 
+def test_configure_in_continuous_mode_sends_the_configured_history_window() -> None:
+    async def scenario() -> None:
+        config = QwenAudioConfig(
+            api_key="key-abc",
+            workspace_id="ws_001",
+            model="qwen-audio-3.0-realtime-plus",
+            max_history_turns=6,
+            max_history_turns_push_to_talk=2,
+        )
+        transport = FakeTransport()
+
+        await QwenAudioSession(transport, config, CONTINUOUS).configure("", [])
+
+        assert transport.sent[0]["session"]["max_history_turns"] == 6
+
+    asyncio.run(scenario())
+
+
+def test_configure_in_push_to_talk_uses_the_smaller_history_window() -> None:
+    """Push-to-talk is one request in, one reply out -- it needs less carried history
+    than a continuous conversation does."""
+
+    async def scenario() -> None:
+        config = QwenAudioConfig(
+            api_key="key-abc",
+            workspace_id="ws_001",
+            model="qwen-audio-3.0-realtime-plus",
+            max_history_turns=6,
+            max_history_turns_push_to_talk=2,
+        )
+        transport = FakeTransport()
+
+        await QwenAudioSession(transport, config, PUSH_TO_TALK).configure("", [])
+
+        assert transport.sent[0]["session"]["max_history_turns"] == 2
+
+    asyncio.run(scenario())
+
+
 def test_finish_input_in_continuous_mode_sends_nothing() -> None:
     """The vendor's own VAD ends a continuous turn; committing here would race it.
 
@@ -1048,11 +1087,12 @@ def test_speech_started_still_cancels_after_generation_finishes_if_playback_is_n
     """
 
     async def scenario() -> None:
-        # Two clock reads happen: once when response.done estimates how long this
-        # reply's audio takes to finish playing, once when speech_started checks
-        # against that estimate. 0.1s later is well inside the ~0.5s the 24000 bytes
-        # below (24kHz, 16-bit mono) would take to actually play.
-        clock_reads = iter([0.0, 0.1])
+        # Five clock reads: response.created and the reply's first audio each stamp
+        # a latency boundary, response.done estimates how long this reply's audio
+        # takes to finish playing (~0.5s for the 24000 bytes below, 24kHz 16-bit
+        # mono), then speech_started stamps itself and checks against that estimate
+        # -- 0.1s later is still inside the playback window, so it is a real barge-in.
+        clock_reads = iter([0.0, 0.05, 0.05, 0.1, 0.1])
         transport = FakeTransport(
             _event("response.created"),
             _event("response.audio.delta", delta=base64.b64encode(b"a" * 24000).decode()),
@@ -1080,8 +1120,10 @@ def test_speech_started_does_not_cancel_once_the_reply_would_be_done_playing() -
     """
 
     async def scenario() -> None:
-        # 10s later is far past the ~0.5s the 24000 bytes below would take to play.
-        clock_reads = iter([0.0, 10.0])
+        # Five clock reads: created, first audio, done (playback estimate of ~0.5s for the
+        # 24000 bytes below), then speech_started stamps itself and checks. 10s later is
+        # far past the playback window, so nothing gets cancelled.
+        clock_reads = iter([0.0, 0.05, 0.05, 10.0, 10.0])
         transport = FakeTransport(
             _event("response.created"),
             _event("response.audio.delta", delta=base64.b64encode(b"a" * 24000).decode()),

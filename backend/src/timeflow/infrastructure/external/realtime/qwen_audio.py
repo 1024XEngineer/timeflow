@@ -88,6 +88,13 @@ class QwenAudioConfig:
     turn_detection: str = "smart_turn"
     vad_threshold: float = 0.5
     vad_silence_duration_ms: int = 800
+    # How many past QA turns the vendor folds into inference. Continuous mode keeps a
+    # short window rather than the vendor's 20-turn default: a voice conversation with
+    # this agent is short-lived, and a longer window only adds token cost and latency
+    # for context nobody asked to keep. Push-to-talk, one request in and out, keeps less
+    # still -- see max_history_turns_push_to_talk.
+    max_history_turns: int = 10
+    max_history_turns_push_to_talk: int = 5
 
     def url(self) -> str:
         """Build the region- and workspace-specific realtime endpoint."""
@@ -162,15 +169,26 @@ class QwenAudioSession:
         # out. A barge-in landing in that gap is still a real barge-in.
         self._reply_bytes = 0
         self._playable_until = 0.0
+        # Monotonic stage stamps for one response's vendor-side latency, reported on the
+        # usage event at response.done. None until the matching vendor event arrives.
+        self._speech_started_at: float | None = None
+        self._response_started_at: float | None = None
+        self._first_audio_at: float | None = None
 
     async def configure(self, instructions: str, tools: list[dict[str, Any]]) -> None:
         """Set the session up before any audio; turn_detection only takes effect here."""
+        max_history_turns = (
+            self._config.max_history_turns_push_to_talk
+            if self._voice_mode == PUSH_TO_TALK
+            else self._config.max_history_turns
+        )
         session: dict[str, Any] = {
             "modalities": ["text", "audio"],
             "voice": self._config.voice,
             "input_audio_format": "pcm",
             "output_audio_format": "pcm",
             "turn_detection": turn_detection_for(self._voice_mode, self._config),
+            "max_history_turns": max_history_turns,
         }
         if instructions:
             session["instructions"] = instructions
@@ -254,6 +272,34 @@ class QwenAudioSession:
         """Serialize and send one client event."""
         await self._transport.send(json.dumps(event, ensure_ascii=False))
 
+    def _latency_report(self) -> dict[str, float | None]:
+        """Measure what the vendor's own timing this response exposes, in ms.
+
+        Only the boundaries that actually arrived are measured; a response the vendor
+        cut short reports what there is and leaves the rest None (rendered n/a). The
+        VAD start only exists in continuous mode, where the vendor owns turn detection.
+        """
+        started = self._response_started_at
+        if started is None:
+            return {
+                "latency_vad_ms": None,
+                "latency_first_audio_ms": None,
+                "latency_response_ms": None,
+            }
+        return {
+            "latency_vad_ms": (
+                round((started - self._speech_started_at) * 1000, 1)
+                if self._speech_started_at is not None and self._voice_mode == CONTINUOUS
+                else None
+            ),
+            "latency_first_audio_ms": (
+                round((self._first_audio_at - started) * 1000, 1)
+                if self._first_audio_at is not None
+                else None
+            ),
+            "latency_response_ms": round((self._clock() - started) * 1000, 1),
+        }
+
     async def pump(self, observer: Observer) -> None:
         """Report what the model says until the stream ends or fails."""
         if self._voice_mode == PUSH_TO_TALK:
@@ -272,6 +318,8 @@ class QwenAudioSession:
 
             if kind == "conversation.item.input_audio_transcription.completed":
                 await observer.heard(str(event.get("transcript", "")))
+            elif kind == "response.created":
+                self._response_started_at = self._clock()
             elif kind == "response.audio_transcript.delta":
                 spoken += str(event.get("delta", ""))
                 await observer.spoke(spoken)
@@ -284,6 +332,8 @@ class QwenAudioSession:
             elif kind == "response.audio.delta":
                 decoded = _decode_audio(event.get("delta"))
                 if decoded:
+                    if self._first_audio_at is None:
+                        self._first_audio_at = self._clock()
                     await observer.audio(decoded)
             elif kind == "response.function_call_arguments.done":
                 requested = _tool_request(event)
@@ -294,7 +344,10 @@ class QwenAudioSession:
             elif kind == "response.done":
                 usage = _parse_usage(event)
                 if usage is not None:
+                    usage.update(self._latency_report())
                     await observer.usage_reported(usage)
+                self._response_started_at = None
+                self._first_audio_at = None
                 # Not the turn's end if a tool asked for a follow-up: the next response
                 # is the one that speaks. A tool that ended the conversation instead
                 # (respond=False, _followup_suppressed) has no follow-up coming -- that
@@ -333,6 +386,7 @@ class QwenAudioSession:
             kind = event.get("type")
 
             if kind == "input_audio_buffer.speech_started":
+                self._speech_started_at = self._clock()
                 # A real barge-in even once generation has finished: the phone can still
                 # be sounding out audio that was already fully sent (see _playable_until).
                 if not suppressed and (self._responding or self._clock() < self._playable_until):
@@ -344,6 +398,8 @@ class QwenAudioSession:
                 suppressed = False
                 spoken = ""
                 self._reply_bytes = 0
+                self._response_started_at = self._clock()
+                self._first_audio_at = None
             elif kind == "conversation.item.input_audio_transcription.completed":
                 await observer.heard(str(event.get("transcript", "")))
             elif kind == "response.audio_transcript.delta" and not suppressed:
@@ -358,6 +414,8 @@ class QwenAudioSession:
                 decoded = _decode_audio(event.get("delta"))
                 if decoded:
                     self._reply_bytes += len(decoded)
+                    if self._first_audio_at is None:
+                        self._first_audio_at = self._clock()
                     await observer.audio(decoded)
             elif kind == "response.function_call_arguments.done":
                 requested = _tool_request(event)
@@ -368,7 +426,10 @@ class QwenAudioSession:
             elif kind == "response.done":
                 usage = _parse_usage(event)
                 if usage is not None:
+                    usage.update(self._latency_report())
                     await observer.usage_reported(usage)
+                self._response_started_at = None
+                self._first_audio_at = None
                 if self._open_responses > 0:
                     self._open_responses -= 1
                 # A tool call inside the response that just finished may have asked for

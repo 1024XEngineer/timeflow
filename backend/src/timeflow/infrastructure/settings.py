@@ -70,6 +70,8 @@ class Settings:
     aliyun_audio_turn_detection: str = "smart_turn"
     aliyun_audio_vad_threshold: float = 0.5
     aliyun_audio_vad_silence_duration_ms: int = 800
+    aliyun_audio_max_history_turns: int = 10
+    aliyun_audio_max_history_turns_push_to_talk: int = 5
     # "1" = the end-to-end realtime model; "2" = the LLM+ASR+TTS conversation pipeline.
     voice_agent_mode: str = "1"
 
@@ -116,6 +118,12 @@ class Settings:
         aliyun_audio_vad_silence_duration_ms = int(
             environ.get("TIMEFLOW_ALIYUN_AUDIO_VAD_SILENCE_DURATION_MS", "800")
         )
+        aliyun_audio_max_history_turns = int(
+            environ.get("TIMEFLOW_ALIYUN_AUDIO_MAX_HISTORY_TURNS", "10")
+        )
+        aliyun_audio_max_history_turns_push_to_talk = int(
+            environ.get("TIMEFLOW_ALIYUN_AUDIO_MAX_HISTORY_TURNS_PUSH_TO_TALK", "5")
+        )
 
         if not -1.0 <= aliyun_asr_vad_threshold <= 1.0:
             raise ValueError("TIMEFLOW_ALIYUN_ASR_VAD_THRESHOLD must be between -1 and 1")
@@ -150,6 +158,12 @@ class Settings:
         if not 200 <= aliyun_audio_vad_silence_duration_ms <= 6000:
             raise ValueError(
                 "TIMEFLOW_ALIYUN_AUDIO_VAD_SILENCE_DURATION_MS must be between 200 and 6000"
+            )
+        if not 1 <= aliyun_audio_max_history_turns <= 50:
+            raise ValueError("TIMEFLOW_ALIYUN_AUDIO_MAX_HISTORY_TURNS must be between 1 and 50")
+        if not 1 <= aliyun_audio_max_history_turns_push_to_talk <= 50:
+            raise ValueError(
+                "TIMEFLOW_ALIYUN_AUDIO_MAX_HISTORY_TURNS_PUSH_TO_TALK must be between 1 and 50"
             )
 
         return cls(
@@ -218,6 +232,10 @@ class Settings:
             aliyun_audio_turn_detection=aliyun_audio_turn_detection,
             aliyun_audio_vad_threshold=aliyun_audio_vad_threshold,
             aliyun_audio_vad_silence_duration_ms=aliyun_audio_vad_silence_duration_ms,
+            aliyun_audio_max_history_turns=aliyun_audio_max_history_turns,
+            aliyun_audio_max_history_turns_push_to_talk=(
+                aliyun_audio_max_history_turns_push_to_talk
+            ),
             voice_agent_mode=voice_agent_mode,
         )
 

@@ -101,6 +101,42 @@ class _Held:
     voice_mode: str
     turns: int = 0
     tokens_spent: int = 0
+    # Milliseconds the vendor session took to open, when this one was opened fresh.
+    connect_ms: float | None = None
+
+
+@dataclass(slots=True)
+class _TurnTiming:
+    """Monotonic stage boundaries and counters for one realtime turn."""
+
+    started_at: float
+    input_end_at: float | None = None
+    heard_at: float | None = None
+    first_output_at: float | None = None
+    first_audio_at: float | None = None
+    ended_at: float | None = None
+    tool_calls: int = 0
+    tool_execution_ms: float = 0.0
+    tokens: int = 0
+
+    @staticmethod
+    def elapsed_ms(start: float | None, end: float | None) -> float | None:
+        if start is None or end is None:
+            return None
+        return round((end - start) * 1000, 1)
+
+    def fields(self) -> dict[str, float | int | None]:
+        """Build the named deltas one turn's summary log line prints."""
+        return {
+            "turn_total_ms": self.elapsed_ms(self.started_at, self.ended_at),
+            "input_ms": self.elapsed_ms(self.started_at, self.input_end_at),
+            "asr_ms": self.elapsed_ms(self.input_end_at, self.heard_at),
+            "first_output_ms": self.elapsed_ms(self.heard_at, self.first_output_at),
+            "first_audio_ms": self.elapsed_ms(self.heard_at, self.first_audio_at),
+            "tool_calls": self.tool_calls,
+            "tool_execution_ms": self.tool_execution_ms,
+            "tokens": self.tokens,
+        }
 
 
 class RealtimeAgent:
@@ -162,6 +198,8 @@ class RealtimeAgent:
                 message_id_factory=self._message_id_factory,
                 question_id_factory=self._question_id_factory,
                 token_sink=lambda n: setattr(held, "tokens_spent", held.tokens_spent + n),
+                timing=_TurnTiming(started_at=self._clock()),
+                stopwatch=self._clock,
             )
             # Feeding starts before listening, matching the real causal order: the model
             # cannot transcribe audio it has not been sent, so a transcript's reported
@@ -208,6 +246,12 @@ class RealtimeAgent:
                     held.turns += 1
                 else:
                     await self._discard(key)
+                turn.log_summary(
+                    connect_ms=held.connect_ms,
+                    session_turns=held.turns,
+                    session_age_ms=self._clock() - held.opened_at,
+                    kept=reusable,
+                )
 
     async def _forward_audio(
         self, chunks: AsyncIterator[bytes], session: RealtimeSession, turn: "_Turn"
@@ -217,6 +261,7 @@ class RealtimeAgent:
             await session.send_audio(chunk)
             turn.note_input_chunk(len(chunk))
         await session.finish_input()
+        turn.note_input_done()
 
     async def _session_for(self, key: tuple[str, str], stream: StreamInfo) -> _Held | None:
         """Return the conversation's open session, opening one when there is none.
@@ -244,11 +289,18 @@ class RealtimeAgent:
         )
         schemas = tools.tools() if tools is not None else []
         try:
+            connect_started = self._clock()
             session = await self._sessions.open(self._instructions(timezone), schemas, voice_mode)
         except Exception:
             logger.exception("could not open a realtime session")
             return None
-        fresh = _Held(session=session, tools=tools, opened_at=self._clock(), voice_mode=voice_mode)
+        fresh = _Held(
+            session=session,
+            tools=tools,
+            opened_at=self._clock(),
+            voice_mode=voice_mode,
+            connect_ms=round((self._clock() - connect_started) * 1000, 1),
+        )
         self._held[key] = fresh
         return fresh
 
@@ -326,6 +378,8 @@ class _Turn:
         message_id_factory: Callable[[], str],
         question_id_factory: Callable[[], str],
         token_sink: Callable[[int], None],
+        timing: _TurnTiming,
+        stopwatch: Callable[[], float],
     ) -> None:
         """Start a stream that has heard nothing and said nothing yet."""
         self._result_sink = result_sink
@@ -337,6 +391,8 @@ class _Turn:
         self._message_id_factory = message_id_factory
         self._question_id_factory = question_id_factory
         self._token_sink = token_sink
+        self._timing = timing
+        self._stopwatch = stopwatch
         # None between replies; assigned on first use so each reply gets a fresh id.
         self._audio_id: str | None = None
         # Survives the reset below so a late barge-in can still name the audio the
@@ -359,8 +415,15 @@ class _Turn:
         """
         self._input_bytes += chunk_bytes
 
+    def note_input_done(self) -> None:
+        """Stamp when the stream finished sending; the start of the response wait."""
+        if self._timing.input_end_at is None:
+            self._timing.input_end_at = self._stopwatch()
+
     async def heard(self, text: str) -> None:
         """Push what the user was heard to say."""
+        if self._timing.heard_at is None:
+            self._timing.heard_at = self._stopwatch()
         if not text:
             logger.info("realtime model returned an empty transcript")
             self._input_bytes = 0
@@ -377,6 +440,8 @@ class _Turn:
 
     async def spoke(self, text: str) -> None:
         """Push the reply's wording so far, and keep it for the audio's opening message."""
+        if self._timing.first_output_at is None:
+            self._timing.first_output_at = self._stopwatch()
         if self._reply_id is None:
             self._reply_id = self._reply_id_factory()
         self._spoken = text
@@ -386,6 +451,10 @@ class _Turn:
 
     async def audio(self, data: bytes) -> None:
         """Queue one chunk, starting the delivery on the first one."""
+        if self._timing.first_output_at is None:
+            self._timing.first_output_at = self._stopwatch()
+        if self._timing.first_audio_at is None:
+            self._timing.first_audio_at = self._stopwatch()
         if self._speaking is None:
             self._audio_id = self._audio_id_factory()
             self._last_audio_id = self._audio_id
@@ -405,7 +474,21 @@ class _Turn:
             )
             return
 
+        tool_started = self._stopwatch()
         result = await self._tools.run(name, arguments)
+        tool_ms = round((self._stopwatch() - tool_started) * 1000, 1)
+        self._timing.tool_calls += 1
+        self._timing.tool_execution_ms += tool_ms
+        logger.info(
+            "realtime tool executed: tool=%s ms=%s",
+            name,
+            tool_ms,
+            extra={
+                "account_id": self._stream.account_id,
+                "conversation_id": self._stream.conversation_id,
+                "call_id": call_id,
+            },
+        )
         if result.outcome is not None:
             outcome = result.outcome
             await self._result_sink.deliver_result(
@@ -475,7 +558,8 @@ class _Turn:
         """
         logger.info(
             "realtime response usage: total=%s input=%s output=%s "
-            "input_text=%s input_audio=%s output_text=%s output_audio=%s",
+            "input_text=%s input_audio=%s output_text=%s output_audio=%s "
+            "vad_ms=%s first_audio_ms=%s response_ms=%s",
             usage.get("total_tokens"),
             usage.get("input_tokens"),
             usage.get("output_tokens"),
@@ -483,6 +567,9 @@ class _Turn:
             usage.get("input_audio_tokens"),
             usage.get("output_text_tokens"),
             usage.get("output_audio_tokens"),
+            usage.get("latency_vad_ms"),
+            usage.get("latency_first_audio_ms"),
+            usage.get("latency_response_ms"),
             extra={
                 "account_id": self._stream.account_id,
                 "conversation_id": self._stream.conversation_id,
@@ -490,7 +577,46 @@ class _Turn:
         )
         total = usage.get("total_tokens")
         if isinstance(total, int):
+            self._timing.tokens += total
             self._token_sink(total)
+
+    def log_summary(
+        self,
+        *,
+        connect_ms: float | None,
+        session_turns: int,
+        session_age_ms: float,
+        kept: bool,
+    ) -> None:
+        """Log one turn's end-to-end latency and token spend in one line.
+
+        Interpolated into the message rather than passed via extra=, same reason as
+        usage_reported() above: this project's log format only ever prints the message.
+        """
+        self._timing.ended_at = self._stopwatch()
+        fields = self._timing.fields()
+        rendered = " ".join(
+            f"{name}={value if value is not None else 'n/a'}" for name, value in fields.items()
+        )
+        logger.info(
+            "realtime turn timing: voice_mode=%s kept=%s session_turns=%s "
+            "session_age_ms=%s connect_ms=%s %s",
+            self._stream.voice_mode,
+            kept,
+            session_turns,
+            round(session_age_ms * 1000, 1),
+            connect_ms if connect_ms is not None else "n/a",
+            rendered,
+            extra={
+                "account_id": self._stream.account_id,
+                "conversation_id": self._stream.conversation_id,
+                "timing_kept": kept,
+                "session_turns": session_turns,
+                "session_age_ms": round(session_age_ms * 1000, 1),
+                "connect_ms": connect_ms,
+                **fields,
+            },
+        )
 
     async def close(self) -> None:
         """Settle whatever reply is in flight; a no-op if the last one already was."""
