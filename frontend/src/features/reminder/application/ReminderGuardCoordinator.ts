@@ -14,6 +14,9 @@ import {
   type GuardTaskSample,
 } from '../../../infrastructure/location/reminderGuardTask';
 
+/** 真机上 hasStarted/stopLocationUpdates 偶发不返回；登出不能卡在这里。 */
+const LOCATION_STOP_TIMEOUT_MS = 2_000;
+
 /**
  * 原生注册其实有三种状态，而 hasStartedLocationUpdatesAsync() 只能回答把后两种
  * 合并之后的那个布尔值（"注册着吗"）：
@@ -230,10 +233,15 @@ export class ReminderGuardCoordinator {
   private async stopLocationUpdates(): Promise<void> {
     if (!this.running) return;
     try {
-      const hasStarted = await Location.hasStartedLocationUpdatesAsync(GUARD_TASK_NAME);
-      if (hasStarted) {
-        await Location.stopLocationUpdatesAsync(GUARD_TASK_NAME);
-      }
+      await raceWithTimeout(
+        (async () => {
+          const hasStarted = await Location.hasStartedLocationUpdatesAsync(GUARD_TASK_NAME);
+          if (hasStarted) {
+            await Location.stopLocationUpdatesAsync(GUARD_TASK_NAME);
+          }
+        })(),
+        LOCATION_STOP_TIMEOUT_MS,
+      );
     } catch (error) {
       console.warn('[guard] stopLocationUpdatesAsync failed', error);
     } finally {
@@ -241,4 +249,20 @@ export class ReminderGuardCoordinator {
       this.currentIntervalMs = null;
     }
   }
+}
+
+function raceWithTimeout(operation: Promise<void>, timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    operation.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }

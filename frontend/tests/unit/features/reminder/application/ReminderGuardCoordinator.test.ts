@@ -281,6 +281,25 @@ describe('ReminderGuardCoordinator', () => {
     expect(stopUpdates).toHaveBeenCalledWith(GUARD_TASK_NAME);
   });
 
+  it('stop() returns if location teardown never settles', async () => {
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+    await coordinator.start();
+    hasStarted.mockReturnValue(new Promise(() => undefined));
+
+    jest.useFakeTimers();
+    try {
+      const stopping = coordinator.stop();
+      jest.advanceTimersByTime(2_000);
+      await stopping;
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('routes an incoming guard sample to handleLocation and re-reconciles', async () => {
     let sampleListener:
       | ((sample: {
