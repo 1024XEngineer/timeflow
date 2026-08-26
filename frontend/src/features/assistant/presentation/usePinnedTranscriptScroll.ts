@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type {
   LayoutChangeEvent,
   NativeScrollEvent,
@@ -7,6 +7,7 @@ import type {
 } from 'react-native';
 
 export const PINNED_TO_BOTTOM_THRESHOLD = 80;
+export const TRANSCRIPT_IDLE_MS = 180;
 
 export function topSpacerHeight(viewportHeight: number, turnsHeight: number): number {
   // ScrollView 的 justifyContent:'flex-end' 在内容超出视口时会把子节点上下排反，
@@ -35,6 +36,10 @@ export function isPinnedToBottom({
 export function usePinnedTranscriptScroll() {
   const transcriptRef = useRef<ScrollView>(null);
   const pinnedRef = useRef(true);
+  const interactingRef = useRef(false);
+  const ignoreProgrammaticScrollRef = useRef(false);
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ignoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const viewportHeightRef = useRef(0);
   const turnsHeightRef = useRef(0);
   const [topSpacer, setTopSpacer] = useState(0);
@@ -44,14 +49,57 @@ export function usePinnedTranscriptScroll() {
     setTopSpacer((current) => (current === next ? current : next));
   };
 
+  const clearIdleTimer = () => {
+    if (idleTimerRef.current == null) {
+      return;
+    }
+    clearTimeout(idleTimerRef.current);
+    idleTimerRef.current = null;
+  };
+
+  const clearIgnoreTimer = () => {
+    if (ignoreTimerRef.current === null) {
+      return;
+    }
+    clearTimeout(ignoreTimerRef.current);
+    ignoreTimerRef.current = null;
+  };
+
   const followLatestIfPinned = () => {
+    if (interactingRef.current) {
+      return;
+    }
     if (viewportHeightRef.current <= 0 || turnsHeightRef.current <= viewportHeightRef.current) {
       return;
     }
-    if (pinnedRef.current) {
-      transcriptRef.current?.scrollToEnd({ animated: true });
+    if (!pinnedRef.current) {
+      return;
     }
+    ignoreProgrammaticScrollRef.current = true;
+    transcriptRef.current?.scrollToEnd({ animated: true });
+    clearIgnoreTimer();
+    ignoreTimerRef.current = setTimeout(() => {
+      ignoreProgrammaticScrollRef.current = false;
+      ignoreTimerRef.current = null;
+    }, TRANSCRIPT_IDLE_MS);
   };
+
+  const markInteracting = () => {
+    interactingRef.current = true;
+    clearIdleTimer();
+  };
+
+  const markIdle = () => {
+    interactingRef.current = false;
+    followLatestIfPinned();
+  };
+
+  useEffect(() => {
+    return () => {
+      clearIdleTimer();
+      clearIgnoreTimer();
+    };
+  }, []);
 
   const onLayout = (event: LayoutChangeEvent) => {
     viewportHeightRef.current = event.nativeEvent.layout.height;
@@ -65,9 +113,30 @@ export function usePinnedTranscriptScroll() {
     followLatestIfPinned();
   };
 
+  const onScrollBeginDrag = () => {
+    markInteracting();
+  };
+
+  const onScrollEndDrag = () => {
+    clearIdleTimer();
+    idleTimerRef.current = setTimeout(markIdle, TRANSCRIPT_IDLE_MS);
+  };
+
+  const onMomentumScrollBegin = () => {
+    markInteracting();
+  };
+
+  const onMomentumScrollEnd = () => {
+    clearIdleTimer();
+    markIdle();
+  };
+
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     viewportHeightRef.current = layoutMeasurement.height;
+    if (ignoreProgrammaticScrollRef.current) {
+      return;
+    }
     pinnedRef.current = isPinnedToBottom({
       contentHeight: contentSize.height,
       offsetY: contentOffset.y,
@@ -82,7 +151,11 @@ export function usePinnedTranscriptScroll() {
   return {
     onContentSizeChange,
     onLayout,
+    onMomentumScrollBegin,
+    onMomentumScrollEnd,
     onScroll,
+    onScrollBeginDrag,
+    onScrollEndDrag,
     onTurnsLayout,
     topSpacer,
     transcriptRef,
