@@ -408,6 +408,25 @@ class Agent:
                 self._telemetry.set_session_stage(session_id, "tool")
             try:
                 result = await tool.execute(arguments)
+            except asyncio.CancelledError as exc:
+                tool_execution_ms += round((self._monotonic() - exec_started) * 1000, 1)
+                committed = getattr(exc, "result", None)
+                if isinstance(committed, str):
+                    # Schedule tools shield the business thread: cancel cannot un-commit.
+                    # Keep the tool result in history so the next utterance can react.
+                    tool_span.finish(status=tool_result_status(committed))
+                    conversation.messages.extend(
+                        [
+                            assistant_message,
+                            ToolResultMessage(
+                                tool_call_id=tool_call.call_id,
+                                content=committed,
+                            ),
+                        ]
+                    )
+                else:
+                    tool_span.finish(status="error", error_kind="cancelled")
+                raise
             except Exception as exc:
                 tool_span.finish(status="error", error_kind="exception")
                 raise AgentToolError(f"Agent tool execution failed: {tool_call.name}") from exc

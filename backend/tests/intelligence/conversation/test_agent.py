@@ -737,6 +737,64 @@ async def test_cancellation_propagates_without_fake_messages() -> None:
     assert len(conversation.messages) == 2
 
 
+@pytest.mark.asyncio
+async def test_cancellation_after_tool_commit_keeps_tool_messages() -> None:
+    """A shielded tool still commits; the result must stay in history when the turn is cut."""
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    result = '{"status":"ok","id":"schedule_1"}'
+
+    class ShieldedTool:
+        definition = ToolDefinition("schedule_create", "创建日程", {"type": "object"})
+
+        async def execute(self, arguments: Mapping[str, object]) -> str:
+            del arguments
+            work = asyncio.create_task(self._commit())
+            cancelled = False
+            try:
+                payload = await asyncio.shield(work)
+            except asyncio.CancelledError:
+                cancelled = True
+                payload = await work
+            if cancelled:
+                error = asyncio.CancelledError()
+                error.result = payload  # type: ignore[attr-defined]
+                raise error
+            return payload
+
+        async def _commit(self) -> str:
+            started.set()
+            await release.wait()
+            return result
+
+    llm = FakeLlm(
+        [
+            tool_events("schedule_create", '{"title":"开会"}'),
+            [TextDelta("已创建。"), completed()],
+        ]
+    )
+    conversation = AgentConversation()
+    agent = Agent(llm, ToolRegistry([ShieldedTool()]))
+
+    async def consume() -> None:
+        _ = [event async for event in agent.run_turn(conversation, "创建开会")]
+
+    task = asyncio.create_task(consume())
+    await started.wait()
+    task.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert any(
+        isinstance(message, ToolResultMessage) and message.content == result
+        for message in conversation.messages
+    )
+    assert any(isinstance(message, AssistantToolCallMessage) for message in conversation.messages)
+    assert len(llm.requests) == 1
+
+
 def test_agent_turn_context_system_message_includes_utc_and_local_times() -> None:
     context = AgentTurnContext(datetime(2026, 8, 20, 12, 0, tzinfo=UTC), "Asia/Shanghai")
 

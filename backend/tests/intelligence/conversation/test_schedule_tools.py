@@ -552,11 +552,14 @@ async def test_canceled_schedule_call_still_notifies_committed_result() -> None:
 
     task.cancel()
     release.set()
-    with pytest.raises(asyncio.CancelledError):
+    with pytest.raises(asyncio.CancelledError) as raised:
         await task
 
     assert notified.is_set()
     assert [call for call, _, _ in service.calls] == ["create"]
+    payload = getattr(raised.value, "result", None)
+    assert isinstance(payload, str)
+    assert json.loads(payload)["status"] == "ok"
 
 
 @pytest.mark.asyncio

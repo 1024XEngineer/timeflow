@@ -97,6 +97,18 @@ _EDITABLE_PROPERTIES: dict[str, object] = {
 }
 
 
+class CommittedScheduleToolCancelled(asyncio.CancelledError):
+    """The business call finished, then the awaiting Agent turn was cancelled.
+
+    Schedule tools shield the worker thread so a barge-in cannot un-commit. The
+    JSON result is attached so Agent can keep the tool messages in history.
+    """
+
+    def __init__(self, result: str) -> None:
+        super().__init__()
+        self.result = result
+
+
 class ScheduleToolInputError(ValueError):
     """A schedule tool payload cannot be mapped to the business contract."""
 
@@ -140,10 +152,14 @@ class _ScheduleTool:
             return _business_error_json(exc)
         except ScheduleToolInputError as exc:
             return _refusal_json(str(exc))
-        await self._notify_observer(result)
+        try:
+            await self._notify_observer(result)
+        except asyncio.CancelledError:
+            cancelled = True
+        payload = _result_json(result)
         if cancelled:
-            raise asyncio.CancelledError
-        return _result_json(result)
+            raise CommittedScheduleToolCancelled(payload)
+        return payload
 
     async def _notify_observer(
         self,

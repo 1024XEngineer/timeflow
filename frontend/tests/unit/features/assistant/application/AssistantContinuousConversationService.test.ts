@@ -1331,6 +1331,42 @@ describe('AssistantContinuousConversationService', () => {
     disposeService(service);
   });
 
+  it('does not enter interrupted for a leftover cancellation after tts.end', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      payload: {
+        format: 'pcm_s16le',
+        purpose: 'reply',
+        sample_rate_hz: 24000,
+        speech_text: '',
+      },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.end',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getState()).toEqual({ conversationId: 'conv_001', phase: 'listening' });
+
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.canceled',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getState()).toEqual({ conversationId: 'conv_001', phase: 'listening' });
+    disposeService(service);
+  });
+
   it('ignores the canceled stream end that arrives after interruption', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });

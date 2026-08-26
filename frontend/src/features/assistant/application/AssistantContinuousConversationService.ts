@@ -531,6 +531,12 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         ) {
           return;
         }
+        // tts.end 之后 currentAudioId 已清空：残留窗口里迟到的 canceled 只停播放，
+        // 不要把 listening 打成 interrupted。
+        if (this.currentAudioId === null) {
+          void this.stopPlaybackImmediately();
+          return;
+        }
         this.canceledAudioId = message.audio_id || this.currentAudioId;
         this.currentAudioId = null;
         // composed 代理打断回复时只发 voice.tts.canceled、不会再补 done=true，
