@@ -479,7 +479,7 @@ class ComposedVoiceAgent:
 
     async def _cancel_playable_reply(self, session: ComposedSession) -> bool:
         """Cancel a reply still being sent, or one the phone may still be playing."""
-        now = self._monotonic()
+        now = time.monotonic()
         async with session.lock:
             if session.active_audio_id is not None and session.active_audio_stream is not None:
                 audio_id = session.active_audio_id
@@ -814,7 +814,7 @@ class ComposedVoiceAgent:
                         )
                         # Remaining playback from *now*, matching realtime: generation
                         # often finishes before the phone has sounded the last byte.
-                        session.playable_until = self._monotonic() + max(
+                        session.playable_until = time.monotonic() + max(
                             duration, _MIN_PLAYABLE_SECONDS
                         )
                         if session.active_audio_id == event.audio_id:

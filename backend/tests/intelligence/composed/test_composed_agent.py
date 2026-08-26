@@ -1571,7 +1571,7 @@ def test_continuous_speech_started_during_llm_interrupts_the_turn() -> None:
                     yield TextDelta("慢速回复")
                     yield completed()
                     return
-                yield TextDelta("好的，已取消。")
+                yield TextDelta("好的。")
                 yield completed()
 
             return events()
@@ -1677,16 +1677,14 @@ def test_continuous_speech_started_during_tool_keeps_committed_result() -> None:
                     ToolCallDelta(0, "call_1", "schedule_create", '{"title":"开会"}'),
                     LlmStreamCompleted("tool_calls", None),
                 ],
-                [TextDelta("好的，已取消。"), completed()],
+                [TextDelta("好的。"), completed()],
             ]
         )
         tool = ShieldedCreateTool()
         telemetry = InterruptTelemetry()
         agent = ComposedVoiceAgent(
             CancelDuringToolAsr(),
-            lambda account_id, observer, client_location: Agent(
-                llm, ToolRegistry([tool])
-            ),
+            lambda account_id, observer, client_location: Agent(llm, ToolRegistry([tool])),
             FakeTts(),
             sink,
             telemetry=telemetry,
@@ -1706,8 +1704,8 @@ def test_continuous_speech_started_during_tool_keeps_committed_result() -> None:
         )
         assert telemetry.interrupts == ["session_1"]
         assert all(kind != "audio_canceled" for kind, _ in sink.calls)
-        replies = [value.text for kind, value in sink.calls if kind == "reply"]
-        assert "已创建" not in "".join(replies)
+        replies = [value.speech_text for kind, value in sink.calls if kind == "reply"]
+        assert all("已创建" not in text for text in replies)
 
     asyncio.run(scenario())
 
