@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 _TOOL_ROUND_LIMIT_MESSAGE = "一次操作太多了，请拆成几次再试。"
 # After the server finishes sending TTS, the phone may still be playing it. Keep a
 # barge-in window of at least this long so a quick "取消" is not treated as a new turn.
-_MIN_PLAYABLE_SECONDS = 0.75
+_MIN_PLAYABLE_SECONDS = 0.4
 
 
 def _client_location_from_stream(stream: AudioStreamInfo) -> ClientLocation | None:
