@@ -14,6 +14,7 @@ export {
   type AuthDiagnostics,
 } from './AuthDiagnostics';
 export {
+  ACCOUNT_STATE_CLEANUP_TIMEOUT_MS,
   AuthInvalidationCoordinator,
   type AccountStateCleanupPort,
   type AuthInvalidationController,
