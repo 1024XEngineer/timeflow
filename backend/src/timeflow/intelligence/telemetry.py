@@ -59,8 +59,12 @@ class TurnSpan(Protocol):
 class VoiceTelemetry(Protocol):
     """Observe composed and realtime voice turns without vendor or transport types."""
 
-    def start_turn(self, *, agent_mode: str, voice_mode: str) -> TurnSpan:
-        """Open a turn. Tool spans started afterward nest under it when context is active."""
+    def start_turn(self, *, agent_mode: str, voice_mode: str, account_id: str) -> TurnSpan:
+        """Open a turn. Tool spans started afterward nest under it when context is active.
+
+        ``account_id`` is for Tempo span attributes only. It must never become a
+        Prometheus label.
+        """
 
     def start_tool(self, name: str, *, agent_mode: str) -> ToolSpan:
         """Open the next tool call in the current turn's sequence."""
@@ -101,8 +105,8 @@ class _NoOpTurnSpan:
 class NoOpVoiceTelemetry:
     """Default telemetry that records nothing, used by tests and uninstrumented agents."""
 
-    def start_turn(self, *, agent_mode: str, voice_mode: str) -> TurnSpan:
-        del agent_mode, voice_mode
+    def start_turn(self, *, agent_mode: str, voice_mode: str, account_id: str) -> TurnSpan:
+        del agent_mode, voice_mode, account_id
         return _NoOpTurnSpan()
 
     def start_tool(self, name: str, *, agent_mode: str) -> ToolSpan:

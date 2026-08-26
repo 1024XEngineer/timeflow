@@ -22,6 +22,7 @@ from timeflow.business.health import HealthService
 from timeflow.composition import build_composed_voice_agent
 from timeflow.data.account_uow import SqlAlchemyAuthUnitOfWork
 from timeflow.data.database import build_engine, build_session_factory, ping_database
+from timeflow.data.repositories.account import AccountRepository
 from timeflow.data.schedule_unit_of_work import SqlAlchemyScheduleUnitOfWork
 from timeflow.gateway.http import (
     AuthAccess,
@@ -101,6 +102,14 @@ def create_app(
         owned_engine = engine
     if engine is not None:
         session_factory = build_session_factory(engine)
+        accounts = session_factory
+
+        def username_for(account_id: str) -> str | None:
+            with accounts() as session:
+                record = AccountRepository(session).get_by_id(account_id)
+            return None if record is None else record.username
+
+        VOICE_TELEMETRY.bind_username_lookup(username_for)
 
     if auth_access is None:
         assert session_factory is not None

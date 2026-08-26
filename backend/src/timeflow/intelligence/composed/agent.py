@@ -300,7 +300,11 @@ class ComposedVoiceAgent:
             await self._run_continuous(session, generation, chunks, stream)
             return
         timing = _TurnTiming(self._monotonic())
-        turn_span = self._telemetry.start_turn(agent_mode="composed", voice_mode=stream.voice_mode)
+        turn_span = self._telemetry.start_turn(
+            agent_mode="composed",
+            voice_mode=stream.voice_mode,
+            account_id=stream.account_id,
+        )
         status = "failed"
         try:
             self._telemetry.set_session_stage(stream.session_id, "asr")
@@ -398,7 +402,9 @@ class ComposedVoiceAgent:
                 timing.asr_completed_at = asr_completed_at
                 barge_in.clear()
                 turn_span = self._telemetry.start_turn(
-                    agent_mode="composed", voice_mode=stream.voice_mode
+                    agent_mode="composed",
+                    voice_mode=stream.voice_mode,
+                    account_id=stream.account_id,
                 )
                 turn_task = asyncio.create_task(
                     self._act_on_transcript(session, generation, text, stream, timing)

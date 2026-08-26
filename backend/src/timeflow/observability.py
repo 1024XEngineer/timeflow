@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from contextvars import ContextVar
 
 from opentelemetry import context as otel_context
@@ -44,9 +45,34 @@ from timeflow.intelligence.telemetry import (
 _tool_sequence: ContextVar[int] = ContextVar("timeflow_tool_sequence", default=0)
 _current_turn: ContextVar[_TurnSpan | None] = ContextVar("timeflow_current_turn", default=None)
 
+_ACCOUNT_ID_MAX = 64
+_USERNAME_MAX = 64
+ACCOUNT_ID_ATTRIBUTE = "timeflow.account_id"
+USERNAME_ATTRIBUTE = "timeflow.username"
+
+
+def span_account_id(value: str) -> str:
+    """Trim and cap the authenticated account id for Tempo. Never a metric label."""
+    text = value.strip()[:_ACCOUNT_ID_MAX]
+    return text if text else "unknown"
+
+
+def span_username(value: str) -> str:
+    """Trim and cap the APK login username for Tempo. Never a metric label."""
+    text = value.strip()[:_USERNAME_MAX]
+    return text if text else "unknown"
+
 
 class _ToolSpan:
-    def __init__(self, name: str, agent_mode: str, sequence: int) -> None:
+    def __init__(
+        self,
+        name: str,
+        agent_mode: str,
+        sequence: int,
+        *,
+        account_id: str,
+        username: str,
+    ) -> None:
         self._tool = tool_metric_name(name)
         self._agent_mode = bound_agent_mode(agent_mode)
         self._sequence = sequence
@@ -59,6 +85,8 @@ class _ToolSpan:
                 "timeflow.tool.name": self._tool,
                 "timeflow.tool.sequence": sequence,
                 "timeflow.agent_mode": self._agent_mode,
+                ACCOUNT_ID_ATTRIBUTE: account_id,
+                USERNAME_ATTRIBUTE: username,
             },
         )
         self._token = otel_context.attach(set_span_in_context(self._span))
@@ -82,9 +110,11 @@ class _ToolSpan:
 
 
 class _TurnSpan:
-    def __init__(self, agent_mode: str, voice_mode: str) -> None:
+    def __init__(self, agent_mode: str, voice_mode: str, account_id: str, username: str) -> None:
         self._agent_mode = bound_agent_mode(agent_mode)
         self._voice_mode = bound_voice_mode(voice_mode)
+        self.account_id = account_id
+        self.username = username
         self._tools: list[str] = []
         # A WebSocket session span stays open for the whole connection. Parenting the
         # turn under it hides completed turns from Tempo until disconnect. Start a new
@@ -99,6 +129,8 @@ class _TurnSpan:
             attributes={
                 "timeflow.agent_mode": self._agent_mode,
                 "timeflow.voice_mode": self._voice_mode,
+                ACCOUNT_ID_ATTRIBUTE: account_id,
+                USERNAME_ATTRIBUTE: username,
             },
         )
         self._token = otel_context.attach(set_span_in_context(self._span))
@@ -148,16 +180,47 @@ class _TurnSpan:
 class PrometheusOtelVoiceTelemetry:
     """Record voice-turn Prometheus samples and Tempo spans from intelligence ports."""
 
-    def __init__(self, occupancy: VoiceSessionOccupancy | None = None) -> None:
+    def __init__(
+        self,
+        occupancy: VoiceSessionOccupancy | None = None,
+        username_for: Callable[[str], str | None] | None = None,
+    ) -> None:
         self._occupancy = occupancy if occupancy is not None else VOICE_SESSION_OCCUPANCY
+        self._username_for = username_for
+        self._usernames: dict[str, str] = {}
 
-    def start_turn(self, *, agent_mode: str, voice_mode: str) -> TurnSpan:
-        return _TurnSpan(agent_mode, voice_mode)
+    def bind_username_lookup(self, lookup: Callable[[str], str | None]) -> None:
+        """Resolve APK login names from account ids. Called once from the composition root."""
+        self._username_for = lookup
+        self._usernames.clear()
+
+    def start_turn(self, *, agent_mode: str, voice_mode: str, account_id: str) -> TurnSpan:
+        return _TurnSpan(
+            agent_mode,
+            voice_mode,
+            span_account_id(account_id),
+            self._resolve_username(account_id),
+        )
 
     def start_tool(self, name: str, *, agent_mode: str) -> ToolSpan:
         sequence = _tool_sequence.get() + 1
         _tool_sequence.set(sequence)
-        return _ToolSpan(name, agent_mode, sequence)
+        turn = _current_turn.get()
+        account_id = turn.account_id if turn is not None else "unknown"
+        username = turn.username if turn is not None else "unknown"
+        return _ToolSpan(name, agent_mode, sequence, account_id=account_id, username=username)
+
+    def _resolve_username(self, account_id: str) -> str:
+        key = account_id.strip()
+        if not key:
+            return "unknown"
+        cached = self._usernames.get(key)
+        if cached is not None:
+            return cached
+        raw = self._username_for(key) if self._username_for is not None else None
+        value = span_username(raw or "")
+        self._usernames[key] = value
+        return value
 
     def record_agent_timing(
         self,
@@ -188,4 +251,11 @@ class PrometheusOtelVoiceTelemetry:
 VOICE_TELEMETRY: VoiceTelemetry = PrometheusOtelVoiceTelemetry()
 
 
-__all__ = ["PrometheusOtelVoiceTelemetry", "VOICE_TELEMETRY"]
+__all__ = [
+    "ACCOUNT_ID_ATTRIBUTE",
+    "PrometheusOtelVoiceTelemetry",
+    "USERNAME_ATTRIBUTE",
+    "VOICE_TELEMETRY",
+    "span_account_id",
+    "span_username",
+]

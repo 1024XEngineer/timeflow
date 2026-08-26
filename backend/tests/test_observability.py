@@ -12,7 +12,13 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from timeflow.gateway.observability.http import install_http_observability
 from timeflow.infrastructure.observability.sessions import VoiceSessionOccupancy
 from timeflow.infrastructure.observability.tracing import reset_tracing_for_tests, start_span
-from timeflow.observability import PrometheusOtelVoiceTelemetry
+from timeflow.observability import (
+    ACCOUNT_ID_ATTRIBUTE,
+    USERNAME_ATTRIBUTE,
+    PrometheusOtelVoiceTelemetry,
+    span_account_id,
+    span_username,
+)
 
 _EXPORTER: InMemorySpanExporter | None = None
 
@@ -51,7 +57,11 @@ def test_tool_spans_preserve_call_order_under_the_turn() -> None:
         {"tool": "schedule_query", "agent_mode": "composed", "status": "ok"},
     )
 
-    turn = telemetry.start_turn(agent_mode="composed", voice_mode="push_to_talk")
+    turn = telemetry.start_turn(
+        agent_mode="composed",
+        voice_mode="push_to_talk",
+        account_id="acc_turn_order",
+    )
     first = telemetry.start_tool("schedule_query", agent_mode="composed")
     first.finish(status="ok")
     second = telemetry.start_tool("schedule_create", agent_mode="composed")
@@ -83,6 +93,9 @@ def test_tool_spans_preserve_call_order_under_the_turn() -> None:
     assert turn_span.parent is None
     assert turn_span.attributes["timeflow.tools"] == "schedule_query,schedule_create"
     assert turn_span.attributes["timeflow.tool.count"] == 2
+    assert turn_span.attributes[ACCOUNT_ID_ATTRIBUTE] == "acc_turn_order"
+    assert query.attributes[ACCOUNT_ID_ATTRIBUTE] == "acc_turn_order"
+    assert create.attributes[ACCOUNT_ID_ATTRIBUTE] == "acc_turn_order"
     assert [event.name for event in turn_span.events] == [
         "tool.schedule_query",
         "tool.schedule_create",
@@ -113,7 +126,11 @@ def test_unknown_tools_collapse_to_other_and_failed_turns_mark_error() -> None:
         {"tool": "other", "agent_mode": "realtime", "status": "error"},
     )
 
-    turn = telemetry.start_turn(agent_mode="realtime", voice_mode="continuous")
+    turn = telemetry.start_turn(
+        agent_mode="realtime",
+        voice_mode="continuous",
+        account_id="acc_failed_turn",
+    )
     tool = telemetry.start_tool("invented_secret_tool", agent_mode="realtime")
     tool.finish(status="error", error_kind="provider")
     turn.finish(status="failed")
@@ -124,6 +141,8 @@ def test_unknown_tools_collapse_to_other_and_failed_turns_mark_error() -> None:
     assert spans["voice.turn"].status.status_code.name == "ERROR"
     assert spans["voice.turn"].attributes["timeflow.tools"] == "other"
     assert spans["voice.turn"].attributes["timeflow.tool.count"] == 1
+    assert spans["voice.turn"].attributes[ACCOUNT_ID_ATTRIBUTE] == "acc_failed_turn"
+    assert spans["tool.other"].attributes[ACCOUNT_ID_ATTRIBUTE] == "acc_failed_turn"
     _assert_no_payload_attributes(exporter)
     assert (
         metric_value(
@@ -177,7 +196,11 @@ def test_voice_turn_starts_a_new_trace_while_a_websocket_session_is_open() -> No
     session = trace.get_tracer("timeflow.gateway").start_span("ws.session")
     token = otel_context.attach(trace.set_span_in_context(session))
     try:
-        turn = telemetry.start_turn(agent_mode="composed", voice_mode="continuous")
+        turn = telemetry.start_turn(
+            agent_mode="composed",
+            voice_mode="continuous",
+            account_id="acc_new_trace",
+        )
         tool = telemetry.start_tool("schedule_query", agent_mode="composed")
         tool.finish(status="ok")
         turn.finish(status="completed")
@@ -217,3 +240,56 @@ def test_http_request_span_parents_work_started_inside_the_handler() -> None:
     assert spans["db.select"].parent is not None
     assert spans["db.select"].parent.span_id == spans["http.request"].context.span_id
     _assert_no_payload_attributes(exporter)
+
+
+def test_turn_and_tool_spans_carry_apk_login_username_for_tempo_filters() -> None:
+    exporter = _span_exporter()
+    usernames = {"acc_alice": "  alice  ", "acc_bob": "bob"}
+    telemetry = PrometheusOtelVoiceTelemetry(username_for=usernames.get)
+
+    alice = telemetry.start_turn(
+        agent_mode="composed",
+        voice_mode="push_to_talk",
+        account_id="  acc_alice  ",
+    )
+    alice_tool = telemetry.start_tool("schedule_query", agent_mode="composed")
+    alice_tool.finish(status="ok")
+    alice.finish(status="completed")
+
+    bob = telemetry.start_turn(
+        agent_mode="composed",
+        voice_mode="push_to_talk",
+        account_id="acc_bob",
+    )
+    bob.finish(status="completed")
+
+    blank = telemetry.start_turn(
+        agent_mode="composed",
+        voice_mode="push_to_talk",
+        account_id="   ",
+    )
+    blank.finish(status="completed")
+
+    missing = telemetry.start_turn(
+        agent_mode="composed",
+        voice_mode="push_to_talk",
+        account_id="acc_missing",
+    )
+    missing.finish(status="completed")
+
+    spans = exporter.get_finished_spans()
+    turns = [span for span in spans if span.name == "voice.turn"]
+    tools = [span for span in spans if span.name.startswith("tool.")]
+    account_ids = [span.attributes[ACCOUNT_ID_ATTRIBUTE] for span in turns]
+    names = [span.attributes[USERNAME_ATTRIBUTE] for span in turns]
+    assert account_ids == ["acc_alice", "acc_bob", "unknown", "acc_missing"]
+    assert names == ["alice", "bob", "unknown", "unknown"]
+    assert tools[0].attributes[ACCOUNT_ID_ATTRIBUTE] == "acc_alice"
+    assert tools[0].attributes[USERNAME_ATTRIBUTE] == "alice"
+    assert span_account_id("acc_alice") == "acc_alice"
+    assert span_username("  alice  ") == "alice"
+    _assert_no_payload_attributes(exporter)
+    from timeflow.infrastructure.observability.metrics import VOICE_TURNS
+
+    assert "account_id" not in VOICE_TURNS._labelnames
+    assert "username" not in VOICE_TURNS._labelnames

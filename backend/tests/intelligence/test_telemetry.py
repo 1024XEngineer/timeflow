@@ -23,7 +23,11 @@ def test_tool_result_status_reads_only_the_bounded_status_field() -> None:
 
 
 def test_noop_telemetry_accepts_turn_and_tool_calls() -> None:
-    span = NOOP_TELEMETRY.start_turn(agent_mode="composed", voice_mode="push_to_talk")
+    span = NOOP_TELEMETRY.start_turn(
+        agent_mode="composed",
+        voice_mode="push_to_talk",
+        account_id="acc_test",
+    )
     span.record_stage("asr_total_ms", 12.0)
     span.record_llm_usage(prompt_tokens=1, completion_tokens=2)
     span.finish(status="completed")

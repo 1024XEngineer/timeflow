@@ -163,7 +163,9 @@ class RealtimeAgent:
             pumping = asyncio.create_task(held.session.pump(turn))
             reusable = False
             turn_span = self._telemetry.start_turn(
-                agent_mode="realtime", voice_mode=stream.voice_mode
+                agent_mode="realtime",
+                voice_mode=stream.voice_mode,
+                account_id=stream.account_id,
             )
             status = "failed"
             started = self._clock()
