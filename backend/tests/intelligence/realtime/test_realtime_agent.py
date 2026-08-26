@@ -13,7 +13,7 @@ from timeflow.intelligence.ports import (
     ReplyText,
     Transcript,
 )
-from timeflow.intelligence.realtime.agent import RealtimeAgent
+from timeflow.intelligence.realtime.agent import SESSION_MAX_TOKENS, RealtimeAgent
 
 
 @dataclass(frozen=True, slots=True)
@@ -705,5 +705,80 @@ def test_tools_factory_receives_none_for_a_malformed_stream_location() -> None:
         )
 
         assert factory.received == [None]
+
+    asyncio.run(scenario())
+
+
+def test_a_continuous_pump_that_finishes_on_its_own_is_not_told_to_cancel() -> None:
+    """When the pump has already settled by the time the mic closes, no cancel_response
+    is needed -- that call exists only to stop a reply still being generated.
+    """
+
+    async def scenario() -> None:
+        session = ScriptedSession([])
+
+        await RealtimeAgent(ScriptedFactory(session), RecordingSink()).handle_audio(
+            _chunks(b"a"), _Stream(voice_mode="continuous")
+        )
+
+        assert session.cancel_response_calls == 0
+
+    asyncio.run(scenario())
+
+
+def test_a_session_over_the_token_budget_is_replaced_on_the_next_turn() -> None:
+    """Accumulated response tokens are a third budget alongside turns and age --
+    once a held session crosses SESSION_MAX_TOKENS, the next turn on that
+    conversation gets a freshly opened session instead of reusing it.
+    """
+
+    async def scenario() -> None:
+        first_session = ScriptedSession([("usage_reported", ({"total_tokens": SESSION_MAX_TOKENS},))])
+        second_session = ScriptedSession([])
+        sessions = iter([first_session, second_session])
+
+        class SwitchingFactory:
+            async def open(
+                self, instructions: str, tools: list[dict[str, Any]], voice_mode: str
+            ) -> ScriptedSession:
+                return next(sessions)
+
+        agent = RealtimeAgent(SwitchingFactory(), RecordingSink())
+        stream = _Stream()
+
+        await agent.handle_audio(_chunks(b"a"), stream)
+        await agent.handle_audio(_chunks(b"b"), stream)
+
+        assert first_session.closed is True
+        assert second_session.audio_sent == [b"b"]
+
+    asyncio.run(scenario())
+
+
+def test_a_voice_mode_change_discards_the_held_session_and_opens_a_fresh_one() -> None:
+    """The vendor only accepts turn_detection at connect time, so switching between
+    push_to_talk and continuous mid-conversation must discard the old session rather
+    than reuse it in the wrong mode.
+    """
+
+    async def scenario() -> None:
+        first_session = ScriptedSession([])
+        second_session = ScriptedSession([])
+        sessions = iter([first_session, second_session])
+
+        class SwitchingFactory:
+            async def open(
+                self, instructions: str, tools: list[dict[str, Any]], voice_mode: str
+            ) -> ScriptedSession:
+                return next(sessions)
+
+        agent = RealtimeAgent(SwitchingFactory(), RecordingSink())
+        stream_key = _Stream()
+
+        await agent.handle_audio(_chunks(b"a"), stream_key)
+        await agent.handle_audio(_chunks(b"b"), _Stream(voice_mode="continuous"))
+
+        assert first_session.closed is True
+        assert second_session.audio_sent == [b"b"]
 
     asyncio.run(scenario())
