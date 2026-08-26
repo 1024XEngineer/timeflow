@@ -557,9 +557,11 @@ class _Turn:
         so the numbers themselves would silently vanish if left out of the message.
         """
         logger.info(
-            "realtime response usage: total=%s input=%s output=%s "
-            "input_text=%s input_audio=%s output_text=%s output_audio=%s "
+            "realtime response usage: account_id=%s conversation_id=%s total=%s input=%s "
+            "output=%s input_text=%s input_audio=%s output_text=%s output_audio=%s "
             "vad_ms=%s first_audio_ms=%s response_ms=%s",
+            self._stream.account_id,
+            self._stream.conversation_id,
             usage.get("total_tokens"),
             usage.get("input_tokens"),
             usage.get("output_tokens"),
@@ -599,8 +601,10 @@ class _Turn:
             f"{name}={value if value is not None else 'n/a'}" for name, value in fields.items()
         )
         logger.info(
-            "realtime turn timing: voice_mode=%s kept=%s session_turns=%s "
-            "session_age_ms=%s connect_ms=%s %s",
+            "realtime turn timing: account_id=%s conversation_id=%s voice_mode=%s kept=%s "
+            "session_turns=%s session_age_ms=%s connect_ms=%s %s",
+            self._stream.account_id,
+            self._stream.conversation_id,
             self._stream.voice_mode,
             kept,
             session_turns,
