@@ -91,6 +91,10 @@ class RecordingObserver:
         """Record a session failure."""
         self.calls.append(("failed", message))
 
+    async def usage_reported(self, usage: dict[str, Any]) -> None:
+        """Record one response's flattened usage and latency fields."""
+        self.calls.append(("usage_reported", usage))
+
     def kinds(self) -> list[str]:
         """Return just the kind of each observed call."""
         return [kind for kind, _ in self.calls]
@@ -217,6 +221,45 @@ def test_configure_in_continuous_mode_uses_the_configured_turn_detection() -> No
         await QwenAudioSession(transport, CONFIG, CONTINUOUS).configure("", [])
 
         assert transport.sent[0]["session"]["turn_detection"] == {"type": "smart_turn"}
+
+    asyncio.run(scenario())
+
+
+def test_configure_in_continuous_mode_sends_the_configured_history_window() -> None:
+    async def scenario() -> None:
+        config = QwenAudioConfig(
+            api_key="key-abc",
+            workspace_id="ws_001",
+            model="qwen-audio-3.0-realtime-plus",
+            max_history_turns=6,
+            max_history_turns_push_to_talk=2,
+        )
+        transport = FakeTransport()
+
+        await QwenAudioSession(transport, config, CONTINUOUS).configure("", [])
+
+        assert transport.sent[0]["session"]["max_history_turns"] == 6
+
+    asyncio.run(scenario())
+
+
+def test_configure_in_push_to_talk_uses_the_smaller_history_window() -> None:
+    """Push-to-talk is one request in, one reply out -- it needs less carried history
+    than a continuous conversation does."""
+
+    async def scenario() -> None:
+        config = QwenAudioConfig(
+            api_key="key-abc",
+            workspace_id="ws_001",
+            model="qwen-audio-3.0-realtime-plus",
+            max_history_turns=6,
+            max_history_turns_push_to_talk=2,
+        )
+        transport = FakeTransport()
+
+        await QwenAudioSession(transport, config, PUSH_TO_TALK).configure("", [])
+
+        assert transport.sent[0]["session"]["max_history_turns"] == 2
 
     asyncio.run(scenario())
 
@@ -775,6 +818,9 @@ class _SeamObserver:
     async def failed(self, message: str) -> None:
         """Ignore the failure."""
 
+    async def usage_reported(self, usage: dict[str, Any]) -> None:
+        """Ignore the usage report."""
+
 
 def test_a_session_that_cannot_be_configured_closes_its_transport() -> None:
     """A socket the caller never receives is a socket nobody can close."""
@@ -1048,11 +1094,12 @@ def test_speech_started_still_cancels_after_generation_finishes_if_playback_is_n
     """
 
     async def scenario() -> None:
-        # Two clock reads happen: once when response.done estimates how long this
-        # reply's audio takes to finish playing, once when speech_started checks
-        # against that estimate. 0.1s later is well inside the ~0.5s the 24000 bytes
-        # below (24kHz, 16-bit mono) would take to actually play.
-        clock_reads = iter([0.0, 0.1])
+        # Five clock reads: response.created and the reply's first audio each stamp
+        # a latency boundary, response.done estimates how long this reply's audio
+        # takes to finish playing (~0.5s for the 24000 bytes below, 24kHz 16-bit
+        # mono), then speech_started stamps itself and checks against that estimate
+        # -- 0.1s later is still inside the playback window, so it is a real barge-in.
+        clock_reads = iter([0.0, 0.05, 0.05, 0.1, 0.1])
         transport = FakeTransport(
             _event("response.created"),
             _event("response.audio.delta", delta=base64.b64encode(b"a" * 24000).decode()),
@@ -1080,8 +1127,10 @@ def test_speech_started_does_not_cancel_once_the_reply_would_be_done_playing() -
     """
 
     async def scenario() -> None:
-        # 10s later is far past the ~0.5s the 24000 bytes below would take to play.
-        clock_reads = iter([0.0, 10.0])
+        # Five clock reads: created, first audio, done (playback estimate of ~0.5s for the
+        # 24000 bytes below), then speech_started stamps itself and checks. 10s later is
+        # far past the playback window, so nothing gets cancelled.
+        clock_reads = iter([0.0, 0.05, 0.05, 10.0, 10.0])
         transport = FakeTransport(
             _event("response.created"),
             _event("response.audio.delta", delta=base64.b64encode(b"a" * 24000).decode()),
@@ -1294,5 +1343,205 @@ def test_cancel_response_is_a_no_op_when_nothing_is_responding() -> None:
         await session.cancel_response()
 
         assert transport.sent == []
+
+    asyncio.run(scenario())
+
+
+def _usage_event(**overrides: Any) -> str:
+    """Build a response.done frame carrying the vendor's real usage shape."""
+    usage: dict[str, Any] = {
+        "total_tokens": 100,
+        "input_tokens": 80,
+        "output_tokens": 20,
+        "input_tokens_details": {"text_tokens": 60, "audio_tokens": 20},
+        "output_tokens_details": {"text_tokens": 5, "audio_tokens": 15},
+    }
+    usage.update(overrides)
+    return _event("response.done", response={"status": "completed", "usage": usage})
+
+
+def test_push_to_talk_reports_usage_with_no_latency_when_no_response_created_arrived() -> None:
+    """A response.done with usage but nothing to time against reports latency as None.
+
+    Push-to-talk's own response.created handling stamps _response_started_at, but a
+    reply short enough (or a vendor quirk) can settle without ever emitting one -- the
+    flattened usage must still reach the observer, just with every latency field absent
+    rather than computed against a missing start time.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(_usage_event())
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(observer)
+
+        assert observer.calls == [
+            (
+                "usage_reported",
+                {
+                    "total_tokens": 100,
+                    "input_tokens": 80,
+                    "output_tokens": 20,
+                    "input_text_tokens": 60,
+                    "input_audio_tokens": 20,
+                    "output_text_tokens": 5,
+                    "output_audio_tokens": 15,
+                    "latency_vad_ms": None,
+                    "latency_first_audio_ms": None,
+                    "latency_response_ms": None,
+                },
+            )
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_continuous_reports_usage_with_computed_latency() -> None:
+    """A full continuous turn reports vad/first-audio/response latency alongside usage.
+
+    Exercises the non-None branch of _latency_report(): response.created stamps the
+    response start, input_audio_buffer.speech_started stamps the VAD boundary before
+    it, and the first audio.delta stamps first_audio -- all three land in the usage
+    payload once response.done arrives.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("input_audio_buffer.speech_started"),
+            _event("response.created"),
+            _event("response.audio.delta", delta=base64.b64encode(b"pcm").decode()),
+            _usage_event(),
+            _event("error", error={"message": "stream ended"}),
+        )
+        # Reads in call order: speech_started stamps _speech_started_at, then the same
+        # branch's barge-in check reads the clock again (self._responding is still
+        # False at that point, so Python evaluates the "or"'s second operand);
+        # response.created stamps _response_started_at; the first audio.delta stamps
+        # _first_audio_at; response.done's own latency report reads the clock once for
+        # latency_response_ms; then response.done's playable_until estimate reads it
+        # once more.
+        clock_reads = iter([0.0, 0.0, 1.0, 1.2, 1.5, 1.5])
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS, clock=lambda: next(clock_reads)).pump(
+            observer
+        )
+
+        usage_calls = [call for call in observer.calls if call[0] == "usage_reported"]
+        assert len(usage_calls) == 1
+        usage = usage_calls[0][1]
+        assert usage["latency_vad_ms"] == 1000.0
+        assert usage["latency_first_audio_ms"] == 200.0
+        assert usage["latency_response_ms"] == 500.0
+
+    asyncio.run(scenario())
+
+
+def test_a_response_done_without_a_completed_status_reports_no_usage() -> None:
+    """A cancelled or failed response carries no usage block; nothing is reported."""
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("response.done", response={"status": "cancelled"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(observer)
+
+        assert observer.calls == []
+
+    asyncio.run(scenario())
+
+
+def test_a_second_audio_delta_does_not_re_stamp_first_audio_time() -> None:
+    """Only the first audio.delta in a reply sets _first_audio_at; later chunks in the
+    same reply must not overwrite it once it is already set.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("response.created"),
+            _event("response.audio.delta", delta=base64.b64encode(b"pcm-1").decode()),
+            _event("response.audio.delta", delta=base64.b64encode(b"pcm-2").decode()),
+            _usage_event(),
+            _event("error", error={"message": "stream ended"}),
+        )
+        # created, first delta stamps _first_audio_at, second delta's guard reads
+        # nothing further (short-circuited), response.done's playable_until estimate,
+        # then its own latency report.
+        clock_reads = iter([0.0, 0.2, 0.5, 0.5])
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS, clock=lambda: next(clock_reads)).pump(
+            observer
+        )
+
+        usage = next(call[1] for call in observer.calls if call[0] == "usage_reported")
+        assert usage["latency_first_audio_ms"] == 200.0
+        assert observer.calls[0] == ("audio", b"pcm-1")
+        assert observer.calls[1] == ("audio", b"pcm-2")
+
+    asyncio.run(scenario())
+
+
+def test_a_second_open_response_after_settling_one_keeps_the_pump_running() -> None:
+    """_open_responses can exceed 1 when a caller starts a second response.create
+    before the first is done (e.g. finish_input() called again on an already-open
+    turn) -- the first response.done must not end the pump while one is still open.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(_event("response.done"), _event("response.done"))
+        session = QwenAudioSession(transport, CONFIG, PUSH_TO_TALK)
+        await session.finish_input()
+        await session.finish_input()
+        observer = RecordingObserver()
+
+        await session.pump(observer)
+
+        assert observer.calls == []
+
+    asyncio.run(scenario())
+
+
+def test_usage_without_token_detail_breakdowns_reports_none_for_them() -> None:
+    """A usage block missing the per-modality detail objects still reports the totals.
+
+    Nothing in the protocol guarantees input_tokens_details/output_tokens_details are
+    always present; _parse_usage must degrade to None for the four detail fields
+    rather than raising.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event(
+                "response.done",
+                response={
+                    "status": "completed",
+                    "usage": {"total_tokens": 10, "input_tokens": 8, "output_tokens": 2},
+                },
+            )
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, PUSH_TO_TALK).pump(observer)
+
+        assert observer.calls == [
+            (
+                "usage_reported",
+                {
+                    "total_tokens": 10,
+                    "input_tokens": 8,
+                    "output_tokens": 2,
+                    "input_text_tokens": None,
+                    "input_audio_tokens": None,
+                    "output_text_tokens": None,
+                    "output_audio_tokens": None,
+                    "latency_vad_ms": None,
+                    "latency_first_audio_ms": None,
+                    "latency_response_ms": None,
+                },
+            )
+        ]
 
     asyncio.run(scenario())

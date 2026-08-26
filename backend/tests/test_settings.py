@@ -39,6 +39,8 @@ AUDIO_ENVIRONMENT_VARIABLES = (
     "TIMEFLOW_ALIYUN_AUDIO_TURN_DETECTION",
     "TIMEFLOW_ALIYUN_AUDIO_VAD_THRESHOLD",
     "TIMEFLOW_ALIYUN_AUDIO_VAD_SILENCE_DURATION_MS",
+    "TIMEFLOW_ALIYUN_AUDIO_MAX_HISTORY_TURNS",
+    "TIMEFLOW_ALIYUN_AUDIO_MAX_HISTORY_TURNS_PUSH_TO_TALK",
 )
 JWT_ENVIRONMENT_VARIABLES = (
     "TIMEFLOW_JWT_SECRET",
@@ -198,6 +200,8 @@ def test_settings_use_qwen_audio_turn_detection_defaults(
     assert settings.aliyun_audio_turn_detection == "smart_turn"
     assert settings.aliyun_audio_vad_threshold == 0.5
     assert settings.aliyun_audio_vad_silence_duration_ms == 800
+    assert settings.aliyun_audio_max_history_turns == 10
+    assert settings.aliyun_audio_max_history_turns_push_to_talk == 5
 
 
 def test_settings_convert_audio_turn_detection_environment_values(
@@ -207,12 +211,16 @@ def test_settings_convert_audio_turn_detection_environment_values(
     monkeypatch.setenv("TIMEFLOW_ALIYUN_AUDIO_TURN_DETECTION", "server_vad")
     monkeypatch.setenv("TIMEFLOW_ALIYUN_AUDIO_VAD_THRESHOLD", "0.1")
     monkeypatch.setenv("TIMEFLOW_ALIYUN_AUDIO_VAD_SILENCE_DURATION_MS", "900")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_AUDIO_MAX_HISTORY_TURNS", "10")
+    monkeypatch.setenv("TIMEFLOW_ALIYUN_AUDIO_MAX_HISTORY_TURNS_PUSH_TO_TALK", "1")
 
     settings = Settings.from_environment()
 
     assert settings.aliyun_audio_turn_detection == "server_vad"
     assert settings.aliyun_audio_vad_threshold == 0.1
     assert settings.aliyun_audio_vad_silence_duration_ms == 900
+    assert settings.aliyun_audio_max_history_turns == 10
+    assert settings.aliyun_audio_max_history_turns_push_to_talk == 1
 
 
 def test_settings_allow_empty_jwt_secret_with_v1_defaults(
@@ -479,6 +487,26 @@ def test_settings_reject_invalid_tencent_map_timeout(monkeypatch: MonkeyPatch, v
             "TIMEFLOW_ALIYUN_AUDIO_VAD_SILENCE_DURATION_MS",
             "100",
             "TIMEFLOW_ALIYUN_AUDIO_VAD_SILENCE_DURATION_MS must be between 200 and 6000",
+        ),
+        (
+            "TIMEFLOW_ALIYUN_AUDIO_MAX_HISTORY_TURNS",
+            "0",
+            "TIMEFLOW_ALIYUN_AUDIO_MAX_HISTORY_TURNS must be between 1 and 50",
+        ),
+        (
+            "TIMEFLOW_ALIYUN_AUDIO_MAX_HISTORY_TURNS",
+            "51",
+            "TIMEFLOW_ALIYUN_AUDIO_MAX_HISTORY_TURNS must be between 1 and 50",
+        ),
+        (
+            "TIMEFLOW_ALIYUN_AUDIO_MAX_HISTORY_TURNS_PUSH_TO_TALK",
+            "0",
+            "TIMEFLOW_ALIYUN_AUDIO_MAX_HISTORY_TURNS_PUSH_TO_TALK must be between 1 and 50",
+        ),
+        (
+            "TIMEFLOW_ALIYUN_AUDIO_MAX_HISTORY_TURNS_PUSH_TO_TALK",
+            "51",
+            "TIMEFLOW_ALIYUN_AUDIO_MAX_HISTORY_TURNS_PUSH_TO_TALK must be between 1 and 50",
         ),
     ],
 )

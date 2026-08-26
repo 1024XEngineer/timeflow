@@ -294,6 +294,10 @@ def _build_realtime_agent(
                     turn_detection=settings.aliyun_audio_turn_detection,
                     vad_threshold=settings.aliyun_audio_vad_threshold,
                     vad_silence_duration_ms=settings.aliyun_audio_vad_silence_duration_ms,
+                    max_history_turns=settings.aliyun_audio_max_history_turns,
+                    max_history_turns_push_to_talk=(
+                        settings.aliyun_audio_max_history_turns_push_to_talk
+                    ),
                 )
             ),
             result_sink,

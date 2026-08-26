@@ -526,6 +526,44 @@ def test_a_query_reports_what_it_found_to_both_sides() -> None:
     assert len(result.outcome["schedules"]) == 1
 
 
+class _ManySchedulesService(RecordingService):
+    """Return more matches than the model-facing output caps at."""
+
+    def __init__(self, count: int) -> None:
+        super().__init__()
+        self._count = count
+
+    def find_schedules(self, *, account_id: str, query: Any) -> ScheduleSearchResult:
+        self.calls.append("find")
+        return ScheduleSearchResult(
+            schedules=tuple(replace(SNAPSHOT, id=f"sch_{i}") for i in range(self._count))
+        )
+
+
+def test_a_query_past_the_model_cap_is_truncated_for_the_model_but_not_the_client() -> None:
+    """A voice query rarely needs more than a handful spoken back -- the model-facing
+    output caps at MAX_SCHEDULES_FOR_MODEL, but the client still gets everything found.
+    """
+    result = run("schedule_query", {}, ToolBox("acc_test", _ManySchedulesService(25)))
+    payload = json.loads(result.output)
+
+    assert payload["count"] == 25
+    assert len(payload["schedules"]) == 20
+    assert payload["truncated"] is True
+    assert payload["shown"] == 20
+    assert result.outcome is not None
+    assert len(result.outcome["schedules"]) == 25
+
+
+def test_a_query_at_or_under_the_model_cap_is_not_marked_truncated() -> None:
+    result = run("schedule_query", {}, ToolBox("acc_test", _ManySchedulesService(20)))
+    payload = json.loads(result.output)
+
+    assert payload["count"] == 20
+    assert len(payload["schedules"]) == 20
+    assert "truncated" not in payload
+
+
 def test_a_blank_required_response_is_reported_as_absent() -> None:
     result = run(
         "request_user_input",
