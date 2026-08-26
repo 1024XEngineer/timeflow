@@ -1110,7 +1110,13 @@ def test_speech_started_does_not_cancel_once_the_reply_would_be_done_playing() -
             observer
         )
 
-        assert observer.kinds() == ["audio", "turn_completed", "user_started_speaking", "heard", "failed"]
+        assert observer.kinds() == [
+            "audio",
+            "turn_completed",
+            "user_started_speaking",
+            "heard",
+            "failed",
+        ]
 
     asyncio.run(scenario())
 
