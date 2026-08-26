@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: TimeFlow
+    orgId: 1
+    folder: TimeFlow
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /Users/mac/Desktop/tf/observability/grafana-config/provisioning/dashboards/json
+      foldersFromFilesStructure: false
