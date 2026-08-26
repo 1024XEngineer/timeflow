@@ -300,6 +300,68 @@ describe('ReminderGuardCoordinator', () => {
     }
   });
 
+  it('does not restart location updates after a timed-out stop() while reconcile awaits registration state', async () => {
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+    await coordinator.start();
+    expect(startUpdates).toHaveBeenCalledTimes(1);
+    startUpdates.mockClear();
+
+    const pendingHasStarted: Array<(value: boolean) => void> = [];
+    hasStarted.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          pendingHasStarted.push(resolve);
+        }),
+    );
+
+    reader.emit();
+    await flushMicrotasks();
+
+    jest.useFakeTimers();
+    try {
+      const stopping = coordinator.stop();
+      jest.advanceTimersByTime(2_000);
+      await stopping;
+    } finally {
+      jest.useRealTimers();
+    }
+
+    for (const resolve of pendingHasStarted) resolve(false);
+    await flushMicrotasks();
+
+    expect(startUpdates).not.toHaveBeenCalled();
+  });
+
+  it('force-stops a location start that completed after logout', async () => {
+    let finishStart: () => void = () => {};
+    startUpdates.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishStart = () => resolve();
+        }),
+    );
+
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+    const starting = coordinator.start();
+    await flushMicrotasks();
+
+    await coordinator.stop();
+
+    hasStarted.mockResolvedValue(true);
+    finishStart();
+    await starting;
+
+    expect(stopUpdates).toHaveBeenCalledWith(GUARD_TASK_NAME);
+  });
+
   it('routes an incoming guard sample to handleLocation and re-reconciles', async () => {
     let sampleListener:
       | ((sample: {
