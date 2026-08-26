@@ -6,12 +6,13 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 
-import { floatingVoiceContentBottomInset } from '../../../shared/ui/floatingVoiceBarLayout';
+import { floatingVoiceViewportBottomInset } from '../../../shared/ui/floatingVoiceBarLayout';
 import { colors, spacing } from '../../../shared/ui/theme';
 import type { ScheduleCalendarReadService, ScheduleOccurrenceView } from '../application';
 import { LocationScheduleDetailSheet } from './LocationScheduleDetailSheet';
@@ -65,12 +66,14 @@ export function ScheduleCalendarScreen({
   );
   const [selectedOccurrenceKey, setSelectedOccurrenceKey] = useState<string | null>(null);
   const [selectedLocationId, setSelectedLocationId] = useState<string | null>(null);
+  const { fontScale, width } = useWindowDimensions();
   const selectedOccurrence =
     calendar.selectedOccurrences.find((item) => occurrenceKey(item) === selectedOccurrenceKey) ??
     null;
   const selectedLocation =
     calendar.locationSchedules.find((item) => item.scheduleId === selectedLocationId) ?? null;
   const topSafeAreaPadding = Platform.OS === 'android' ? insets.top : 0;
+  const stackHeader = shouldStackScheduleHeader(width, fontScale);
   const selectedLabel = SELECTED_DATE_FORMATTER.format(calendar.selectedDate);
   const agendaTitle = formatAgendaSectionTitle(calendar.selectedDate);
   const emptyAgenda = emptyAgendaMessage(calendar.selectedDate);
@@ -78,26 +81,30 @@ export function ScheduleCalendarScreen({
   const avatarInitial = Array.from(displayUsername)[0]?.toLocaleUpperCase() ?? '用';
 
   return (
-    <View style={styles.screen}>
+    <View
+      style={[styles.screen, { paddingTop: topSafeAreaPadding }]}
+      testID="schedule-calendar-screen"
+    >
       <ScrollView
-        contentContainerStyle={[
-          styles.scrollContent,
-          {
-            paddingBottom: floatingVoiceContentBottomInset(insets.bottom),
-            paddingTop: topSafeAreaPadding,
-          },
-        ]}
-        contentInsetAdjustmentBehavior="automatic"
+        contentContainerStyle={styles.scrollContent}
+        contentInsetAdjustmentBehavior={Platform.OS === 'ios' ? 'automatic' : 'never'}
         showsVerticalScrollIndicator={false}
+        style={{ marginBottom: floatingVoiceViewportBottomInset(insets.bottom) }}
         testID="schedule-calendar-scroll"
       >
         <View style={styles.content}>
           <View style={styles.header}>
-            <View style={styles.headerTop}>
-              <Text testID="schedule-selected-date" style={styles.title}>
+            <View style={[styles.headerTop, stackHeader && styles.headerTopStacked]}>
+              <Text
+                testID="schedule-selected-date"
+                style={[styles.title, stackHeader && styles.titleStacked]}
+              >
                 {selectedLabel}
               </Text>
-              <View style={styles.accountActions} testID="schedule-account-actions">
+              <View
+                style={[styles.accountActions, stackHeader && styles.accountActionsStacked]}
+                testID="schedule-account-actions"
+              >
                 <Pressable
                   accessibilityLabel={`当前用户 ${displayUsername}，点击查看权限设置`}
                   accessibilityRole="button"
@@ -221,6 +228,12 @@ export function ScheduleCalendarScreen({
   );
 }
 
+export function shouldStackScheduleHeader(width: number, fontScale: number): boolean {
+  if (width <= 0) return false;
+  const effectiveWidth = width / Math.max(fontScale, 1);
+  return effectiveWidth < 400;
+}
+
 function occurrenceKey(item: ScheduleOccurrenceView): string {
   return `${item.scheduleId}\u0000${item.occurrenceStart ?? ''}`;
 }
@@ -251,6 +264,11 @@ const styles = StyleSheet.create({
     marginLeft: 'auto',
     maxWidth: 168,
     minWidth: 0,
+  },
+  accountActionsStacked: {
+    alignSelf: 'flex-end',
+    flexShrink: 0,
+    marginLeft: 0,
   },
   agenda: { paddingHorizontal: spacing.md, paddingTop: spacing.xl },
   avatar: {
@@ -306,6 +324,11 @@ const styles = StyleSheet.create({
     minWidth: 0,
     width: '100%',
   },
+  headerTopStacked: {
+    alignItems: 'stretch',
+    flexDirection: 'column',
+    gap: spacing.sm,
+  },
   locationSection: {
     borderTopColor: colors.border,
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -350,6 +373,10 @@ const styles = StyleSheet.create({
     lineHeight: 30,
     minWidth: 0,
     flexShrink: 1,
+  },
+  titleStacked: {
+    flex: 0,
+    width: '100%',
   },
   userPill: {
     alignItems: 'center',
