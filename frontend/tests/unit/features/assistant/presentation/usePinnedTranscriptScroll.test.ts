@@ -1,6 +1,11 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import { act, renderHook } from '@testing-library/react-native';
-import type { LayoutChangeEvent, ScrollView } from 'react-native';
+import type {
+  LayoutChangeEvent,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
+  ScrollView,
+} from 'react-native';
 
 import {
   PINNED_TO_BOTTOM_THRESHOLD,
@@ -15,6 +20,24 @@ function layoutEvent(height: number): LayoutChangeEvent {
       layout: { height, width: 390, x: 0, y: 0 },
     },
   } as LayoutChangeEvent;
+}
+
+function scrollEvent({
+  contentHeight,
+  offsetY,
+  viewportHeight,
+}: {
+  contentHeight: number;
+  offsetY: number;
+  viewportHeight: number;
+}): NativeSyntheticEvent<NativeScrollEvent> {
+  return {
+    nativeEvent: {
+      contentOffset: { x: 0, y: offsetY },
+      contentSize: { height: contentHeight, width: 390 },
+      layoutMeasurement: { height: viewportHeight, width: 390 },
+    },
+  } as NativeSyntheticEvent<NativeScrollEvent>;
 }
 
 describe('topSpacerHeight', () => {
@@ -72,6 +95,12 @@ describe('usePinnedTranscriptScroll', () => {
 
     expect(result.current.topSpacer).toBe(160);
     expect(scrollToEnd).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.onLayout(layoutEvent(400));
+      result.current.onTurnsLayout(layoutEvent(240));
+    });
+    expect(result.current.topSpacer).toBe(160);
   });
 
   it('drops the spacer once turns overflow so chronological order stays top to bottom', () => {
@@ -85,6 +114,46 @@ describe('usePinnedTranscriptScroll', () => {
     });
 
     expect(result.current.topSpacer).toBe(0);
+    expect(scrollToEnd).toHaveBeenCalledWith({ animated: true });
+  });
+
+  it('does not follow the latest turn after the user scrolls up', () => {
+    const { result } = renderHook(() => usePinnedTranscriptScroll());
+    const scrollToEnd = jest.fn();
+    result.current.transcriptRef.current = { scrollToEnd } as unknown as ScrollView;
+
+    act(() => {
+      result.current.onLayout(layoutEvent(400));
+      result.current.onTurnsLayout(layoutEvent(2000));
+    });
+    expect(scrollToEnd).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      result.current.onScroll(
+        scrollEvent({ contentHeight: 2000, offsetY: 0, viewportHeight: 400 }),
+      );
+      result.current.onContentSizeChange(390, 2200);
+      result.current.onTurnsLayout(layoutEvent(2200));
+    });
+
+    expect(scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('follows the latest turn on content size change while still pinned', () => {
+    const { result } = renderHook(() => usePinnedTranscriptScroll());
+    const scrollToEnd = jest.fn();
+    result.current.transcriptRef.current = { scrollToEnd } as unknown as ScrollView;
+
+    act(() => {
+      result.current.onLayout(layoutEvent(400));
+      result.current.onTurnsLayout(layoutEvent(2000));
+    });
+    scrollToEnd.mockClear();
+
+    act(() => {
+      result.current.onContentSizeChange(390, 2100);
+    });
+
     expect(scrollToEnd).toHaveBeenCalledWith({ animated: true });
   });
 });
