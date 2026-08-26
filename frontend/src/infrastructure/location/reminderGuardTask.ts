@@ -19,6 +19,11 @@ import type {
   LocalReminderSchedule,
   ReminderStrength,
 } from '../../features/reminder/domain';
+import {
+  NOOP_CLIENT_TELEMETRY,
+  boundAppState,
+  type ClientTelemetryPort,
+} from '../../shared/observability';
 
 export const GUARD_TASK_NAME = 'timeflow-reminder-guard';
 export const GUARD_NOTIFICATION_TITLE = 'Timeflow 提醒守护';
@@ -68,6 +73,12 @@ type GuardTaskListener = (sample: GuardTaskSample) => unknown;
  * 同一个事件被处理三遍，也量到过槽位被清空后长时间没人补上（连续 8 个 tick 为空）。
  */
 let taskListener: GuardTaskListener | null = null;
+let guardTelemetry: ClientTelemetryPort = NOOP_CLIENT_TELEMETRY;
+
+/** 组合根注入埋点；headless 唤醒时也能上报后台是否真的弹出了提醒。 */
+export function setGuardTaskTelemetry(telemetry: ClientTelemetryPort): void {
+  guardTelemetry = telemetry;
+}
 
 /** 订阅常驻前台服务的位置心跳；须在应用入口尽早 import 本模块以完成 defineTask。 */
 export function subscribeGuardTaskEvents(listener: GuardTaskListener): () => void {
@@ -311,6 +322,7 @@ async function runHeadlessLocationPass(
         row.reminder_type === 'return_to_recorded_location'
           ? `您已回到${row.location_name ?? '记录地点'}附近，请及时处理。`
           : `您已进入${row.location_name ?? '目标地点'}附近，请及时处理。`,
+        'location',
       );
     }
   }
@@ -440,6 +452,7 @@ async function runTimeFallbackPass(database: SQLiteDatabase, accountId: string):
         row.title || '日程提醒',
         row.reminder_strength ?? 'medium',
         null,
+        'time',
       );
     }
   }
@@ -536,6 +549,7 @@ async function runStuckPendingPass(database: SQLiteDatabase, accountId: string):
         row.title || '日程提醒',
         row.reminder_strength ?? 'medium',
         null,
+        'time',
       );
     }
   }
@@ -547,11 +561,13 @@ async function presentOrNotify(
   title: string,
   strength: ReminderStrength,
   fallbackBody: string | null,
+  scheduleType: 'time' | 'location',
 ): Promise<void> {
   const plan = resolveStrengthDeliveryPlan(strength);
+  let presented = false;
   try {
     const bridge = await import('../notifications/native/TimeflowAlarmBridge');
-    const presented = await bridge.nativePresentAlarmNow(
+    presented = await bridge.nativePresentAlarmNow(
       `guard-${scheduleId}-${Date.now()}`,
       scheduleId,
       title,
@@ -565,7 +581,10 @@ async function presentOrNotify(
       'for',
       scheduleId,
     );
-    if (presented) return;
+    if (presented) {
+      recordGuardDelivery(true, scheduleType, strength);
+      return;
+    }
   } catch (error) {
     console.warn('[guard] presentOrNotify: nativePresentAlarmNow threw, falling back', error);
   }
@@ -590,9 +609,31 @@ async function presentOrNotify(
       },
       trigger: { channelId: 'timeflow-reminders' },
     });
+    recordGuardDelivery(false, scheduleType, strength);
   } catch (error) {
     console.warn('[guard] presentOrNotify fallback notification failed', error);
   }
+}
+
+function recordGuardDelivery(
+  presented: boolean,
+  scheduleType: 'time' | 'location',
+  strength: ReminderStrength,
+): void {
+  guardTelemetry.recordReminderDelivery({
+    app_state: boundAppState(AppState.currentState),
+    channel: presented ? 'native_full_screen' : 'system_notification',
+    deferred_until_foreground: false,
+    latency_bucket: 'unknown',
+    manufacturer: 'other',
+    native_armed: false,
+    outcome: presented ? 'native_ok' : 'js_channel',
+    overlay_failed: false,
+    schedule_type: scheduleType,
+    strength,
+    trigger_source: 'headless_guard',
+    used_fallback_audio: false,
+  });
 }
 
 /** 只用来判断哪些行是地点型、算轮询密度——通知文案是固定文案，不需要标题/时间。 */

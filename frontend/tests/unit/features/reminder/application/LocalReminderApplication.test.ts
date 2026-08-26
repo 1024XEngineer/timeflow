@@ -26,7 +26,10 @@ import type {
   ClientTelemetryPort,
   DeviceTelemetryContext,
   ReminderDeliveryTelemetry,
+  ReminderLifecycleTelemetry,
+  ReminderNativeBackgroundTelemetry,
   ReminderPermissionBlockedTelemetry,
+  TelemetryAppState,
 } from '../../../../../src/shared/observability';
 
 /** 事件订阅回调是 fire-and-forget（void handleNativeAlarmEvent(event)），背后
@@ -123,6 +126,8 @@ function createFakeAlarms(overrides: Partial<AlarmSchedulerPort> = {}) {
     ),
     peekNativeDispositions: jest.fn(async () => []),
     ackNativeDispositions: jest.fn(async () => {}),
+    peekNativeFireAttempts: jest.fn(async () => []),
+    ackNativeFireAttempts: jest.fn(async () => {}),
     ...overrides,
   };
 
@@ -2024,12 +2029,122 @@ describe('LocalReminderApplication', () => {
 
       expect(telemetry.permissions).toHaveLength(permissionCount);
     });
+
+    it('marks a late JS time catch-up after opening the app as deferred_until_foreground', async () => {
+      const telemetry = new RecordingTelemetry();
+      const lifecycle = createLifecycle('active');
+      const { alarms } = createFakeAlarms({
+        rebuild: jest.fn(async (requests: readonly AlarmScheduleRequest[]) =>
+          requests.map((request) => ({
+            alarm_id: '',
+            schedule_id: request.schedule_id,
+            scheduled: false,
+          })),
+        ),
+        schedule: jest.fn(async (request: AlarmScheduleRequest) => ({
+          alarm_id: '',
+          schedule_id: request.schedule_id,
+          scheduled: false,
+        })),
+      });
+      const deps = createDeps({
+        alarms,
+        lifecycle,
+        schedules: new FakeScheduleReader([fixtureSchedule({ id: 's1' })]),
+        telemetry,
+      });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      telemetry.deliveries.length = 0;
+
+      await app.handleTime({ observed_at: '2026-08-18T10:30:00.000Z' });
+
+      expect(telemetry.deliveries).toEqual([
+        expect.objectContaining({
+          app_state: 'active',
+          deferred_until_foreground: true,
+          latency_bucket: 'late_30m',
+          native_armed: false,
+          outcome: 'js_channel',
+          trigger_source: 'js_time',
+        }),
+      ]);
+    });
+
+    it('does not mark a live native alarm as deferred even if JS learns about it late', async () => {
+      const telemetry = new RecordingTelemetry();
+      const lifecycle = createLifecycle('background');
+      const listenerRef: { current: ((event: AlarmNativeEvent) => void) | null } = {
+        current: null,
+      };
+      const { alarms } = createFakeAlarms({
+        subscribe: jest.fn((listener: (event: AlarmNativeEvent) => void) => {
+          listenerRef.current = listener;
+          return () => {
+            listenerRef.current = null;
+          };
+        }),
+      });
+      const deps = createDeps({
+        alarms,
+        lifecycle,
+        schedules: new FakeScheduleReader([fixtureSchedule({ id: 's1' })]),
+        telemetry,
+      });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      telemetry.deliveries.length = 0;
+
+      listenerRef.current?.({
+        type: 'fired',
+        schedule_id: 's1',
+        alarm_id: 'alarm-1',
+        title: '喝水提醒',
+        at: '2026-08-18T10:30:00.000Z',
+      });
+      await flushAsync();
+
+      expect(telemetry.deliveries).toEqual([
+        expect.objectContaining({
+          app_state: 'background',
+          deferred_until_foreground: false,
+          latency_bucket: 'late_30m',
+          outcome: 'native_ok',
+          trigger_source: 'native_alarm',
+        }),
+      ]);
+    });
+
+    it('reports persisted native background fire failures once on start', async () => {
+      const telemetry = new RecordingTelemetry();
+      const ackNativeFireAttempts = jest.fn(async () => {});
+      const { alarms } = createFakeAlarms({
+        peekNativeFireAttempts: jest.fn(async () => [
+          { result: 'service_denied' as const, at: '2026-08-18T09:50:00.000Z' },
+          { result: 'service_denied' as const, at: '2026-08-18T09:51:00.000Z' },
+          { result: 'present_failed' as const, at: '2026-08-18T09:52:00.000Z' },
+        ]),
+        ackNativeFireAttempts,
+      });
+      const deps = createDeps({ alarms, telemetry });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+
+      expect(telemetry.nativeBackground).toEqual([
+        expect.objectContaining({ result: 'service_denied' }),
+        expect.objectContaining({ result: 'present_failed' }),
+      ]);
+      expect(ackNativeFireAttempts).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(telemetry.nativeBackground)).not.toContain('s1');
+    });
   });
 });
 
 class RecordingTelemetry implements ClientTelemetryPort {
   readonly deliveries: ReminderDeliveryTelemetry[] = [];
   readonly permissions: ReminderPermissionBlockedTelemetry[] = [];
+  readonly lifecycle: ReminderLifecycleTelemetry[] = [];
+  readonly nativeBackground: ReminderNativeBackgroundTelemetry[] = [];
   readonly errors: string[] = [];
   readonly contexts: DeviceTelemetryContext[] = [];
 
@@ -2045,7 +2160,33 @@ class RecordingTelemetry implements ClientTelemetryPort {
     this.permissions.push(event);
   }
 
+  recordReminderLifecycle(event: ReminderLifecycleTelemetry): void {
+    this.lifecycle.push(event);
+  }
+
+  recordReminderNativeBackground(event: ReminderNativeBackgroundTelemetry): void {
+    this.nativeBackground.push(event);
+  }
+
   recordUnexpectedError(kind: 'reminder_delivery'): void {
     this.errors.push(kind);
   }
+}
+
+function createLifecycle(initial: TelemetryAppState = 'unknown') {
+  let current = initial;
+  const listeners = new Set<(state: TelemetryAppState) => void>();
+  return {
+    current: () => current,
+    subscribe: (listener: (state: TelemetryAppState) => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    emit(next: TelemetryAppState) {
+      current = next;
+      for (const listener of listeners) listener(next);
+    },
+  };
 }

@@ -29,6 +29,9 @@ import {
 } from '../../infrastructure/notifications';
 import { IntervalTimeListener } from '../../infrastructure/time';
 import { SentryClientTelemetry } from '../../infrastructure/observability';
+import { RNAppStateProvider } from '../../infrastructure/appState/RNAppStateProvider';
+import { setGuardTaskTelemetry } from '../../infrastructure/location/reminderGuardTask';
+import { boundAppState } from '../../shared/observability';
 import { ScheduleViewStore } from '../../features/schedule/presentation';
 
 export interface CreateAppServicesOptions {
@@ -66,6 +69,7 @@ export function createAppServices(options: CreateAppServicesOptions = {}): AppSe
     ...restOverrides
   } = options.overrides ?? {};
 
+  const appStateProvider = new RNAppStateProvider();
   const reminderPorts: ReminderApplicationDependencies = {
     time: new IntervalTimeListener(),
     location: new ExpoLocationMonitor(),
@@ -80,10 +84,18 @@ export function createAppServices(options: CreateAppServicesOptions = {}): AppSe
     state: reminderState,
     dispositionSync: new ReminderDispositionHttpSync(auth.protectedClient),
     telemetry: new SentryClientTelemetry(),
+    lifecycle: {
+      current: () => boundAppState(appStateProvider.current()),
+      subscribe: (listener) =>
+        appStateProvider.subscribe((status) => listener(boundAppState(status))),
+    },
     ...restOverrides,
     schedules,
     presenter,
   };
+  if (reminderPorts.telemetry != null) {
+    setGuardTaskTelemetry(reminderPorts.telemetry);
+  }
 
   const reminder = new LocalReminderApplication(reminderPorts);
   const reminderGuard = new ReminderGuardCoordinator({

@@ -111,6 +111,7 @@ function createDeps(overrides: {
     applyCategoryUpdate: jest.fn(overrides.applyCategoryUpdate ?? (async () => true)),
   };
   const appState: AppStateProvider = {
+    current: () => 'active',
     subscribe: jest.fn(() => () => undefined),
   };
   return { appState, capture, localScheduleWriter, location, playback, transport };

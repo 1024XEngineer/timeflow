@@ -31,6 +31,11 @@ export type NativeAlarmDispositionPayload = {
   updatedAtMillis: number;
 };
 
+export type NativeFireAttemptPayload = {
+  result: string;
+  atMillis: number;
+};
+
 type TimeflowAlarmNative = {
   schedule: (
     triggerAtMillis: number,
@@ -56,6 +61,8 @@ type TimeflowAlarmNative = {
   hasArmedAlarm: (scheduleId: string) => Promise<boolean>;
   peekNativeDispositions: () => Promise<NativeAlarmDispositionPayload[]>;
   ackNativeDispositions: (scheduleIds: string[]) => Promise<boolean>;
+  peekNativeFireAttempts: () => Promise<NativeFireAttemptPayload[]>;
+  ackNativeFireAttempts: () => Promise<boolean>;
   getPermissionStatus: () => Promise<NativeAlarmPermissionStatus>;
   openPermissionSettings: (
     kind:
@@ -190,6 +197,26 @@ export async function nativeAckAlarmDispositions(scheduleIds: readonly string[])
     await native.ackNativeDispositions([...scheduleIds]);
   } catch {
     // 确认失败就不清缓冲区，下次冷启动重新 peek 到、重放同样的幂等状态转换。
+  }
+}
+
+export async function nativePeekFireAttempts(): Promise<NativeFireAttemptPayload[]> {
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null) return [];
+  try {
+    return await native.peekNativeFireAttempts();
+  } catch {
+    return [];
+  }
+}
+
+export async function nativeAckFireAttempts(): Promise<void> {
+  const native = getNativeAlarm();
+  if (!isTimeflowAlarmAvailable() || native == null) return;
+  try {
+    await native.ackNativeFireAttempts();
+  } catch {
+    // 上报失败就留着，下次启动再读。
   }
 }
 

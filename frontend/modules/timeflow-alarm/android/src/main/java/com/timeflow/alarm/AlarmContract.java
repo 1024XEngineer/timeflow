@@ -33,6 +33,8 @@ final class AlarmContract {
     static final String PREFS_NAME = "timeflow_alarms";
     static final String ALARMS_KEY = "pending_alarms";
     static final String DISPOSITIONS_KEY = "native_dispositions";
+    /** 后台响铃失败（FGS 被拒等），JS 下次起来再上报 Sentry。不含日程 id。 */
+    static final String FIRE_ATTEMPTS_KEY = "native_fire_attempts";
     static final String ALARM_URI_SCHEME = "timeflow-alarm";
     /**
      * 自启动/后台弹出界面没有标准 API 能查真实授权状态，这三个 key 只记录

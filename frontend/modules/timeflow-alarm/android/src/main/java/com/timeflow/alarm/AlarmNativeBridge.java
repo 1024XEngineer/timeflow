@@ -136,6 +136,93 @@ public final class AlarmNativeBridge {
         return objects;
     }
 
+    public static final class FireAttemptRecord {
+        public final String result;
+        public final long atMillis;
+
+        FireAttemptRecord(String result, long atMillis) {
+            this.result = result;
+            this.atMillis = atMillis;
+        }
+    }
+
+    public static final String RESULT_SERVICE_DENIED = "service_denied";
+    public static final String RESULT_PRESENT_FAILED = "present_failed";
+    public static final String RESULT_FALLBACK_NOTIFICATION = "fallback_notification";
+    private static final int MAX_FIRE_ATTEMPTS = 20;
+
+    public static void recordFireAttempt(Context context, String result) {
+        if (!RESULT_SERVICE_DENIED.equals(result)
+                && !RESULT_PRESENT_FAILED.equals(result)
+                && !RESULT_FALLBACK_NOTIFICATION.equals(result)) {
+            return;
+        }
+        JSONArray remaining = new JSONArray();
+        for (JSONObject object : loadFireAttemptObjects(context)) {
+            remaining.put(object);
+        }
+        try {
+            JSONObject next = new JSONObject();
+            next.put("result", result);
+            next.put("at", System.currentTimeMillis());
+            remaining.put(next);
+        } catch (JSONException ignored) {
+            return;
+        }
+        JSONArray trimmed = new JSONArray();
+        int start = Math.max(0, remaining.length() - MAX_FIRE_ATTEMPTS);
+        for (int index = start; index < remaining.length(); index++) {
+            try {
+                trimmed.put(remaining.getJSONObject(index));
+            } catch (JSONException ignored) {
+                // skip malformed rows
+            }
+        }
+        context.getSharedPreferences(AlarmContract.PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(AlarmContract.FIRE_ATTEMPTS_KEY, trimmed.toString())
+                .apply();
+    }
+
+    public static List<FireAttemptRecord> peekFireAttempts(Context context) {
+        List<FireAttemptRecord> records = new ArrayList<>();
+        for (JSONObject object : loadFireAttemptObjects(context)) {
+            String result = object.optString("result", "");
+            if (result.isEmpty()) continue;
+            records.add(new FireAttemptRecord(
+                    result,
+                    object.optLong("at", System.currentTimeMillis())
+            ));
+        }
+        return records;
+    }
+
+    public static void ackFireAttempts(Context context) {
+        context.getSharedPreferences(AlarmContract.PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(AlarmContract.FIRE_ATTEMPTS_KEY, "[]")
+                .apply();
+    }
+
+    private static List<JSONObject> loadFireAttemptObjects(Context context) {
+        SharedPreferences preferences =
+                context.getSharedPreferences(AlarmContract.PREFS_NAME, Context.MODE_PRIVATE);
+        String serialized = preferences.getString(AlarmContract.FIRE_ATTEMPTS_KEY, "[]");
+        List<JSONObject> objects = new ArrayList<>();
+        try {
+            JSONArray array = new JSONArray(serialized);
+            for (int index = 0; index < array.length(); index++) {
+                Object value = array.get(index);
+                if (value instanceof JSONObject) {
+                    objects.add((JSONObject) value);
+                }
+            }
+        } catch (JSONException ignored) {
+            return new ArrayList<>();
+        }
+        return objects;
+    }
+
     public static void stopRinging(Context context) {
         AlarmSoundService.stop(context);
         RingActivity.finishIfOpen();

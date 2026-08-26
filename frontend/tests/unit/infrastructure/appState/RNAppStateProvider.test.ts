@@ -41,4 +41,10 @@ describe('RNAppStateProvider', () => {
     unsubscribe();
     expect(remove).toHaveBeenCalledTimes(1);
   });
+
+  it('exposes the current AppState through current()', () => {
+    Object.defineProperty(AppState, 'currentState', { configurable: true, value: 'background' });
+    const provider = new RNAppStateProvider();
+    expect(provider.current()).toBe('background');
+  });
 });

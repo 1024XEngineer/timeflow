@@ -1,6 +1,7 @@
 export type {
   AlarmNativeDisposition,
   AlarmNativeEvent,
+  AlarmNativeFireAttempt,
   AlarmPresentationReceipt,
   AlarmPresentationRequest,
   AlarmScheduleReceipt,
@@ -39,6 +40,7 @@ export type {
   SystemNotificationRequest,
   VibrationPort,
 } from './NotificationChannels';
+export type { ReminderLifecyclePort } from './ReminderLifecyclePort';
 export type {
   ReminderApplicationDependencies,
   ReminderApplicationPort,

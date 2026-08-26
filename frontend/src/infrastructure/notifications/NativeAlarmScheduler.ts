@@ -1,5 +1,6 @@
 import type {
   AlarmNativeDisposition,
+  AlarmNativeFireAttempt,
   AlarmPresentationReceipt,
   AlarmPresentationRequest,
   AlarmNativeEvent,
@@ -10,11 +11,13 @@ import type {
 import {
   isTimeflowAlarmAvailable,
   nativeAckAlarmDispositions,
+  nativeAckFireAttempts,
   nativeAreAlarmPermissionsGranted,
   nativeCancelAlarm,
   nativeCancelAllAlarms,
   nativePresentAlarmNow,
   nativePeekAlarmDispositions,
+  nativePeekFireAttempts,
   nativeScheduleAlarm,
   nativeStopAlarmRinging,
   subscribeNativeAlarmEvents,
@@ -136,6 +139,29 @@ export class NativeAlarmScheduler implements AlarmSchedulerPort {
 
   async ackNativeDispositions(scheduleIds: readonly string[]): Promise<void> {
     await nativeAckAlarmDispositions(scheduleIds);
+  }
+
+  async peekNativeFireAttempts(): Promise<readonly AlarmNativeFireAttempt[]> {
+    const rows = await nativePeekFireAttempts();
+    return rows
+      .map((row) => {
+        const result =
+          row.result === 'service_denied' ||
+          row.result === 'present_failed' ||
+          row.result === 'fallback_notification'
+            ? row.result
+            : null;
+        if (result == null) return null;
+        return {
+          result,
+          at: new Date(row.atMillis || Date.now()).toISOString(),
+        } satisfies AlarmNativeFireAttempt;
+      })
+      .filter((row): row is AlarmNativeFireAttempt => row != null);
+  }
+
+  async ackNativeFireAttempts(): Promise<void> {
+    await nativeAckFireAttempts();
   }
 }
 

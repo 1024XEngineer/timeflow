@@ -6,6 +6,7 @@ import { NativeAlarmScheduler } from '../../../../src/infrastructure/notificatio
 import {
   isTimeflowAlarmAvailable,
   nativeAckAlarmDispositions,
+  nativeAckFireAttempts,
   nativeAreAlarmPermissionsGranted,
   nativeCancelAlarm,
   nativeCancelAllAlarms,
@@ -13,6 +14,7 @@ import {
   nativeHasArmedAlarm,
   nativeOpenAlarmPermissionSettings,
   nativePeekAlarmDispositions,
+  nativePeekFireAttempts,
   nativePresentAlarmNow,
   nativeRequestNotificationPermission,
   nativeScheduleAlarm,
@@ -33,6 +35,8 @@ jest.mock('react-native', () => {
     hasArmedAlarm: jest.fn(),
     peekNativeDispositions: jest.fn(),
     ackNativeDispositions: jest.fn(),
+    peekNativeFireAttempts: jest.fn(),
+    ackNativeFireAttempts: jest.fn(),
     getPermissionStatus: jest.fn(),
     openPermissionSettings: jest.fn(),
     requestNotificationPermission: jest.fn(),
@@ -90,6 +94,10 @@ type NativeAlarmMock = {
     () => Promise<{ scheduleId: string; alarmId: string; state: string; updatedAtMillis: number }[]>
   >;
   ackNativeDispositions: jest.MockedFunction<(scheduleIds: string[]) => Promise<boolean>>;
+  peekNativeFireAttempts: jest.MockedFunction<
+    () => Promise<{ result: string; atMillis: number }[]>
+  >;
+  ackNativeFireAttempts: jest.MockedFunction<() => Promise<boolean>>;
   getPermissionStatus: jest.MockedFunction<
     () => Promise<{
       exactAlarm: boolean;
@@ -547,6 +555,21 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
     const scheduler = new NativeAlarmScheduler();
     await scheduler.ackNativeDispositions(['a', 'b']);
     expect(native.ackNativeDispositions).toHaveBeenCalledWith(['a', 'b']);
+  });
+
+  it('peeks and acks native background fire attempts without schedule ids', async () => {
+    native.peekNativeFireAttempts.mockResolvedValue([
+      { result: 'service_denied', atMillis: 1000 },
+      { result: 'present_failed', atMillis: 2000 },
+      { result: 'unknown', atMillis: 3000 },
+    ]);
+    const scheduler = new NativeAlarmScheduler();
+    await expect(scheduler.peekNativeFireAttempts()).resolves.toEqual([
+      { result: 'service_denied', at: new Date(1000).toISOString() },
+      { result: 'present_failed', at: new Date(2000).toISOString() },
+    ]);
+    await scheduler.ackNativeFireAttempts();
+    expect(native.ackNativeFireAttempts).toHaveBeenCalled();
   });
 
   it('nativeAckAlarmDispositions is a no-op with an empty list and swallows rejection', async () => {

@@ -63,6 +63,7 @@ public final class AlarmReceiver extends BroadcastReceiver {
             // 原来这里完全没兜底，抛出去要么被系统吞掉、要么让这条广播直接崩溃退出，
             // 日志里连个痕迹都留不下。
             Log.w(TAG, "startForegroundService failed for alarmId=" + alarmId, exception);
+            AlarmNativeBridge.recordFireAttempt(context, AlarmNativeBridge.RESULT_SERVICE_DENIED);
             postFallbackNotification(context, title);
         }
     }

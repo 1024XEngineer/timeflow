@@ -17,6 +17,7 @@ jest.mock('../../../src/infrastructure/location/reminderGuardTask', () => {
   return {
     GUARD_TASK_NAME: actual.GUARD_TASK_NAME,
     subscribeGuardTaskEvents: jest.fn(() => () => {}),
+    setGuardTaskTelemetry: jest.fn(),
     resolveNextPollIntervalMs: actual.resolveNextPollIntervalMs,
   };
 });
