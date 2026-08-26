@@ -7,12 +7,20 @@ import type {
   ScheduleOccurrenceView,
 } from '../../../../../src/features/schedule/application';
 import { ScheduleCalendarScreen } from '../../../../../src/features/schedule/presentation/ScheduleCalendarScreen';
+import * as ScheduleCalendarScreenModule from '../../../../../src/features/schedule/presentation/ScheduleCalendarScreen';
 
 let mockBottomInset = 0;
 let mockTopInset = 0;
+let mockFontScale = 1;
+let mockWindowWidth = 430;
 
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ bottom: mockBottomInset, left: 0, right: 0, top: mockTopInset }),
+}));
+
+jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
+  __esModule: true,
+  default: () => ({ fontScale: mockFontScale, height: 932, scale: 1, width: mockWindowWidth }),
 }));
 
 function occurrenceOnSelectedDay(
@@ -67,6 +75,8 @@ function createService(
 
 describe('ScheduleCalendarScreen location schedules', () => {
   beforeEach(() => {
+    mockFontScale = 1;
+    mockWindowWidth = 430;
     Platform.OS = 'ios';
   });
 
@@ -117,10 +127,13 @@ describe('ScheduleCalendarScreen location schedules', () => {
 
     await waitFor(() => expect(service.getLocationSchedules).toHaveBeenCalled());
     expect(
+      StyleSheet.flatten(screen.getByTestId('schedule-calendar-scroll').props.style),
+    ).toMatchObject({ marginBottom: 118 });
+    expect(
       StyleSheet.flatten(
         screen.getByTestId('schedule-calendar-scroll').props.contentContainerStyle,
       ),
-    ).toMatchObject({ paddingBottom: 118, paddingTop: 0 });
+    ).toMatchObject({ paddingBottom: 24 });
 
     fireEvent.press(screen.getByLabelText(/月13日$/));
     const lastRow = await screen.findByLabelText(/当日最后一条日程$/);
@@ -147,10 +160,15 @@ describe('ScheduleCalendarScreen location schedules', () => {
 
     await waitFor(() => expect(service.getLocationSchedules).toHaveBeenCalled());
     expect(
-      StyleSheet.flatten(
-        screen.getByTestId('schedule-calendar-scroll').props.contentContainerStyle,
-      ),
+      StyleSheet.flatten(screen.getByTestId('schedule-calendar-screen').props.style),
     ).toMatchObject({ paddingTop: 24 });
+    expect(
+      StyleSheet.flatten(screen.getByTestId('schedule-calendar-scroll').props.contentContainerStyle)
+        .paddingTop,
+    ).toBeUndefined();
+    expect(
+      screen.getByTestId('schedule-calendar-scroll').props.contentInsetAdjustmentBehavior,
+    ).toBe('never');
   });
 
   it('leaves iOS to its own automatic safe-area adjustment instead of double-padding the top', async () => {
@@ -170,10 +188,11 @@ describe('ScheduleCalendarScreen location schedules', () => {
 
     await waitFor(() => expect(service.getLocationSchedules).toHaveBeenCalled());
     expect(
-      StyleSheet.flatten(
-        screen.getByTestId('schedule-calendar-scroll').props.contentContainerStyle,
-      ),
+      StyleSheet.flatten(screen.getByTestId('schedule-calendar-screen').props.style),
     ).toMatchObject({ paddingTop: 0 });
+    expect(
+      screen.getByTestId('schedule-calendar-scroll').props.contentInsetAdjustmentBehavior,
+    ).toBe('automatic');
   });
 
   it('keeps accountId in the calendar data flow without rendering it', async () => {
@@ -259,6 +278,7 @@ describe('ScheduleCalendarScreen location schedules', () => {
   });
 
   it('keeps the selected date fully visible when the header is narrow', async () => {
+    mockWindowWidth = 360;
     const service = createService();
     render(
       <ScheduleCalendarScreen
@@ -272,10 +292,31 @@ describe('ScheduleCalendarScreen location schedules', () => {
     );
 
     await waitFor(() => expect(service.getSchedulesByRange).toHaveBeenCalled());
+    const shouldStackScheduleHeader = (
+      ScheduleCalendarScreenModule as typeof ScheduleCalendarScreenModule & {
+        shouldStackScheduleHeader?: (width: number, fontScale: number) => boolean;
+      }
+    ).shouldStackScheduleHeader;
+    expect(shouldStackScheduleHeader).toBeDefined();
+    expect(shouldStackScheduleHeader?.(0, 1)).toBe(false);
+    expect(shouldStackScheduleHeader?.(320, 1)).toBe(true);
+    expect(shouldStackScheduleHeader?.(360, 1)).toBe(true);
+    expect(shouldStackScheduleHeader?.(393, 1)).toBe(true);
+    expect(shouldStackScheduleHeader?.(430, 1)).toBe(false);
+    expect(shouldStackScheduleHeader?.(430, 1.3)).toBe(true);
+    expect(shouldStackScheduleHeader?.(430, 1.5)).toBe(true);
     const selectedDate = screen.getByTestId('schedule-selected-date');
     expect(selectedDate.props.children).toBeTruthy();
     expect(selectedDate.props.numberOfLines).toBeUndefined();
-    expect(selectedDate.props.style).toMatchObject({ flex: 1, flexShrink: 1, minWidth: 0 });
+    expect(StyleSheet.flatten(selectedDate.props.style)).toMatchObject({
+      flex: 0,
+      flexShrink: 1,
+      minWidth: 0,
+      width: '100%',
+    });
+    expect(
+      StyleSheet.flatten(screen.getByTestId('schedule-account-actions').props.style),
+    ).toMatchObject({ alignSelf: 'flex-end', marginLeft: 0 });
   });
 
   it('opens permissions when the user pill is pressed', async () => {
