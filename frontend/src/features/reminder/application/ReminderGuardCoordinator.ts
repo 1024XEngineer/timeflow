@@ -1,15 +1,30 @@
 import * as Location from 'expo-location';
+import * as TaskManager from 'expo-task-manager';
 
 import type { LocalScheduleReader } from './interfaces';
 import type { GeoPoint, LocalReminderSchedule, LocationSample } from '../domain';
 import { resolveGeofenceCenter, resolveWatchMode } from '../domain/geofence';
 import {
+  GUARD_NOTIFICATION_BODY,
   GUARD_NOTIFICATION_TITLE,
   GUARD_TASK_NAME,
+  isAppForegrounded,
   resolveNextPollIntervalMs,
   subscribeGuardTaskEvents,
   type GuardTaskSample,
 } from '../../../infrastructure/location/reminderGuardTask';
+
+/**
+ * 原生注册其实有三种状态，而 hasStartedLocationUpdatesAsync() 只能回答把后两种
+ * 合并之后的那个布尔值（"注册着吗"）：
+ *
+ * - `absent`     没注册，需要带 foregroundService 建起来。
+ * - `foreground` 注册着，且注册项带 foregroundService——常驻前台服务活着，什么都不用做。
+ * - `degraded`   注册着，但注册项**不带** foregroundService——定位任务还在跑，
+ *                前台服务已经被原生拆掉了。这是真机上最常见也最致命的一种。
+ * - `unknown`    查不出来（原生调用抛错），一律不动，留到下次 reconcile 再判。
+ */
+type GuardRegistrationState = 'absent' | 'foreground' | 'degraded' | 'unknown';
 
 export type ReminderGuardDependencies = {
   schedules: LocalScheduleReader;
@@ -110,16 +125,38 @@ export class ReminderGuardCoordinator {
     // 会在查到 0 条待处理日程时自己把原生任务停掉（见 refreshGuardRegistration），
     // 这个协调器不知情，本地标志会跟真实状态脱节；用本地标志判断的话，日程
     // 清空又新增时会被误判成"已经在跑"，永远不会真正重新启动。
-    let alreadyRunning: boolean;
-    try {
-      alreadyRunning = await Location.hasStartedLocationUpdatesAsync(GUARD_TASK_NAME);
-    } catch (error) {
-      console.warn('[guard] hasStartedLocationUpdatesAsync failed', error);
-      alreadyRunning = this.running;
-    }
-    if (alreadyRunning) {
+    //
+    // 但"注册着"这一个布尔值还不够：注册项带没带 foregroundService 决定了常驻
+    // 前台服务在不在，而两者在 hasStartedLocationUpdatesAsync() 眼里完全一样。
+    // 只看它的话，一次没带 foregroundService 的重注册就会让协调器永远早退——
+    // 而且那份降级注册会被 expo-task-manager 持久化，force-stop 和冷启动都清不掉。
+    const state = await this.resolveRegistrationState();
+    if (state === 'foreground') {
       this.running = true;
       return;
+    }
+    if (state === 'unknown') return;
+
+    if (state === 'degraded') {
+      // 后台补不回来：带 foregroundService 的注册在后台会被原生直接拒掉，这时候
+      // 硬 stop 只会把仅剩的定位任务也弄没，比维持现状更糟。等回到前台的那次
+      // reconcile 再修（位置心跳每 15s~5min 就会触发一次 reconcile）。
+      if (!isAppForegrounded()) {
+        this.running = true;
+        return;
+      }
+      // 必须先真的注销一次再重注册。只重注册走的是原生 setOptions 分支，能不能
+      // 把服务拉回来取决于 LocationTaskConsumer 里 mService 的残留状态
+      // （stopForegroundService() 只调 mService?.stop()，并不把字段置回 null），
+      // 不可靠；先 stop 再 start 走的是 didUnregister → didRegister 这条干净路径，
+      // 也正是真机上热重载能"碰巧治好"这个问题时实际发生的序列。
+      try {
+        await Location.stopLocationUpdatesAsync(GUARD_TASK_NAME);
+      } catch (error) {
+        console.warn('[guard] failed to clear the degraded registration', error);
+        return;
+      }
+      this.running = false;
     }
 
     // 只查前台权限：startLocationUpdatesAsync() 传了 foregroundService 配置，走的是
@@ -146,18 +183,47 @@ export class ReminderGuardCoordinator {
 
     try {
       await Location.startLocationUpdatesAsync(GUARD_TASK_NAME, {
-        accuracy: Location.Accuracy.Balanced,
+        accuracy: Location.Accuracy.High,
         timeInterval: intervalMs,
         distanceInterval: 0,
         foregroundService: {
           notificationTitle: GUARD_NOTIFICATION_TITLE,
-          notificationBody: '提醒守护运行中',
+          notificationBody: GUARD_NOTIFICATION_BODY,
         },
       });
       this.running = true;
       this.currentIntervalMs = intervalMs;
     } catch (error) {
       console.warn('[guard] startLocationUpdatesAsync failed', error);
+    }
+  }
+
+  /**
+   * 判定原生注册处于 GuardRegistrationState 的哪一种。关键在第二步：光问
+   * hasStartedLocationUpdatesAsync() 只知道"注册着"，得再把注册项自己的 options
+   * 翻出来，看 foregroundService 还在不在，才能区分 foreground 和 degraded。
+   */
+  private async resolveRegistrationState(): Promise<GuardRegistrationState> {
+    let registered: boolean;
+    try {
+      registered = await Location.hasStartedLocationUpdatesAsync(GUARD_TASK_NAME);
+    } catch (error) {
+      console.warn('[guard] hasStartedLocationUpdatesAsync failed', error);
+      // 查不到原生状态就退回本地标志，保持这次调用之前的语义：本地认为没在跑
+      // 就照常尝试注册，认为在跑就别乱动。
+      return this.running ? 'unknown' : 'absent';
+    }
+    if (!registered) return 'absent';
+
+    try {
+      const tasks = await TaskManager.getRegisteredTasksAsync();
+      const task = tasks.find((entry) => entry.taskName === GUARD_TASK_NAME);
+      return task?.options?.foregroundService == null ? 'degraded' : 'foreground';
+    } catch (error) {
+      // 拿不到注册详情就别贸然 stop 再 start——万一这会儿在后台就起不回来，
+      // 反而把一个还能用的注册弄没了。
+      console.warn('[guard] getRegisteredTasksAsync failed', error);
+      return 'unknown';
     }
   }
 

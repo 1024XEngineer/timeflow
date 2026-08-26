@@ -1,5 +1,5 @@
 import * as Location from 'expo-location';
-import { AppState, type AppStateStatus, type NativeEventSubscription } from 'react-native';
+import * as TaskManager from 'expo-task-manager';
 
 import type {
   LocationMonitorEvent,
@@ -10,12 +10,6 @@ import type {
 } from '../../features/reminder/application/interfaces';
 import type { LocationSample } from '../../features/reminder/domain';
 
-import {
-  GEOFENCE_TASK_NAME,
-  drainPendingGeofenceEvents,
-  subscribeGeofenceTaskEvents,
-  type GeofenceTaskPayload,
-} from './geofenceTask';
 import type { LocationProvider } from './LocationProvider';
 
 type ActiveWatch = {
@@ -24,34 +18,53 @@ type ActiveWatch = {
   listener: (event: LocationMonitorEvent) => unknown;
 };
 
-/** ≈1.1km，足够超出任何合理的围栏半径，用来给 exit 事件合成一个"明显在圈外"的采样点。 */
-const OUTSIDE_OFFSET_DEGREES = 0.01;
+/**
+ * 老版本注册过的系统围栏任务名。代码里已经不再注册它了，但 expo-task-manager 把
+ * 注册持久化在 SharedPreferences 里，光删代码清不掉：老装机升级上来之后，那条
+ * GMS 围栏会一直挂着，被唤醒时又找不到对应的 JS 任务（logcat 里表现为
+ * "Job for task 'timeflow-geofence' has been cancelled by the system"）。所以必须
+ * 主动停一次。
+ */
+const LEGACY_GEOFENCE_TASK_NAME = 'timeflow-geofence';
 
 /**
- * 基于 expo-location 系统原生地理围栏（Android GeofencingClient / iOS
- * CLCircularRegion）的适配器：不依赖百度账号/Key，围栏进出判断交给系统，比
- * NativeLocationMonitor 那套连续定位轮询 + 应用侧 Haversine 更省电、后台也更可靠。
+ * 地点提醒的位置适配器：只负责"记住在盯哪些点"和"取当前位置"，**不做进出判定**。
  *
- * 系统只会在真正穿越边界时回调 enter/exit，不会在注册那一刻告诉你当前在圈内还是圈
- * 外，所以 watch() 里仍然主动取一次当前定位、强制送一条初始采样，让
- * LocalReminderApplication 的 armed 状态机能定出正确的起始值；之后的进出全靠
- * geofenceTask 的系统回调，不再轮询。
+ * 进出判定统一由 ReminderGuardCoordinator 的常驻前台服务驱动——它每次位置心跳都
+ * 调 LocalReminderApplication.handleLocation(sample)，那边遍历所有地点日程逐个跑
+ * applyLocationSample()/evaluateGeofence()。这里只在 watch()/rebuild() 时主动取一次
+ * 当前定位送出去，让 armed 状态机有个正确的起始值。
  *
- * LocalReminderApplication.applyLocationSample() 不看这里传的 phase，只用 sample
- * 坐标自己重新跑一遍 Haversine 判断，所以 enter/exit 时合成的坐标（区域中心 /
- * 中心外一段距离）足够，不需要为了拿"真实"坐标再多发一次定位请求。
+ * 为什么删掉了原来的系统原生围栏（expo-location startGeofencingAsync / Android
+ * GeofencingClient）——真机排查的结论，三条：
+ *
+ * 1. 它对判定零贡献。回调进来之后，代码根本不用 GMS 给的 enter/exit 结论，而是
+ *    **伪造**一个坐标（enter 用圆心、exit 用圆心外约 1.1km）再喂给同一个
+ *    evaluateGeofence 重算。判定逻辑一直是轮询那一套，围栏只是个触发器，而且喂的
+ *    是编造的输入而非真实位置。
+ * 2. 它主动制造问题。每次日程刷新都会 stop+start 重注册一遍，而 GeofenceRequest 的
+ *    initialEventsFilter 含 OUTSIDE，于是每次重注册 GMS 都立刻补投一次"当前在圈外"
+ *    （日志里一连串假 exit 事件）；更糟的是重注册会重置 GMS 的围栏状态机，真正
+ *    走进围栏的那个 enter 撞在窗口里就丢了。
+ * 3. 省电的理由不成立。guard 的前台服务只要还有未完成的提醒就一直在跑（时间型
+ *    兜底、卡住补救都靠它），也就是说有地点提醒要看的时候轮询本来就在进行，
+ *    砍掉围栏不增加任何功耗。
+ *
+ * 换来的代价，是明确接受的：**进程连同前台服务一起被系统杀掉之后，没有任何东西
+ * 能把我们唤醒，地点提醒到下次启动前不可用。** 原生围栏活在 GMS 系统进程里，本来
+ * 能通过 PendingIntent 拉起 JS 引擎——这是它唯一不可替代的价值，现在放弃了。
+ *
+ * 顺带修掉一个已知陷阱：围栏状态机靠观测到一次"确定在圈外"才武装，依赖 GMS 就
+ * 依赖它给出 exit 事件，拿不到就永远不武装、之后再进圈也不响。改成轮询之后每个
+ * 心跳都有真实的圈外样本，武装变成必然。
  */
 export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvider {
   private readonly watches = new Map<string, ActiveWatch>();
   private readonly scheduleToListener = new Map<string, string>();
   private lastSample: LocationSample | null = null;
-  private syncChain: Promise<void> = Promise.resolve();
-  private unsubscribeTask: (() => void) | null;
-  private readonly appStateSub: NativeEventSubscription;
 
   constructor() {
-    this.unsubscribeTask = subscribeGeofenceTaskEvents(this.handleTaskEvent);
-    this.appStateSub = AppState.addEventListener('change', this.handleAppState);
+    void cleanUpLegacyGeofencing();
   }
 
   async watch(
@@ -60,25 +73,25 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
   ): Promise<LocationWatchHandle> {
     const existingId = this.scheduleToListener.get(request.schedule_id);
     if (existingId != null) {
-      await this.removeWatch(existingId, false);
+      this.removeWatch(existingId);
     }
 
     const listener_id = `location-${request.schedule_id}`;
     this.watches.set(listener_id, { listener_id, request: { ...request }, listener });
     this.scheduleToListener.set(request.schedule_id, listener_id);
-    await this.chainSync();
 
+    // 唯一一次主动送样本：给 armed 状态机定起始值。之后的进出全靠 guard 心跳走
+    // handleLocation()，不再经过这个 listener。
     const sample = await this.getCurrentSample();
     if (sample != null) {
-      await listener({ schedule_id: request.schedule_id, sample, phase: 'inside' });
+      await listener({ schedule_id: request.schedule_id, sample });
     }
-    await this.replayPendingEvents();
 
     return { listener_id, schedule_id: request.schedule_id };
   }
 
   async unwatch(listenerId: string): Promise<void> {
-    await this.removeWatch(listenerId, true);
+    this.removeWatch(listenerId);
   }
 
   async rebuild(
@@ -86,42 +99,30 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
     listener: (event: LocationMonitorEvent) => unknown,
   ): Promise<readonly LocationWatchHandle[]> {
     for (const listenerId of [...this.watches.keys()]) {
-      await this.removeWatch(listenerId, false);
+      this.removeWatch(listenerId);
     }
 
-    // 直接灌 Map，不逐个调用 watch()：watch() 自己的 chainSync()+getCurrentSample()
-    // 是为单条增量注册设计的，N 个 target 各跑一次会把 startGeofencingAsync 的区域
-    // 列表越注册越长（O(N²) 总区域数）、定位请求也打 N 次；这里全部灌完只同步一次、
-    // 取一次定位，再扇给每个刚注册的 watch。
+    // 直接灌 Map，不逐个调用 watch()：watch() 里的 getCurrentSample() 是为单条增量
+    // 注册设计的，N 个 target 各跑一次就要打 N 次定位请求。这里全部灌完只取一次
+    // 定位，再扇给每个刚注册的 watch。
     const handles: LocationWatchHandle[] = [];
     for (const target of targets) {
       const listener_id = `location-${target.schedule_id}`;
       this.watches.set(listener_id, {
         listener_id,
-        request: {
-          schedule_id: target.schedule_id,
-          center: target.center,
-          radius_meters: target.radius_meters,
-          mode: target.mode,
-          background: target.background,
-        },
+        request: { schedule_id: target.schedule_id, center: target.center },
         listener,
       });
       this.scheduleToListener.set(target.schedule_id, listener_id);
       handles.push({ listener_id, schedule_id: target.schedule_id });
     }
-    await this.chainSync();
 
     const sample = await this.getCurrentSample();
     if (sample != null) {
       for (const handle of handles) {
-        await listener({ schedule_id: handle.schedule_id, sample, phase: 'inside' });
+        await listener({ schedule_id: handle.schedule_id, sample });
       }
     }
-
-    // App 进程被杀掉期间，headless task 攒下的围栏事件在这里补上——watches/
-    // scheduleToListener 刚灌好，handleTaskEvent 才查得到对应的 watch。
-    await this.replayPendingEvents();
 
     return handles;
   }
@@ -134,7 +135,7 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
     try {
       const { status } = await Location.getForegroundPermissionsAsync();
       if (status !== 'granted') {
-        console.warn('[geofence] getCurrentSample skipped: foreground permission not granted');
+        console.warn('[location] getCurrentSample skipped: foreground permission not granted');
         return this.lastSample;
       }
       const position = await Location.getCurrentPositionAsync({});
@@ -142,123 +143,43 @@ export class ExpoLocationMonitor implements LocationMonitorPort, LocationProvide
       this.lastSample = sample;
       return sample;
     } catch (error) {
-      console.warn('[geofence] getCurrentSample failed', error);
+      console.warn('[location] getCurrentSample failed', error);
       return this.lastSample;
     }
   }
 
-  dispose(): void {
-    this.unsubscribeTask?.();
-    this.unsubscribeTask = null;
-    this.appStateSub.remove();
-    void Location.hasStartedGeofencingAsync(GEOFENCE_TASK_NAME)
-      .then((started) => (started ? Location.stopGeofencingAsync(GEOFENCE_TASK_NAME) : undefined))
-      .catch(() => undefined);
-  }
-
-  private readonly handleAppState = (state: AppStateStatus): void => {
-    if (state !== 'active' || this.watches.size === 0) return;
-    void this.chainSync();
-  };
-
-  /** 补上 headless task 期间（没有订阅者时）攒下的围栏事件，按正常路径重放一遍。 */
-  private async replayPendingEvents(): Promise<void> {
-    const pending = await drainPendingGeofenceEvents();
-    for (const payload of pending) {
-      await this.handleTaskEvent(payload);
-    }
-  }
-
-  private readonly handleTaskEvent = async (payload: GeofenceTaskPayload): Promise<void> => {
-    const listenerId = this.scheduleToListener.get(payload.schedule_id);
-    const watch = listenerId != null ? this.watches.get(listenerId) : undefined;
-    if (watch == null) return;
-
-    const sample: LocationSample =
-      payload.event === 'enter'
-        ? {
-            latitude: payload.latitude,
-            longitude: payload.longitude,
-            accuracy_meters: payload.radius,
-            observed_at: payload.observed_at,
-          }
-        : {
-            latitude: payload.latitude + OUTSIDE_OFFSET_DEGREES,
-            longitude: payload.longitude,
-            accuracy_meters: payload.radius,
-            observed_at: payload.observed_at,
-          };
-    this.lastSample = sample;
-    await watch.listener({
-      schedule_id: watch.request.schedule_id,
-      sample,
-      phase: payload.event === 'enter' ? 'entered' : 'left',
-    });
-  };
-
-  private async removeWatch(listenerId: string, sync: boolean): Promise<void> {
+  private removeWatch(listenerId: string): void {
     const watch = this.watches.get(listenerId);
     if (watch == null) return;
     this.watches.delete(listenerId);
     this.scheduleToListener.delete(watch.request.schedule_id);
-    if (sync) {
-      await this.chainSync();
-    }
   }
+}
 
-  /** 把一次区域同步接到 syncChain 末尾，保证上一次真正执行完（不管成功与否）才轮到
-   * 这一次——不是排队等着处理各自不同的输入，每次都是重新读 this.watches 当前
-   * 状态，纯粹为了不让 syncRegions() 并发跑，参照 AssistantContinuousConversationService
-   * 的 chainPlayback()/playbackChain 同一个模式。.catch(() => {}) 必须紧跟在同一条
-   * 语句里同步接上——syncRegions() 里 getForegroundPermissionsAsync()/
-   * getBackgroundPermissionsAsync() 没包 try/catch，哪次真抛了，如果这段失败要
-   * 等下一次 chainSync() 调用（比如靠 then 的第二个参数）才被接住，中间这段没人
-   * 接的窗口期会被 Node/Hermes 判定成 unhandled rejection 直接崩进程——不是理论
-   * 风险，AssistantContinuousConversationService 的 commandResultChain 用一个会
-   * 抛错的场景实测复现过。 */
-  private chainSync(): Promise<void> {
-    this.syncChain = this.syncChain.then(() => this.syncRegions()).catch(() => {});
-    return this.syncChain;
-  }
-
-  private async syncRegions(): Promise<void> {
-    if (this.watches.size === 0) {
-      const started = await Location.hasStartedGeofencingAsync(GEOFENCE_TASK_NAME).catch(
-        () => false,
-      );
-      if (started) {
-        await Location.stopGeofencingAsync(GEOFENCE_TASK_NAME).catch(() => undefined);
-      }
-      return;
+/**
+ * 停掉老版本留下的系统围栏注册。
+ *
+ * 不用进程内的 once 标志：两个查询本身就是幂等的（停过一次之后
+ * hasStartedGeofencingAsync/isTaskRegisteredAsync 都会返回 false），而生产环境
+ * createAppServices() 只跑一次、也就只构造一个 monitor，多出来的两次原生查询可以
+ * 忽略。少一个模块级可变状态，换来这段逻辑可以被单测覆盖。
+ *
+ * 失败即放弃：这是清理旧状态，不是功能路径，任何一步失败都不该影响地点提醒本身
+ * （判定全在 guard 心跳那条链上）。
+ */
+async function cleanUpLegacyGeofencing(): Promise<void> {
+  try {
+    if (await Location.hasStartedGeofencingAsync(LEGACY_GEOFENCE_TASK_NAME)) {
+      await Location.stopGeofencingAsync(LEGACY_GEOFENCE_TASK_NAME);
+      console.warn('[location] stopped the legacy geofencing registration');
     }
-
-    const { status: foreground } = await Location.getForegroundPermissionsAsync();
-    if (foreground !== 'granted') {
-      console.warn('[geofence] syncRegions skipped: foreground permission not granted');
-      return;
+    // stopGeofencingAsync 只解绑围栏本身，任务注册可能还留在 TaskManager 里。
+    if (await TaskManager.isTaskRegisteredAsync(LEGACY_GEOFENCE_TASK_NAME)) {
+      await TaskManager.unregisterTaskAsync(LEGACY_GEOFENCE_TASK_NAME);
+      console.warn('[location] unregistered the legacy geofence task');
     }
-    // Android 要求先拿到前台权限才能申请后台权限，所以这两步不能对调顺序。
-    const { status: background } = await Location.getBackgroundPermissionsAsync();
-    if (background !== 'granted') {
-      console.warn('[geofence] syncRegions skipped: background permission not granted');
-      return;
-    }
-
-    const regions: Location.LocationRegion[] = [...this.watches.values()].map((watch) => ({
-      identifier: watch.request.schedule_id,
-      latitude: watch.request.center.latitude,
-      longitude: watch.request.center.longitude,
-      radius: watch.request.radius_meters,
-      notifyOnEnter: true,
-      notifyOnExit: true,
-    }));
-
-    try {
-      await Location.startGeofencingAsync(GEOFENCE_TASK_NAME, regions);
-    } catch (error) {
-      // 系统围栏注册失败（比如权限被收回）；下次 watch()/rebuild() 会再重试。
-      console.warn('[geofence] startGeofencingAsync failed', error);
-    }
+  } catch (error) {
+    console.warn('[location] legacy geofencing cleanup failed', error);
   }
 }
 

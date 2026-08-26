@@ -140,6 +140,28 @@ async def test_text_deltas_are_segmented_and_synthesized_as_one_turn() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reply_is_truncated_at_total_character_cap() -> None:
+    tts = FakeTts()
+    pipeline = SpeechPipeline(tts, max_total_characters=15)
+
+    output = [
+        event
+        async for event in pipeline.stream(
+            agent_events(
+                AgentTextDelta("这是一段很长的回复文本内容用于测试截断功能"),
+                AgentCompleted(LlmUsage(1, 2, 3)),
+            )
+        )
+    ]
+
+    segments = tts.requests[0]
+    total = sum(len(segment.text) for segment in segments)
+    assert total <= 15
+    assert segments[-1].text.endswith("，后面省略")
+    assert any(isinstance(event, SpeechAudioCompleted) for event in output)
+
+
+@pytest.mark.asyncio
 async def test_question_is_one_complete_dialogue_segment() -> None:
     tts = FakeTts()
     pipeline = SpeechPipeline(tts)
@@ -482,3 +504,51 @@ async def test_unsupported_agent_and_tts_events_are_rejected() -> None:
 def test_invalid_queue_size_is_rejected() -> None:
     with pytest.raises(ValueError, match="positive"):
         SpeechPipeline(FakeTts(), segment_queue_size=0)
+
+
+def test_invalid_max_total_characters_is_rejected() -> None:
+    with pytest.raises(ValueError, match="positive"):
+        SpeechPipeline(FakeTts(), max_total_characters=0)
+
+
+@pytest.mark.asyncio
+async def test_truncation_drops_later_segments_after_the_cap_is_reached() -> None:
+    tts = FakeTts()
+    pipeline = SpeechPipeline(tts, max_total_characters=10)
+
+    _ = [
+        event
+        async for event in pipeline.stream(
+            agent_events(
+                AgentTextDelta("这是一段非常长的文本内容。第二段。"),
+                AgentCompleted(LlmUsage(1, 2, 3)),
+            )
+        )
+    ]
+
+    # 第一个分段被截断后，后续分段应被丢弃，不再进入 TTS。
+    segments = tts.requests[0]
+    assert len(segments) == 1
+    assert segments[0].text.endswith("，后面省略")
+    assert sum(len(segment.text) for segment in segments) <= 10
+
+
+@pytest.mark.asyncio
+async def test_truncation_voices_notice_when_content_fills_the_budget() -> None:
+    tts = FakeTts()
+    pipeline = SpeechPipeline(tts, max_total_characters=10)
+
+    _ = [
+        event
+        async for event in pipeline.stream(
+            agent_events(
+                AgentTextDelta("一二三四。"),
+                AgentTextDelta("五六七八。"),
+                AgentCompleted(LlmUsage(1, 2, 3)),
+            )
+        )
+    ]
+
+    # 内容恰好占满预留预算后，后续分段也要播报省略提示，而不是静默丢弃。
+    segments = tts.requests[0]
+    assert [segment.text for segment in segments] == ["一二三四。", "，后面省略"]

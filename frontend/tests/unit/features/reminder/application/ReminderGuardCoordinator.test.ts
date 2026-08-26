@@ -1,19 +1,31 @@
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import * as Location from 'expo-location';
 
+import * as TaskManager from 'expo-task-manager';
+
 import type { LocalReminderSchedule } from '../../../../../src/features/reminder/domain';
 import { ReminderGuardCoordinator } from '../../../../../src/features/reminder/application/ReminderGuardCoordinator';
 import {
   GUARD_TASK_NAME,
+  isAppForegrounded,
   subscribeGuardTaskEvents,
 } from '../../../../../src/infrastructure/location/reminderGuardTask';
 
 jest.mock('expo-location', () => ({
-  Accuracy: { Balanced: 3 },
+  Accuracy: { High: 4 },
   getForegroundPermissionsAsync: jest.fn(),
   startLocationUpdatesAsync: jest.fn(),
   stopLocationUpdatesAsync: jest.fn(),
   hasStartedLocationUpdatesAsync: jest.fn(),
+}));
+
+// isTaskDefined/defineTask 是给下面那份 requireActual 的 reminderGuardTask 用的
+// ——它在模块顶层就会调 isTaskDefined 来决定要不要 defineTask，只 mock
+// getRegisteredTasksAsync 的话整个 suite 在加载阶段就挂了。
+jest.mock('expo-task-manager', () => ({
+  isTaskDefined: jest.fn(() => true),
+  defineTask: jest.fn(),
+  getRegisteredTasksAsync: jest.fn(),
 }));
 
 jest.mock('../../../../../src/infrastructure/location/reminderGuardTask', () => {
@@ -23,6 +35,8 @@ jest.mock('../../../../../src/infrastructure/location/reminderGuardTask', () => 
   return {
     GUARD_TASK_NAME: 'timeflow-reminder-guard',
     GUARD_NOTIFICATION_TITLE: actual.GUARD_NOTIFICATION_TITLE,
+    GUARD_NOTIFICATION_BODY: actual.GUARD_NOTIFICATION_BODY,
+    isAppForegrounded: jest.fn(() => true),
     subscribeGuardTaskEvents: jest.fn(() => () => {}),
     resolveNextPollIntervalMs: actual.resolveNextPollIntervalMs,
   };
@@ -43,6 +57,29 @@ const hasStarted = Location.hasStartedLocationUpdatesAsync as jest.MockedFunctio
 const subscribeTaskEvents = subscribeGuardTaskEvents as jest.MockedFunction<
   typeof subscribeGuardTaskEvents
 >;
+const getRegisteredTasks = TaskManager.getRegisteredTasksAsync as jest.MockedFunction<
+  typeof TaskManager.getRegisteredTasksAsync
+>;
+const foregrounded = isAppForegrounded as jest.MockedFunction<typeof isAppForegrounded>;
+
+/**
+ * 造一条原生注册项。`withForegroundService` 就是这组用例的全部分水岭：带着它
+ * 代表常驻前台服务还活着，不带代表服务已经被原生拆掉、只剩一个纯后台定位任务
+ * ——而 hasStartedLocationUpdatesAsync() 对这两种情况的回答一模一样。
+ */
+function registeredTask(withForegroundService: boolean): TaskManager.TaskManagerTask {
+  return {
+    taskName: GUARD_TASK_NAME,
+    taskType: 'location',
+    options: {
+      accuracy: 3,
+      timeInterval: 300_000,
+      ...(withForegroundService
+        ? { foregroundService: { notificationTitle: 'Timeflow 提醒守护' } }
+        : {}),
+    },
+  };
+}
 
 function granted(): Location.PermissionResponse {
   return {
@@ -145,6 +182,10 @@ describe('ReminderGuardCoordinator', () => {
     // 自己把它改成 true。
     hasStarted.mockResolvedValue(false);
     subscribeTaskEvents.mockReturnValue(() => {});
+    // 默认"注册着而且带前台服务"——只有把 hasStarted 也改成 true 时这份返回值
+    // 才会被读到，所以对上面那批 hasStarted=false 的用例没有影响。
+    getRegisteredTasks.mockResolvedValue([registeredTask(true)]);
+    foregrounded.mockReturnValue(true);
   });
 
   it('does not start location updates when there is nothing active to watch', async () => {
@@ -285,8 +326,82 @@ describe('ReminderGuardCoordinator', () => {
     expect(options?.timeInterval).toBe(300_000);
   });
 
-  it('does not re-register when location updates are already running', async () => {
+  it('does not re-register when the running registration still carries the foreground service', async () => {
     hasStarted.mockResolvedValue(true);
+    getRegisteredTasks.mockResolvedValue([registeredTask(true)]);
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+
+    await coordinator.start();
+
+    expect(startUpdates).not.toHaveBeenCalled();
+    expect(stopUpdates).not.toHaveBeenCalled();
+  });
+
+  it('repairs a registration that lost its foreground service', async () => {
+    // 真机上的主故障：guard 任务自己用不带 foregroundService 的同名注册重注册过
+    // 一次，原生把常驻前台服务拆了，但 hasStartedLocationUpdatesAsync() 照样是
+    // true。改之前协调器只看这个布尔值，会直接早退，服务永远建不回来——而且这份
+    // 降级注册被 expo-task-manager 持久化，冷启动也清不掉。
+    hasStarted.mockResolvedValue(true);
+    getRegisteredTasks.mockResolvedValue([registeredTask(false)]);
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+
+    await coordinator.start();
+
+    // 先真的注销一次，再带 foregroundService 重建——只重注册走原生 setOptions
+    // 分支，能不能把服务拉回来取决于 mService 的残留状态，不可靠。
+    expect(stopUpdates).toHaveBeenCalledWith(GUARD_TASK_NAME);
+    expect(startUpdates).toHaveBeenCalledTimes(1);
+    const [, options] = startUpdates.mock.calls[0];
+    expect(options?.foregroundService?.notificationBody).toBe('提醒守护运行中');
+  });
+
+  it('leaves a degraded registration alone while the app is backgrounded', async () => {
+    // 后台带 foregroundService 注册会被原生直接拒（ForegroundServiceStartNot-
+    // AllowedException），这时候硬 stop 只会把仅剩的定位任务也弄没，比维持现状
+    // 更糟。等回到前台的那次 reconcile 再修。
+    hasStarted.mockResolvedValue(true);
+    getRegisteredTasks.mockResolvedValue([registeredTask(false)]);
+    foregrounded.mockReturnValue(false);
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+
+    await coordinator.start();
+
+    expect(stopUpdates).not.toHaveBeenCalled();
+    expect(startUpdates).not.toHaveBeenCalled();
+  });
+
+  it('treats an unreadable registration list as "do not touch"', async () => {
+    hasStarted.mockResolvedValue(true);
+    getRegisteredTasks.mockRejectedValue(new Error('boom'));
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+
+    await coordinator.start();
+
+    expect(stopUpdates).not.toHaveBeenCalled();
+    expect(startUpdates).not.toHaveBeenCalled();
+  });
+
+  it('gives up the repair when clearing the degraded registration fails', async () => {
+    hasStarted.mockResolvedValue(true);
+    getRegisteredTasks.mockResolvedValue([registeredTask(false)]);
+    stopUpdates.mockRejectedValue(new Error('boom'));
     const reader = createReader([timeSchedule()]);
     const coordinator = new ReminderGuardCoordinator({
       schedules: reader,

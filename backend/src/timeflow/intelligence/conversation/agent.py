@@ -36,7 +36,7 @@ SYSTEM_PROMPT = """你是 TimeFlow 时间管理助手，只负责用简短自然
 1. 日程操作：按下面「日程操作」执行。
 2. 回答上一轮问题：当作补充信息，一次性提取所有日程信息（时间、标题、地点、日期、重复、提醒等），不要只取上一轮问的那一项；提取后再看还缺什么。
 3. 无关话题：简短说明「我是时间管理助手，只能帮你管理日程」，拉回日程，不编答案。
-4. 噪音：仅当完全无可用信息（「嗯」「啊」、听不清的碎句）才回「抱歉，我没听清，能再说一遍吗？」，不调工具。只要有一点日程相关意图（哪怕含糊、口误、缺字），就别归入噪音，尽力提取可用部分、只追问真正缺的。
+4. 噪音与孤立输入：既没动作（创建/提醒/记/查/删/改/取消）、又没时间、又不是在回答上一轮问题的输入，一律算无意义——无论是「嗯」「啊」、听不清的碎句，还是孤立说出的名词，都回「抱歉，我没听清，能再说一遍吗？」，不调工具，绝不擅自当标题去创建。只有带动作或带时间的输入，才按日程意图尽力提取、只追问真正缺的。
 
 铁律：创建/查询/修改/删除必须通过工具执行，只有工具返回 status=ok 才能说「已创建/已删除/已修改/查到了」，返回 error/not_implemented 要如实说没做成。严禁编造任何日程信息（ID、revision、标题、时间、地点、地址、经纬度、候选、查询结果），只能来自工具实际返回。
 
@@ -574,38 +574,26 @@ def _refusal_json(reason: str) -> str:
 
 
 _CONFIRMATION_NEGATION_MARKERS = ("不", "别", "取消", "算了", "误会")
-_CONFIRMATION_AFFIRMATIVE_MARKERS = (
-    "确认",
-    "是的",
-    "对",
-    "好的",
-    "可以",
-    "行",
-    "删",
-    "没错",
-    "没问题",
-    "嗯",
-)
 
 
 def _is_affirmative(text: str) -> bool:
-    """Whether a confirmation answer explicitly agrees to the deletion.
+    """Whether a confirmation answer is not an explicit negation.
 
-    A negation word or a bare re-statement (「下周一周会我不参加」) is not an
-    explicit agreement, so it is rejected even if it re-states the intent.
+    Affirmation is left to the Agent: by the time a delete is authorized, the
+    Agent has already read the confirmation question and the user's answer and
+    chosen to call schedule_delete. This guard only rejects clear negations so a
+    misread "no" cannot delete.
     """
-    if any(marker in text for marker in _CONFIRMATION_NEGATION_MARKERS):
-        return False
-    return any(marker in text for marker in _CONFIRMATION_AFFIRMATIVE_MARKERS)
+    return not any(marker in text for marker in _CONFIRMATION_NEGATION_MARKERS)
 
 
 def _delete_authorized(conversation: AgentConversation) -> bool:
     """Whether the current turn is authorized to delete.
 
     A delete is irreversible, so it is only allowed right after the user answered
-    a recurrence-scope question, or a confirmation with an explicit affirmative
-    answer. Disambiguation (``ambiguous_target``) only narrows the target and does
-    not authorize deletion on its own.
+    a recurrence-scope question, or a confirmation whose answer is not a clear
+    negation. Disambiguation (``ambiguous_target``) only narrows the target and
+    does not authorize deletion on its own.
     """
     kind = conversation.answered_question_kind
     if kind == "recurrence_scope":

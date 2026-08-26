@@ -1,45 +1,27 @@
-import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import * as Location from 'expo-location';
-import { AppState } from 'react-native';
+import * as TaskManager from 'expo-task-manager';
 
 import type {
   LocationMonitorEvent,
   LocationWatchRequest,
 } from '../../../../src/features/reminder/application/interfaces';
 import { ExpoLocationMonitor } from '../../../../src/infrastructure/location/ExpoLocationMonitor';
-import {
-  drainPendingGeofenceEvents,
-  subscribeGeofenceTaskEvents,
-} from '../../../../src/infrastructure/location/geofenceTask';
 
 jest.mock('expo-location', () => ({
   getForegroundPermissionsAsync: jest.fn(),
-  requestForegroundPermissionsAsync: jest.fn(),
-  getBackgroundPermissionsAsync: jest.fn(),
-  requestBackgroundPermissionsAsync: jest.fn(),
   getCurrentPositionAsync: jest.fn(),
   hasStartedGeofencingAsync: jest.fn(),
   stopGeofencingAsync: jest.fn(),
-  startGeofencingAsync: jest.fn(),
 }));
 
-jest.mock('../../../../src/infrastructure/location/geofenceTask', () => ({
-  GEOFENCE_TASK_NAME: 'timeflow-geofence',
-  subscribeGeofenceTaskEvents: jest.fn(),
-  drainPendingGeofenceEvents: jest.fn(),
+jest.mock('expo-task-manager', () => ({
+  isTaskRegisteredAsync: jest.fn(),
+  unregisterTaskAsync: jest.fn(),
 }));
 
 const getForeground = Location.getForegroundPermissionsAsync as jest.MockedFunction<
   typeof Location.getForegroundPermissionsAsync
->;
-const requestForeground = Location.requestForegroundPermissionsAsync as jest.MockedFunction<
-  typeof Location.requestForegroundPermissionsAsync
->;
-const getBackground = Location.getBackgroundPermissionsAsync as jest.MockedFunction<
-  typeof Location.getBackgroundPermissionsAsync
->;
-const requestBackground = Location.requestBackgroundPermissionsAsync as jest.MockedFunction<
-  typeof Location.requestBackgroundPermissionsAsync
 >;
 const getCurrentPosition = Location.getCurrentPositionAsync as jest.MockedFunction<
   typeof Location.getCurrentPositionAsync
@@ -50,14 +32,11 @@ const hasStartedGeofencing = Location.hasStartedGeofencingAsync as jest.MockedFu
 const stopGeofencing = Location.stopGeofencingAsync as jest.MockedFunction<
   typeof Location.stopGeofencingAsync
 >;
-const startGeofencing = Location.startGeofencingAsync as jest.MockedFunction<
-  typeof Location.startGeofencingAsync
+const isTaskRegistered = TaskManager.isTaskRegisteredAsync as jest.MockedFunction<
+  typeof TaskManager.isTaskRegisteredAsync
 >;
-const subscribeTaskEvents = subscribeGeofenceTaskEvents as jest.MockedFunction<
-  typeof subscribeGeofenceTaskEvents
->;
-const drainPending = drainPendingGeofenceEvents as jest.MockedFunction<
-  typeof drainPendingGeofenceEvents
+const unregisterTask = TaskManager.unregisterTaskAsync as jest.MockedFunction<
+  typeof TaskManager.unregisterTaskAsync
 >;
 
 function granted(): Location.LocationPermissionResponse {
@@ -69,10 +48,10 @@ function granted(): Location.LocationPermissionResponse {
   };
 }
 
-function denied(canAskAgain = true): Location.LocationPermissionResponse {
+function denied(): Location.LocationPermissionResponse {
   return {
     status: 'denied' as Location.PermissionStatus,
-    canAskAgain,
+    canAskAgain: true,
     granted: false,
     expires: 'never',
   };
@@ -82,9 +61,6 @@ function request(overrides: Partial<LocationWatchRequest> = {}): LocationWatchRe
   return {
     schedule_id: 'schedule-1',
     center: { latitude: 31.2, longitude: 121.5 },
-    radius_meters: 200,
-    mode: 'arrive',
-    background: true,
     ...overrides,
   };
 }
@@ -105,176 +81,118 @@ function position(overrides: Partial<Location.LocationObjectCoords> = {}) {
   };
 }
 
-describe('ExpoLocationMonitor', () => {
-  let taskListener: ((payload: unknown) => void) | undefined;
-  let appStateHandler: ((state: string) => void) | undefined;
+/** 让构造函数里那个 fire-and-forget 的清理跑完，再断言它调了什么。 */
+async function flush(): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
+}
 
+describe('ExpoLocationMonitor', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    taskListener = undefined;
-    appStateHandler = undefined;
-
-    subscribeTaskEvents.mockImplementation((listener) => {
-      taskListener = listener as (payload: unknown) => void;
-      return jest.fn();
-    });
-    drainPending.mockResolvedValue([]);
-
-    jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, handler) => {
-      appStateHandler = handler as (state: string) => void;
-      return { remove: jest.fn() } as unknown as ReturnType<typeof AppState.addEventListener>;
-    });
-
     getForeground.mockResolvedValue(granted());
-    getBackground.mockResolvedValue(granted());
-    requestForeground.mockResolvedValue(granted());
-    requestBackground.mockResolvedValue(granted());
     getCurrentPosition.mockResolvedValue(position());
     hasStartedGeofencing.mockResolvedValue(false);
     stopGeofencing.mockResolvedValue(undefined);
-    startGeofencing.mockResolvedValue(undefined);
-  });
-
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
-
-  it('subscribes to geofence task events and app-state changes on construction', () => {
-    new ExpoLocationMonitor();
-    expect(subscribeTaskEvents).toHaveBeenCalledTimes(1);
-    expect(AppState.addEventListener).toHaveBeenCalledWith('change', expect.any(Function));
+    isTaskRegistered.mockResolvedValue(false);
+    unregisterTask.mockResolvedValue(undefined);
   });
 
   describe('watch()', () => {
-    it('registers a watch, syncs regions, and delivers an initial inside sample', async () => {
+    it('registers a watch and delivers an initial inside sample', async () => {
+      // 这条初始样本是这个类唯一主动送出的事件——它给 armed 状态机定起始值。
+      // 之后的进出判定全部由 guard 心跳走 LocalReminderApplication.handleLocation()。
       const monitor = new ExpoLocationMonitor();
-      const events: LocationMonitorEvent[] = [];
-      const handle = await monitor.watch(request(), (event) => events.push(event));
+      const listener = jest.fn<(event: LocationMonitorEvent) => unknown>();
+
+      const handle = await monitor.watch(request(), listener);
 
       expect(handle).toEqual({ listener_id: 'location-schedule-1', schedule_id: 'schedule-1' });
-      expect(startGeofencing).toHaveBeenCalledWith(
-        'timeflow-geofence',
-        expect.arrayContaining([expect.objectContaining({ identifier: 'schedule-1' })]),
-      );
-      expect(events).toEqual([
-        {
-          schedule_id: 'schedule-1',
-          sample: {
-            latitude: 31.2,
-            longitude: 121.5,
-            accuracy_meters: 12,
-            observed_at: '2026-08-19T08:00:00.000Z',
-          },
-          phase: 'inside',
+      expect(listener).toHaveBeenCalledWith({
+        schedule_id: 'schedule-1',
+        sample: {
+          latitude: 31.2,
+          longitude: 121.5,
+          accuracy_meters: 12,
+          observed_at: '2026-08-19T08:00:00.000Z',
         },
-      ]);
+      });
+    });
+
+    it('never registers a system geofence', async () => {
+      // 系统围栏已经整条删掉：它对判定零贡献（回调进来后代码伪造坐标重算），
+      // 却会因为反复重注册重置 GMS 的状态机、丢掉真正的 enter。
+      //
+      // 这条的保证是结构性的，不靠断言调用次数：上面 expo-location 的 mock **故意
+      // 不提供** startGeofencingAsync，所以源码里只要还残留一次调用，这里就会因为
+      // "不是函数"直接抛错。watch() 正常 resolve 本身就是证据。
+      expect('startGeofencingAsync' in Location).toBe(false);
+
+      const monitor = new ExpoLocationMonitor();
+      await expect(monitor.watch(request(), jest.fn())).resolves.toBeDefined();
+      await flush();
+
+      // 干净装机上不该碰 stopGeofencing——它只在清理老注册那条路径上出现。
+      expect(stopGeofencing).not.toHaveBeenCalled();
     });
 
     it('does not deliver an initial sample when the current position is unavailable', async () => {
-      getForeground.mockResolvedValue(denied(false));
-      requestForeground.mockResolvedValue(denied(false));
+      getCurrentPosition.mockRejectedValue(new Error('no fix'));
       const monitor = new ExpoLocationMonitor();
       const listener = jest.fn();
+
       await monitor.watch(request(), listener);
+
       expect(listener).not.toHaveBeenCalled();
     });
 
     it('replaces an existing watch for the same schedule_id instead of stacking two', async () => {
       const monitor = new ExpoLocationMonitor();
       await monitor.watch(request(), jest.fn());
-      await monitor.watch(request({ radius_meters: 500 }), jest.fn());
+      const second = await monitor.watch(request(), jest.fn());
 
-      const lastCall = startGeofencing.mock.calls.at(-1);
-      const regions = lastCall?.[1] as { identifier: string; radius: number }[];
-      expect(regions).toHaveLength(1);
-      expect(regions[0]).toMatchObject({ identifier: 'schedule-1', radius: 500 });
-    });
-
-    it('replays events queued while the app process was headless', async () => {
-      drainPending.mockResolvedValue([
-        {
-          schedule_id: 'schedule-1',
-          event: 'enter',
-          latitude: 31.21,
-          longitude: 121.51,
-          radius: 200,
-          observed_at: '2026-08-19T09:00:00.000Z',
-        },
-      ]);
-      const monitor = new ExpoLocationMonitor();
-      const events: LocationMonitorEvent[] = [];
-      await monitor.watch(request(), (event) => events.push(event));
-
-      expect(events.at(-1)).toEqual({
-        schedule_id: 'schedule-1',
-        sample: {
-          latitude: 31.21,
-          longitude: 121.51,
-          accuracy_meters: 200,
-          observed_at: '2026-08-19T09:00:00.000Z',
-        },
-        phase: 'entered',
-      });
+      expect(second.listener_id).toBe('location-schedule-1');
+      // 同一个 schedule 只留一条 watch：unwatch 一次就该彻底移除。
+      await monitor.unwatch(second.listener_id);
+      await expect(monitor.unwatch(second.listener_id)).resolves.toBeUndefined();
     });
   });
 
   describe('unwatch()', () => {
-    it('stops the system geofence once the last watch is removed', async () => {
-      hasStartedGeofencing.mockResolvedValue(true);
-      const monitor = new ExpoLocationMonitor();
-      const handle = await monitor.watch(request(), jest.fn());
-      await monitor.unwatch(handle.listener_id);
-
-      expect(stopGeofencing).toHaveBeenCalledWith('timeflow-geofence');
-    });
-
     it('does nothing for an unknown listener id', async () => {
       const monitor = new ExpoLocationMonitor();
-      await expect(monitor.unwatch('does-not-exist')).resolves.toBeUndefined();
-      expect(startGeofencing).not.toHaveBeenCalled();
+      await expect(monitor.unwatch('location-nope')).resolves.toBeUndefined();
     });
   });
 
   describe('rebuild()', () => {
-    it('replaces every watch with one sync and fans the sample out to all handles', async () => {
-      const monitor = new ExpoLocationMonitor();
-      const events: LocationMonitorEvent[] = [];
-      const handles = await monitor.rebuild(
-        [
-          {
-            schedule_id: 'a',
-            center: { latitude: 1, longitude: 2 },
-            radius_meters: 100,
-            mode: 'arrive',
-            background: true,
-          },
-          {
-            schedule_id: 'b',
-            center: { latitude: 3, longitude: 4 },
-            radius_meters: 150,
-            mode: 'return',
-            background: false,
-          },
-        ],
-        (event) => events.push(event),
-      );
-
-      expect(handles).toEqual([
-        { listener_id: 'location-a', schedule_id: 'a' },
-        { listener_id: 'location-b', schedule_id: 'b' },
-      ]);
-      expect(startGeofencing).toHaveBeenCalledTimes(1);
-      expect(events.map((e) => e.schedule_id)).toEqual(['a', 'b']);
-    });
-
-    it('stops geofencing when rebuilt with no targets', async () => {
-      hasStartedGeofencing.mockResolvedValue(true);
+    it('replaces every watch and fans one sample out to all handles', async () => {
       const monitor = new ExpoLocationMonitor();
       await monitor.watch(request(), jest.fn());
-      stopGeofencing.mockClear();
+      getCurrentPosition.mockClear();
+      const listener = jest.fn<(event: LocationMonitorEvent) => unknown>();
+
+      const handles = await monitor.rebuild(
+        [
+          { schedule_id: 'a', center: { latitude: 1, longitude: 2 } },
+          { schedule_id: 'b', center: { latitude: 3, longitude: 4 } },
+        ],
+        listener,
+      );
+
+      expect(handles.map((h) => h.schedule_id)).toEqual(['a', 'b']);
+      // 只取一次定位再扇出，不是每个 target 各打一次定位请求。
+      expect(getCurrentPosition).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledTimes(2);
+    });
+
+    it('drops the previous watches when rebuilt with no targets', async () => {
+      const monitor = new ExpoLocationMonitor();
+      const first = await monitor.watch(request(), jest.fn());
 
       await monitor.rebuild([], jest.fn());
-      expect(stopGeofencing).toHaveBeenCalledWith('timeflow-geofence');
+
+      // 旧 watch 已经不在了，再 unwatch 一次是无害的空操作。
+      await expect(monitor.unwatch(first.listener_id)).resolves.toBeUndefined();
     });
   });
 
@@ -286,217 +204,81 @@ describe('ExpoLocationMonitor', () => {
 
     it('falls back to the last known sample when foreground permission is missing', async () => {
       const monitor = new ExpoLocationMonitor();
-      await monitor.watch(request(), jest.fn());
-      const cached = await monitor.getLastSample();
+      await monitor.getCurrentSample();
+      getForeground.mockResolvedValue(denied());
 
-      getForeground.mockResolvedValue(denied(false));
-      requestForeground.mockResolvedValue(denied(false));
-      await expect(monitor.getCurrentSample()).resolves.toEqual(cached);
-      expect(getCurrentPosition).toHaveBeenCalledTimes(1); // only from the watch() call above
+      await expect(monitor.getCurrentSample()).resolves.toEqual(
+        expect.objectContaining({ latitude: 31.2 }),
+      );
     });
 
     it('falls back to the last known sample when the position read throws', async () => {
       const monitor = new ExpoLocationMonitor();
-      await monitor.watch(request(), jest.fn());
-      const cached = await monitor.getLastSample();
+      await monitor.getCurrentSample();
+      getCurrentPosition.mockRejectedValue(new Error('boom'));
 
-      getCurrentPosition.mockRejectedValue(new Error('gps unavailable'));
-      await expect(monitor.getCurrentSample()).resolves.toEqual(cached);
+      await expect(monitor.getCurrentSample()).resolves.toEqual(
+        expect.objectContaining({ latitude: 31.2 }),
+      );
     });
 
     it('defaults accuracy to 0 when the platform does not report it', async () => {
       getCurrentPosition.mockResolvedValue(position({ accuracy: null }));
       const monitor = new ExpoLocationMonitor();
-      await monitor.watch(request(), jest.fn());
-      await expect(monitor.getLastSample()).resolves.toMatchObject({ accuracy_meters: 0 });
+
+      await expect(monitor.getCurrentSample()).resolves.toEqual(
+        expect.objectContaining({ accuracy_meters: 0 }),
+      );
     });
   });
 
-  describe('dispose()', () => {
-    it('unsubscribes from task events, removes the app-state listener, and stops an active geofence', async () => {
-      const removeAppState = jest.fn();
-      jest.spyOn(AppState, 'addEventListener').mockReturnValue({
-        remove: removeAppState,
-      } as unknown as ReturnType<typeof AppState.addEventListener>);
-      const unsubscribeTask = jest.fn();
-      subscribeTaskEvents.mockReturnValue(unsubscribeTask);
+  describe('legacy geofencing cleanup', () => {
+    /**
+     * 老装机上 'timeflow-geofence' 的注册被 expo-task-manager 持久化在
+     * SharedPreferences 里，光删代码清不掉——那条 GMS 围栏会一直挂着、被唤醒时又
+     * 找不到 JS 任务。所以构造时要主动停一次。
+     */
+    it('stops a leftover geofence registration and unregisters the legacy task', async () => {
       hasStartedGeofencing.mockResolvedValue(true);
+      isTaskRegistered.mockResolvedValue(true);
 
-      const monitor = new ExpoLocationMonitor();
-      monitor.dispose();
-      await Promise.resolve();
-      await Promise.resolve();
+      new ExpoLocationMonitor();
+      await flush();
 
-      expect(unsubscribeTask).toHaveBeenCalledTimes(1);
-      expect(removeAppState).toHaveBeenCalledTimes(1);
       expect(stopGeofencing).toHaveBeenCalledWith('timeflow-geofence');
+      expect(unregisterTask).toHaveBeenCalledWith('timeflow-geofence');
     });
 
-    it('does not stop geofencing when it was never started', async () => {
-      hasStartedGeofencing.mockResolvedValue(false);
-      const monitor = new ExpoLocationMonitor();
-      monitor.dispose();
-      await Promise.resolve();
-      await Promise.resolve();
+    it('does nothing when there is no leftover registration', async () => {
+      new ExpoLocationMonitor();
+      await flush();
 
       expect(stopGeofencing).not.toHaveBeenCalled();
+      expect(unregisterTask).not.toHaveBeenCalled();
     });
 
-    it('does not throw when checking geofence status fails during disposal', async () => {
-      hasStartedGeofencing.mockRejectedValue(new Error('native module torn down'));
-      const monitor = new ExpoLocationMonitor();
-      expect(() => monitor.dispose()).not.toThrow();
-      await new Promise((resolve) => setImmediate(resolve));
-    });
-  });
+    it('unregisters the task even when the geofence itself was already stopped', async () => {
+      // stopGeofencingAsync 只解绑围栏，任务注册可能单独留着。
+      hasStartedGeofencing.mockResolvedValue(false);
+      isTaskRegistered.mockResolvedValue(true);
 
-  describe('app-state resync', () => {
-    it('resyncs regions when the app becomes active with active watches', async () => {
-      const monitor = new ExpoLocationMonitor();
-      await monitor.watch(request(), jest.fn());
-      startGeofencing.mockClear();
-
-      appStateHandler?.('active');
-      await new Promise((resolve) => setImmediate(resolve));
-
-      expect(startGeofencing).toHaveBeenCalledTimes(1);
-    });
-
-    it('does nothing when the app becomes active with no watches', () => {
       new ExpoLocationMonitor();
-      appStateHandler?.('active');
-      expect(startGeofencing).not.toHaveBeenCalled();
+      await flush();
+
+      expect(stopGeofencing).not.toHaveBeenCalled();
+      expect(unregisterTask).toHaveBeenCalledWith('timeflow-geofence');
     });
 
-    it('ignores background/inactive transitions', async () => {
+    it('swallows a cleanup failure instead of breaking construction', async () => {
+      // 清理是收拾旧状态，不是功能路径——失败了地点提醒照样能用（判定全在 guard 那条链上）。
+      hasStartedGeofencing.mockRejectedValue(new Error('native module gone'));
+
       const monitor = new ExpoLocationMonitor();
-      await monitor.watch(request(), jest.fn());
-      startGeofencing.mockClear();
+      await flush();
 
-      appStateHandler?.('background');
-      expect(startGeofencing).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('geofence task event routing', () => {
-    it('ignores an event for a schedule with no active watch', async () => {
-      const monitor = new ExpoLocationMonitor();
-      const listener = jest.fn();
-      await monitor.watch(request(), listener);
-      listener.mockClear();
-
-      taskListener?.({
-        schedule_id: 'unknown-schedule',
-        event: 'enter',
-        latitude: 1,
-        longitude: 2,
-        radius: 100,
-        observed_at: '2026-08-19T10:00:00.000Z',
-      });
-
-      expect(listener).not.toHaveBeenCalled();
-    });
-
-    it('reports an exit sample offset outside the fence, not the raw region center', async () => {
-      const monitor = new ExpoLocationMonitor();
-      const listener = jest.fn();
-      await monitor.watch(request(), listener);
-      listener.mockClear();
-
-      taskListener?.({
-        schedule_id: 'schedule-1',
-        event: 'exit',
-        latitude: 31.2,
-        longitude: 121.5,
-        radius: 200,
-        observed_at: '2026-08-19T10:00:00.000Z',
-      });
-
-      expect(listener).toHaveBeenCalledWith({
-        schedule_id: 'schedule-1',
-        sample: {
-          latitude: 31.21,
-          longitude: 121.5,
-          accuracy_meters: 200,
-          observed_at: '2026-08-19T10:00:00.000Z',
-        },
-        phase: 'left',
-      });
-    });
-  });
-
-  describe('syncRegions() permission checks', () => {
-    it('skips registration when foreground permission is not granted', async () => {
-      getForeground.mockResolvedValue(denied());
-      const monitor = new ExpoLocationMonitor();
-      await monitor.watch(request(), jest.fn());
-
-      expect(requestForeground).not.toHaveBeenCalled();
-      expect(requestBackground).not.toHaveBeenCalled();
-      expect(startGeofencing).not.toHaveBeenCalled();
-    });
-
-    it('does not request background permission when foreground permission is missing', async () => {
-      getForeground.mockResolvedValue(denied(false));
-      const monitor = new ExpoLocationMonitor();
-      await monitor.watch(request(), jest.fn());
-
-      expect(requestBackground).not.toHaveBeenCalled();
-      expect(startGeofencing).not.toHaveBeenCalled();
-    });
-
-    it('skips registration when background permission is not granted', async () => {
-      getBackground.mockResolvedValue(denied());
-      const monitor = new ExpoLocationMonitor();
-      await monitor.watch(request(), jest.fn());
-
-      expect(requestForeground).not.toHaveBeenCalled();
-      expect(requestBackground).not.toHaveBeenCalled();
-      expect(startGeofencing).not.toHaveBeenCalled();
-    });
-
-    it('does not request or register when background permission remains denied', async () => {
-      getBackground.mockResolvedValue(denied(false));
-      const monitor = new ExpoLocationMonitor();
-      await monitor.watch(request(), jest.fn());
-
-      expect(startGeofencing).not.toHaveBeenCalled();
-    });
-
-    it('does not re-request permission that is already granted', async () => {
-      const monitor = new ExpoLocationMonitor();
-      await monitor.watch(request(), jest.fn());
-
-      expect(requestForeground).not.toHaveBeenCalled();
-      expect(requestBackground).not.toHaveBeenCalled();
-    });
-
-    it('warns and does not throw when startGeofencingAsync itself fails', async () => {
-      startGeofencing.mockRejectedValue(new Error('system geofence limit reached'));
-      const monitor = new ExpoLocationMonitor();
-      await expect(monitor.watch(request(), jest.fn())).resolves.toBeDefined();
-    });
-
-    it('recovers after syncRegions() itself throws instead of leaving the sync chain stuck', async () => {
-      // getForegroundPermissionsAsync/getBackgroundPermissionsAsync above are not
-      // wrapped in try/catch, so a real native hiccup makes syncRegions() itself
-      // reject (not just warn). chainSync() must neutralize that immediately --
-      // handleAppState's resync is fire-and-forget (void this.chainSync()), so if
-      // the rejection is left unhandled even briefly, Node/Hermes treats it as an
-      // unhandled rejection and crashes the process outright (reproduced while
-      // writing this test, before switching chainSync() to .then().catch(() => {})).
-      const monitor = new ExpoLocationMonitor();
-      await monitor.watch(request(), jest.fn());
-      startGeofencing.mockClear();
-
-      getForeground.mockRejectedValueOnce(new Error('native location module hiccup'));
-      appStateHandler?.('active');
-      await new Promise((resolve) => setImmediate(resolve));
-
-      await expect(
-        monitor.watch(request({ schedule_id: 'schedule-2' }), jest.fn()),
-      ).resolves.toBeDefined();
-      expect(startGeofencing).toHaveBeenCalled();
+      await expect(monitor.watch(request(), jest.fn())).resolves.toEqual(
+        expect.objectContaining({ schedule_id: 'schedule-1' }),
+      );
     });
   });
 });

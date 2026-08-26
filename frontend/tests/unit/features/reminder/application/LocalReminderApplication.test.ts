@@ -852,7 +852,6 @@ describe('LocalReminderApplication', () => {
 
       await initialListener?.({
         schedule_id: 's1',
-        phase: 'inside',
         sample: {
           latitude: 31.2304,
           longitude: 121.4737,
@@ -883,7 +882,6 @@ describe('LocalReminderApplication', () => {
 
       await initialListener?.({
         schedule_id: 's1',
-        phase: 'inside',
         sample: {
           latitude: 40,
           longitude: 121.4737,
@@ -914,7 +912,6 @@ describe('LocalReminderApplication', () => {
           await Promise.resolve(
             listener({
               schedule_id: target.schedule_id,
-              phase: 'inside',
               sample: {
                 latitude: 31.2304,
                 longitude: 121.4737,
@@ -995,7 +992,6 @@ describe('LocalReminderApplication', () => {
       let watchListener:
         | ((event: {
             schedule_id: string;
-            phase: string;
             sample: {
               latitude: number;
               longitude: number;
@@ -1014,7 +1010,6 @@ describe('LocalReminderApplication', () => {
 
       await watchListener?.({
         schedule_id: 's1',
-        phase: 'inside',
         sample: {
           latitude: 40,
           longitude: 121.4737,
@@ -1032,7 +1027,6 @@ describe('LocalReminderApplication', () => {
       let watchListener:
         | ((event: {
             schedule_id: string;
-            phase: string;
             sample: {
               latitude: number;
               longitude: number;
@@ -1053,7 +1047,6 @@ describe('LocalReminderApplication', () => {
       await expect(
         watchListener?.({
           schedule_id: 's1',
-          phase: 'inside',
           sample: {
             latitude: 40,
             longitude: 121.4737,
@@ -1532,6 +1525,49 @@ describe('LocalReminderApplication', () => {
     });
 
     it('notifies with missing location permissions after registering a location schedule', async () => {
+      // guard 现在完全靠带 foregroundService 的前台服务驱动地点判定（原生围栏已删），
+      // 而 startLocationUpdatesAsync 带 foregroundService 时原生侧根本不检查后台
+      // 定位权限——只要求前台/使用时权限。所以这里只应该报 location_foreground，
+      // 不该再把 location_background 当成必需项去提示用户开启"始终允许"。
+      const schedule = fixtureSchedule({
+        id: 's1',
+        schedule_type: 'location',
+        latitude: 31.2304,
+        longitude: 121.4737,
+        reminder: {
+          reminder_type: 'arrive_location',
+          reminder_trigger_at: null,
+          reminder_offset_minutes: null,
+          reminder_strength: 'medium',
+        },
+      });
+      const deps = createDeps({
+        device: {
+          getStatus: jest.fn(async () => statusWith({ location_foreground: false })),
+          onAppActive: jest.fn(() => () => {}),
+          openOemSettings: jest.fn(async () => true),
+          openSettings: jest.fn(async () => true),
+          requestPermission: jest.fn(async () => true),
+        },
+        schedules: new FakeScheduleReader([schedule]),
+      });
+      const app = new LocalReminderApplication(deps);
+      const listener = jest.fn();
+      app.onPermissionBlocked(listener);
+      await app.start();
+
+      await app.register(schedule);
+      await flushAsync();
+
+      expect(listener).toHaveBeenCalledWith({
+        schedule_id: 's1',
+        missing: ['location_foreground'],
+      });
+    });
+
+    it('does not notify about background location once foreground permission is granted', async () => {
+      // 回归防护：就算用户始终没给"始终允许"，只要前台权限在，地点提醒也不该
+      // 再被标成缺权限——location_background 已经不是这条路径的必需项。
       const schedule = fixtureSchedule({
         id: 's1',
         schedule_type: 'location',
@@ -1562,10 +1598,7 @@ describe('LocalReminderApplication', () => {
       await app.register(schedule);
       await flushAsync();
 
-      expect(listener).toHaveBeenCalledWith({
-        schedule_id: 's1',
-        missing: ['location_background'],
-      });
+      expect(listener).not.toHaveBeenCalled();
     });
 
     it('does not re-notify for the same schedule during a bulk rebuild', async () => {
