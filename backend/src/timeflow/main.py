@@ -24,6 +24,7 @@ from timeflow.data.account_uow import SqlAlchemyAuthUnitOfWork
 from timeflow.data.database import build_engine, build_session_factory, ping_database
 from timeflow.data.repositories.account import AccountRepository
 from timeflow.data.schedule_unit_of_work import SqlAlchemyScheduleUnitOfWork
+from timeflow.gateway.auth_diagnostics import log_sanitized_exception
 from timeflow.gateway.http import (
     AuthAccess,
     AuthRateLimiter,
@@ -105,8 +106,18 @@ def create_app(
         accounts = session_factory
 
         def username_for(account_id: str) -> str | None:
-            with accounts() as session:
-                record = AccountRepository(session).get_by_id(account_id)
+            try:
+                with accounts() as session:
+                    record = AccountRepository(session).get_by_id(account_id)
+            except Exception as error:
+                log_sanitized_exception(
+                    logger,
+                    error,
+                    event_prefix="voice_username_lookup",
+                    error_code="USERNAME_LOOKUP_FAILED",
+                    message="voice username lookup failed",
+                )
+                raise
             return None if record is None else record.username
 
         VOICE_TELEMETRY.bind_username_lookup(username_for)

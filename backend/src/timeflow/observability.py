@@ -216,7 +216,12 @@ class PrometheusOtelVoiceTelemetry:
         cached = self._usernames.get(key)
         if cached is not None:
             return cached
-        raw = self._username_for(key) if self._username_for is not None else None
+        try:
+            raw = self._username_for(key) if self._username_for is not None else None
+        except Exception:
+            # Transient lookup failures must not abort ASR/LLM. Do not cache "unknown"
+            # so a recovered database can enrich the next turn.
+            return "unknown"
         value = span_username(raw or "")
         self._usernames[key] = value
         return value

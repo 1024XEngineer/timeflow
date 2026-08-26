@@ -343,3 +343,37 @@ def test_tool_span_without_an_open_turn_uses_unknown_identity() -> None:
     span = next(span for span in exporter.get_finished_spans() if span.name.startswith("tool."))
     assert span.attributes[ACCOUNT_ID_ATTRIBUTE] == "unknown"
     assert span.attributes[USERNAME_ATTRIBUTE] == "unknown"
+
+
+def test_username_lookup_failure_does_not_abort_the_turn_or_poison_the_cache() -> None:
+    exporter = _span_exporter()
+    calls = {"n": 0}
+
+    def lookup(account_id: str) -> str | None:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("database unavailable")
+        return "alice"
+
+    telemetry = PrometheusOtelVoiceTelemetry(username_for=lookup)
+    failed = telemetry.start_turn(
+        agent_mode="composed",
+        voice_mode="push_to_talk",
+        account_id="acc_alice",
+    )
+    failed.finish(status="completed")
+    recovered = telemetry.start_turn(
+        agent_mode="composed",
+        voice_mode="push_to_talk",
+        account_id="acc_alice",
+    )
+    recovered.finish(status="completed")
+
+    names = [
+        span.attributes[USERNAME_ATTRIBUTE]
+        for span in exporter.get_finished_spans()
+        if span.name == "voice.turn"
+    ]
+    assert names == ["unknown", "alice"]
+    assert calls["n"] == 2
+    assert telemetry._usernames["acc_alice"] == "alice"

@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, cast
+from unittest import mock
 from uuid import uuid4
 
 import pytest
@@ -27,6 +28,7 @@ from timeflow.business.calendar import (
 )
 from timeflow.data.database import Base, build_session_factory
 from timeflow.data.models import Account, Schedule
+from timeflow.data.repositories.account import AccountRepository
 from timeflow.data.schedule_unit_of_work import SqlAlchemyScheduleUnitOfWork
 from timeflow.gateway.http import (
     AuthenticatedAccount,
@@ -225,6 +227,30 @@ def test_composition_root_resolves_apk_username_for_voice_telemetry(
 
     assert VOICE_TELEMETRY._usernames[first.account_id] == USERNAME
     assert VOICE_TELEMETRY._usernames["acc_missing_user"] == "unknown"
+
+
+def test_username_lookup_failure_does_not_abort_voice_telemetry(
+    app_harness: _AppHarness,
+) -> None:
+    """数据库短暂不可用时，用户名查找失败不能打断语音回合。"""
+    first = _access(app_harness.client)
+    VOICE_TELEMETRY._usernames.pop(first.account_id, None)
+    with mock.patch.object(AccountRepository, "get_by_id", side_effect=RuntimeError("db down")):
+        turn = VOICE_TELEMETRY.start_turn(
+            agent_mode="composed",
+            voice_mode="push_to_talk",
+            account_id=first.account_id,
+        )
+        turn.finish(status="completed")
+    assert first.account_id not in VOICE_TELEMETRY._usernames
+
+    recovered = VOICE_TELEMETRY.start_turn(
+        agent_mode="composed",
+        voice_mode="push_to_talk",
+        account_id=first.account_id,
+    )
+    recovered.finish(status="completed")
+    assert VOICE_TELEMETRY._usernames[first.account_id] == USERNAME
 
 
 def test_http_rejects_a_wrong_password_for_an_existing_account(
