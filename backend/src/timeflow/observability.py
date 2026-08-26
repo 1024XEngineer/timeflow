@@ -38,7 +38,6 @@ from timeflow.intelligence.telemetry import (
     PROMETHEUS_TOOL_NAMES,
     ToolSpan,
     TurnSpan,
-    VoiceTelemetry,
     tool_metric_name,
 )
 
@@ -248,7 +247,7 @@ class PrometheusOtelVoiceTelemetry:
         self._occupancy.record_interrupt(session_id)
 
 
-VOICE_TELEMETRY: VoiceTelemetry = PrometheusOtelVoiceTelemetry()
+VOICE_TELEMETRY = PrometheusOtelVoiceTelemetry()
 
 
 __all__ = [
