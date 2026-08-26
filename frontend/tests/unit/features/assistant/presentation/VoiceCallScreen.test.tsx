@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
-import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { Platform, StyleSheet } from 'react-native';
 import { RadialGradient } from 'react-native-svg';
 
@@ -220,7 +220,7 @@ describe('VoiceCallScreen', () => {
   });
 
   it.each(['ios', 'android', 'web'] as const)(
-    'lets a tall transcript scroll on %s instead of staying flex-end',
+    'lets a tall transcript scroll on %s without reversing turn order',
     (os) => {
       const original = Platform.OS;
       Platform.OS = os;
@@ -239,61 +239,23 @@ describe('VoiceCallScreen', () => {
         fireEvent(transcript, 'layout', {
           nativeEvent: { layout: { height: 400, width: 390, x: 0, y: 0 } },
         });
-        fireEvent(transcript, 'contentSizeChange', 390, 2000);
-        expect(StyleSheet.flatten(transcript.props.contentContainerStyle)).toMatchObject({
-          flexGrow: 0,
-          justifyContent: 'flex-start',
+        fireEvent(screen.getByTestId('voice-call-transcript-turns'), 'layout', {
+          nativeEvent: { layout: { height: 2000, width: 390, x: 0, y: 0 } },
         });
-        fireEvent.scroll(transcript, {
-          nativeEvent: {
-            contentOffset: { x: 0, y: 0 },
-            contentSize: { height: 2000, width: 390 },
-            layoutMeasurement: { height: 400, width: 390 },
-          },
-        });
-        expect(screen.getByLabelText('你：明天下午三点开会')).toBeTruthy();
-        expect(screen.queryByLabelText('查看最新')).toBeNull();
-      } finally {
-        Platform.OS = original;
-      }
-    },
-  );
-
-  it.each(['ios', 'android'] as const)(
-    'shows a jump-to-latest chip on %s after scrolling away from new turns',
-    (os) => {
-      const original = Platform.OS;
-      Platform.OS = os;
-      try {
-        renderScreen({
-          messages: [
-            { id: 'u1', role: 'user', text: '明天下午三点开会' },
-            { id: 'a1', role: 'assistant', text: '好，已经记下了' },
-            { id: 'u2', role: 'user', text: '改到四点' },
-            { id: 'a2', role: 'assistant', text: '已改到四点' },
-          ],
-          status: 'paused',
-          title: '已暂停，点击圆圈继续',
-        });
-        const transcript = screen.getByTestId('voice-call-transcript');
-        fireEvent(transcript, 'layout', {
-          nativeEvent: { layout: { height: 400, width: 390, x: 0, y: 0 } },
-        });
-        fireEvent(transcript, 'scrollBeginDrag');
-        fireEvent.scroll(transcript, {
-          nativeEvent: {
-            contentOffset: { x: 0, y: 0 },
-            contentSize: { height: 2000, width: 390 },
-            layoutMeasurement: { height: 400, width: 390 },
-          },
-        });
-        fireEvent(transcript, 'contentSizeChange', 390, 2300);
-        expect(screen.getByLabelText('查看最新')).toBeTruthy();
         expect(
-          within(screen.getByTestId('voice-call-latest')).getByText('已改到四点'),
-        ).toBeTruthy();
-        fireEvent.press(screen.getByLabelText('查看最新'));
-        expect(screen.queryByLabelText('查看最新')).toBeNull();
+          StyleSheet.flatten(transcript.props.contentContainerStyle).justifyContent,
+        ).toBeUndefined();
+        expect(
+          StyleSheet.flatten(screen.getByTestId('voice-call-transcript-spacer').props.style).height,
+        ).toBe(0);
+        expect(
+          screen.getAllByLabelText(/^(你|助手)：/).map((node) => node.props.accessibilityLabel),
+        ).toEqual([
+          '你：明天下午三点开会',
+          '助手：好，已经记下了',
+          '你：改到四点',
+          '助手：已改到四点',
+        ]);
       } finally {
         Platform.OS = original;
       }
@@ -310,11 +272,15 @@ describe('VoiceCallScreen', () => {
     fireEvent(transcript, 'layout', {
       nativeEvent: { layout: { height: 400, width: 390, x: 0, y: 0 } },
     });
-    fireEvent(transcript, 'contentSizeChange', 390, 120);
-    expect(StyleSheet.flatten(transcript.props.contentContainerStyle)).toMatchObject({
-      flexGrow: 1,
-      justifyContent: 'flex-end',
+    fireEvent(screen.getByTestId('voice-call-transcript-turns'), 'layout', {
+      nativeEvent: { layout: { height: 120, width: 390, x: 0, y: 0 } },
     });
+    expect(
+      StyleSheet.flatten(transcript.props.contentContainerStyle).justifyContent,
+    ).toBeUndefined();
+    expect(
+      StyleSheet.flatten(screen.getByTestId('voice-call-transcript-spacer').props.style).height,
+    ).toBe(280);
   });
 
   it.each(['ios', 'android', 'web'] as const)('keeps the hangup control enlarged on %s', (os) => {

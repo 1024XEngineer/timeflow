@@ -9,11 +9,13 @@ import type {
 export const PINNED_TO_BOTTOM_THRESHOLD = 80;
 export const TRANSCRIPT_IDLE_MS = 180;
 
-export function contentFitsViewport(contentHeight: number, viewportHeight: number): boolean {
+export function topSpacerHeight(viewportHeight: number, turnsHeight: number): number {
+  // ScrollView 的 justifyContent:'flex-end' 在内容超出视口时会把子节点上下排反，
+  // 短对白改用顶部空白把气泡顶到声纹球上方。
   if (viewportHeight <= 0) {
-    return true;
+    return 0;
   }
-  return contentHeight <= viewportHeight + 1;
+  return Math.max(0, viewportHeight - turnsHeight);
 }
 
 export function isPinnedToBottom({
@@ -33,19 +35,18 @@ export function isPinnedToBottom({
 
 export function usePinnedTranscriptScroll() {
   const transcriptRef = useRef<ScrollView>(null);
+  const pinnedRef = useRef(true);
   const interactingRef = useRef(false);
-  const followingRef = useRef(true);
   const ignoreProgrammaticScrollRef = useRef(false);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ignoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const viewportHeightRef = useRef(0);
-  const contentHeightRef = useRef(0);
-  const [fitsViewport, setFitsViewport] = useState(true);
-  const [hasUnseenLatest, setHasUnseenLatest] = useState(false);
+  const turnsHeightRef = useRef(0);
+  const [topSpacer, setTopSpacer] = useState(0);
 
-  const syncFits = () => {
-    const fits = contentFitsViewport(contentHeightRef.current, viewportHeightRef.current);
-    setFitsViewport((current) => (current === fits ? current : fits));
+  const syncSpacer = () => {
+    const next = topSpacerHeight(viewportHeightRef.current, turnsHeightRef.current);
+    setTopSpacer((current) => (current === next ? current : next));
   };
 
   const clearIdleTimer = () => {
@@ -64,18 +65,16 @@ export function usePinnedTranscriptScroll() {
     ignoreTimerRef.current = null;
   };
 
-  const setFollowing = (next: boolean) => {
-    followingRef.current = next;
-    if (next) {
-      setHasUnseenLatest(false);
-    }
-  };
-
-  const followLatest = () => {
+  const followLatestIfPinned = () => {
     if (interactingRef.current) {
       return;
     }
-    setFollowing(true);
+    if (viewportHeightRef.current <= 0 || turnsHeightRef.current <= viewportHeightRef.current) {
+      return;
+    }
+    if (!pinnedRef.current) {
+      return;
+    }
     ignoreProgrammaticScrollRef.current = true;
     transcriptRef.current?.scrollToEnd({ animated: true });
     clearIgnoreTimer();
@@ -92,9 +91,7 @@ export function usePinnedTranscriptScroll() {
 
   const markIdle = () => {
     interactingRef.current = false;
-    if (followingRef.current) {
-      followLatest();
-    }
+    followLatestIfPinned();
   };
 
   useEffect(() => {
@@ -106,7 +103,14 @@ export function usePinnedTranscriptScroll() {
 
   const onLayout = (event: LayoutChangeEvent) => {
     viewportHeightRef.current = event.nativeEvent.layout.height;
-    syncFits();
+    syncSpacer();
+    followLatestIfPinned();
+  };
+
+  const onTurnsLayout = (event: LayoutChangeEvent) => {
+    turnsHeightRef.current = event.nativeEvent.layout.height;
+    syncSpacer();
+    followLatestIfPinned();
   };
 
   const onScrollBeginDrag = () => {
@@ -130,39 +134,21 @@ export function usePinnedTranscriptScroll() {
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     viewportHeightRef.current = layoutMeasurement.height;
-    contentHeightRef.current = contentSize.height;
-    const atBottom = isPinnedToBottom({
+    if (ignoreProgrammaticScrollRef.current) {
+      return;
+    }
+    pinnedRef.current = isPinnedToBottom({
       contentHeight: contentSize.height,
       offsetY: contentOffset.y,
       viewportHeight: layoutMeasurement.height,
     });
-    if (ignoreProgrammaticScrollRef.current) {
-      return;
-    }
-    setFollowing(atBottom);
   };
 
-  const onContentSizeChange = (_width: number, height: number) => {
-    contentHeightRef.current = height;
-    syncFits();
-    if (interactingRef.current || !followingRef.current) {
-      if (!followingRef.current) {
-        setHasUnseenLatest(true);
-      }
-      return;
-    }
-    followLatest();
-  };
-
-  const jumpToLatest = () => {
-    interactingRef.current = false;
-    followLatest();
+  const onContentSizeChange = (_width: number, _height: number) => {
+    followLatestIfPinned();
   };
 
   return {
-    fitsViewport,
-    hasUnseenLatest,
-    jumpToLatest,
     onContentSizeChange,
     onLayout,
     onMomentumScrollBegin,
@@ -170,6 +156,8 @@ export function usePinnedTranscriptScroll() {
     onScroll,
     onScrollBeginDrag,
     onScrollEndDrag,
+    onTurnsLayout,
+    topSpacer,
     transcriptRef,
   };
 }
