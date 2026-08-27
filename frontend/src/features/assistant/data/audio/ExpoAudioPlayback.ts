@@ -34,9 +34,14 @@ const SPLIT_MS = 100;
 export class ExpoAudioPlayback implements AssistantAudioPlaybackPort {
   private streamId: string | null = null;
   private splitBytes = 0;
+  /** 光靠 Date.now() 不够：两条回复前后脚开流会拿到同一个毫秒、同一个 id，
+   * pushChunk 里"这条流还是不是当前那条"的判断就形同虚设，原生播放器也没法
+   * 靠 id 把两条流分开。 */
+  private streamCounter = 0;
 
   async startStream(format: { sampleRateHz: number; encoding: 'pcm_s16le' }): Promise<void> {
-    this.streamId = `assistant-tts-${Date.now()}`;
+    this.streamCounter += 1;
+    this.streamId = `assistant-tts-${Date.now()}-${this.streamCounter}`;
     // 每块字节数 = 采样率 × 每样本字节数 × 目标时长（秒）。
     this.splitBytes = Math.max(
       1,
@@ -53,13 +58,21 @@ export class ExpoAudioPlayback implements AssistantAudioPlaybackPort {
   }
 
   async pushChunk(chunk: ArrayBuffer): Promise<void> {
-    if (this.streamId === null || this.splitBytes <= 0) {
+    const streamId = this.streamId;
+    if (streamId === null || this.splitBytes <= 0) {
       throw new Error('pushChunk called before startStream');
     }
     for (const piece of splitPcm(chunk, this.splitBytes)) {
+      // 每片之前都重新确认这条流还是不是当前那条：上一片还卡在原生桥上的时候，
+      // stop()（打断）或下一条回复的 startStream() 可能已经把它换掉了。不确认的话
+      // 剩下的片会在 stopAudio() 之后继续写进播放器，把刚被打断那句的尾巴放出来；
+      // 而且那时 this.streamId 已经是 null，等于用一条野生的流去播。
+      if (this.streamId !== streamId) {
+        return;
+      }
       await ExpoPlayAudioStream.playAudio(
         arrayBufferToBase64(piece),
-        this.streamId,
+        streamId,
         EncodingTypes.PCM_S16LE,
       );
     }
