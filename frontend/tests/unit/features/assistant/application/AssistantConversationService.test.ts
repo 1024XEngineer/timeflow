@@ -742,6 +742,132 @@ describe('AssistantConversationService', () => {
     await completeStreamStart(fake, nextTurn);
   });
 
+  it('keeps the bubble visible while a reply streams, and shows its full text', async () => {
+    // 长回复 = 后端分多条 voice.dialogue.reply 流式下发（composed/realtime agent
+    // 每次文本增量一条，text 是累计的），最后一条 done=true。气泡应随增量逐步
+    // 更新并保持可见，最终显示完整文本。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    await completeStreamStart(fake, service.startTurn());
+    const turnId = fake.sent.filter((message) => message.type === 'voice.stream.start')[0]
+      .request_id;
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: turnId,
+      payload: { done: false, reply_id: 'reply_1', speech_text: '好的，明天下午' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getReplyText()).toBe('好的，明天下午');
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: turnId,
+      payload: {
+        done: false,
+        reply_id: 'reply_1',
+        speech_text: '好的，明天下午三点在203会议室开会，我会提前十五分钟提醒你',
+      },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getReplyText()).toBe(
+      '好的，明天下午三点在203会议室开会，我会提前十五分钟提醒你',
+    );
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: turnId,
+      payload: {
+        done: true,
+        reply_id: 'reply_1',
+        speech_text: '好的，明天下午三点在203会议室开会，我会提前十五分钟提醒你',
+      },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getReplyText()).toBe(
+      '好的，明天下午三点在203会议室开会，我会提前十五分钟提醒你',
+    );
+  });
+
+  it('keeps a streaming reply visible when a new press starts mid-reply, instead of dropping it while TTS keeps playing', async () => {
+    // 用户报告：PTT 长回复时气泡完全不出现，但语音照常播放。序列是——
+    // turn 1 的回复还在流式（文本增量 + TTS 并行下发），语音播放中用户又按住
+    // 说话（PushToTalkBar 在 speaking/awaiting_result 期间不禁用自己）：
+    //   1. 新一轮 _startTurn 先清空 replyText（旧气泡消失）；
+    //   2. turnRequestId 换新，turn 1 剩余的流式 reply 增量按 request_id 被
+    //      #364 gate 全部丢弃；
+    //   3. 结果 replyText 永远为空——气泡不出现；而 voice.tts.start 不经过
+    //      gate，TTS 照常播放。
+    //
+    // 连续模式不受影响：它的 reply 写进 turns，不按 request_id 门控。这也是
+    // 用户说"只有 PTT 模式有这个问题"的原因。
+    //
+    // 期望行为（本测试锁定）：reply 一旦到达就应该留在气泡里——新一轮开始
+    // 不应该把上一轮已经收到的回复文本清掉，流式增量也不应该被 request_id
+    // gate 吞掉。修复前本用例失败（replyText 被清空且增量被丢弃）。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    // turn 1：回复开始流式（第一条增量已显示）。
+    await completeStreamStart(fake, service.startTurn());
+    const turn1Id = fake.sent.filter((message) => message.type === 'voice.stream.start')[0]
+      .request_id;
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: turn1Id,
+      payload: { done: false, reply_id: 'reply_1', speech_text: '好的，明天下午' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getReplyText()).toBe('好的，明天下午');
+
+    // TTS 开始播（不受 request_id gate 影响）。
+    fake.emitMessage({
+      audio_id: 'audio_1',
+      conversation_id: 'conv_001',
+      payload: {
+        format: 'pcm',
+        purpose: 'command_result',
+        sample_rate_hz: 24000,
+        speech_text: '好的，明天下午',
+      },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(deps.playback.startStream).toHaveBeenCalledTimes(1);
+
+    // 语音还在播，用户又按住说话 → 新一轮开始。已收到的回复文本应保留在
+    // 气泡里（BUG：_startTurn 开头把 replyText 清成 null）。
+    const nextTurn = service.startTurn();
+    await flushAsync();
+    expect(service.getReplyText()).toBe('好的，明天下午');
+
+    // turn 1 剩余的流式 reply 增量（同一个 request_id）晚到 → 应继续更新气泡
+    // （BUG：request_id 已换新，增量被 #364 gate 丢弃）。
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: turn1Id,
+      payload: {
+        done: true,
+        reply_id: 'reply_1',
+        speech_text: '好的，明天下午三点在203会议室开会，我会提前十五分钟提醒你',
+      },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getReplyText()).toBe(
+      '好的，明天下午三点在203会议室开会，我会提前十五分钟提醒你',
+    );
+
+    await completeStreamStart(fake, nextTurn);
+  });
+
   it('still shows a reply whose request_id is null', async () => {
     // 后端 model_dump() 把缺省的 request_id 序列化成 null（不是省掉字段），所以
     // null 必须当作"不知道是哪一轮"放行，否则回复永远显示不出来。
