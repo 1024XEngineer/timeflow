@@ -114,6 +114,18 @@ class VoiceStreamHandlers:
         # between this check and the assignment below.
         active = self._active_streams.get(session.session_id)
         if active is not None:
+            # Logged, not silent: a client that never sends voice.stream.end for an
+            # active stream (found on push-to-talk's swipe-to-cancel gesture, which
+            # closed the shared connection's local listener without ending the stream)
+            # gets every future voice.stream.start on this session rejected here, with
+            # nothing else in this file's logs to explain why.
+            logger.warning(
+                "rejected voice.stream.start: session_id=%s already has an active "
+                "stream stream_id=%s -- the client must send voice.stream.end (or "
+                "disconnect) before opening a new one",
+                session.session_id,
+                active.context.stream_id,
+            )
             return self._error(request_id, "A stream is already active for this session", active)
 
         payload = message.payload
