@@ -195,13 +195,18 @@ class QwenAudioSession:
         self._speech_started_at: float | None = None
         self._response_started_at: float | None = None
         self._first_audio_at: float | None = None
-        # Diagnostic only (see response.created below): counts every response.create we
-        # send against every response.created the vendor reports back, to catch the
-        # vendor starting a response we never asked for -- e.g. one it generates on its
-        # own once a tool result lands, on top of the response.create send_tool_result's
-        # respond=True already queued.
+        # Diagnostic only: counts every response.create we send against every
+        # response.created the vendor reports back.
         self._responses_sent = 0
         self._responses_created = 0
+        # Continuous mode only: true once real user speech has started a reply we are
+        # legitimately waiting on, or a tool result has asked for a follow-up; false again
+        # the instant that reply settles. The vendor has been observed to start an extra
+        # response.created on its own -- no new speech_started, nothing asked for --
+        # sometimes minutes after a reply already settled, re-answering the same query
+        # under a fresh reply_id. _pump_continuous cancels a response.created it sees
+        # while this is false, before any of its text or audio can reach the client.
+        self._expecting_response = False
 
     async def configure(self, instructions: str, tools: list[dict[str, Any]]) -> None:
         """Set the session up before any audio; turn_detection only takes effect here."""
@@ -270,6 +275,7 @@ class QwenAudioSession:
         )
         if respond:
             self._followup_requested = True
+            self._expecting_response = True
         else:
             self._followup_suppressed = True
 
@@ -427,6 +433,7 @@ class QwenAudioSession:
 
             if kind == "input_audio_buffer.speech_started":
                 self._speech_started_at = self._clock()
+                self._expecting_response = True
                 # A real barge-in even once generation has finished: the phone can still
                 # be sounding out audio that was already fully sent (see _playable_until).
                 await observer.user_started_speaking()
@@ -436,13 +443,16 @@ class QwenAudioSession:
                     await observer.interrupted()
             elif kind == "response.created":
                 self._responses_created += 1
-                if self._responses_created > self._responses_sent:
+                if not self._expecting_response:
                     logger.warning(
-                        "realtime vendor started a response we never requested "
-                        "(continuous): sent=%s created=%s",
-                        self._responses_sent,
-                        self._responses_created,
+                        "realtime vendor started a response with no user speech or "
+                        "requested follow-up behind it -- cancelling it before its "
+                        "content can reach the client"
                     )
+                    suppressed = True
+                    self._responding = True
+                    await self.cancel_response()
+                    continue
                 self._responding = True
                 suppressed = False
                 spoken = ""
@@ -502,6 +512,12 @@ class QwenAudioSession:
                     self._responses_sent += 1
                     continue
                 self._responding = False
+                # Not reset when suppressed: this response.done is the trailing tail of a
+                # reply a barge-in already cancelled, and that barge-in's own
+                # speech_started is what set this true -- the new reply it is about to
+                # start is exactly what we are still legitimately waiting on.
+                if not suppressed:
+                    self._expecting_response = False
                 # The bytes just sent still take this long to actually play out on the
                 # phone; a barge-in landing before then is still cancelling something
                 # audible, even though generation itself has already finished.

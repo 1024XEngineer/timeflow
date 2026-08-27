@@ -1025,24 +1025,34 @@ def test_continuous_pump_reports_multiple_replies_without_returning() -> None:
 
     async def scenario() -> None:
         transport = FakeTransport(
+            _event("input_audio_buffer.speech_started"),
             _event("response.created"),
             _event("response.audio_transcript.done", transcript="第一句"),
             _event("response.audio.delta", delta=base64.b64encode(b"pcm-1").decode()),
             _event("response.done"),
+            _event("input_audio_buffer.speech_started"),
             _event("response.created"),
             _event("response.audio_transcript.done", transcript="第二句"),
             _event("response.audio.delta", delta=base64.b64encode(b"pcm-2").decode()),
             _event("response.done"),
             _event("error", error={"message": "stream ended"}),
         )
+        # Explicit clock, not the real one: the second speech_started's own barge-in
+        # check must land safely past the first reply's (near-instant) playable_until,
+        # or this flakes depending on how fast the test happens to run.
+        clock_reads = iter([0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 2.0, 2.0, 3.0])
         observer = RecordingObserver()
 
-        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS, clock=lambda: next(clock_reads)).pump(
+            observer
+        )
 
         assert observer.calls == [
+            ("user_started_speaking", None),
             ("spoke", "第一句"),
             ("audio", b"pcm-1"),
             ("turn_completed", None),
+            ("user_started_speaking", None),
             ("spoke", "第二句"),
             ("audio", b"pcm-2"),
             ("turn_completed", None),
@@ -1061,6 +1071,7 @@ def test_continuous_pump_cancels_and_reports_an_interruption() -> None:
 
     async def scenario() -> None:
         transport = FakeTransport(
+            _event("input_audio_buffer.speech_started"),
             _event("response.created"),
             _event("response.audio_transcript.delta", delta="半句"),
             _event("input_audio_buffer.speech_started"),
@@ -1077,6 +1088,7 @@ def test_continuous_pump_cancels_and_reports_an_interruption() -> None:
         await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
 
         assert observer.calls == [
+            ("user_started_speaking", None),
             ("spoke", "半句"),
             ("user_started_speaking", None),
             ("interrupted", None),
@@ -1107,8 +1119,12 @@ def test_speech_started_still_cancels_after_generation_finishes_if_playback_is_n
         # takes to finish playing (~0.5s for the 24000 bytes below, 24kHz 16-bit
         # mono), then speech_started stamps itself and checks against that estimate
         # -- 0.1s later is still inside the playback window, so it is a real barge-in.
-        clock_reads = iter([0.0, 0.05, 0.05, 0.1, 0.1])
+        # Leading pair (0.0, 0.0) is the reply's own opening speech_started -- legitimate,
+        # nothing to interrupt yet (_playable_until starts at 0.0) -- so this stays a
+        # harmless prefix ahead of the five reads the rest of the scenario already used.
+        clock_reads = iter([0.0, 0.0, 0.0, 0.05, 0.05, 0.1, 0.1])
         transport = FakeTransport(
+            _event("input_audio_buffer.speech_started"),
             _event("response.created"),
             _event("response.audio.delta", delta=base64.b64encode(b"a" * 24000).decode()),
             _event("response.done"),
@@ -1122,6 +1138,7 @@ def test_speech_started_still_cancels_after_generation_finishes_if_playback_is_n
         )
 
         assert observer.kinds() == [
+            "user_started_speaking",
             "audio",
             "turn_completed",
             "user_started_speaking",
@@ -1144,8 +1161,12 @@ def test_speech_started_does_not_cancel_once_the_reply_would_be_done_playing() -
         # Five clock reads: created, first audio, done (playback estimate of ~0.5s for the
         # 24000 bytes below), then speech_started stamps itself and checks. 10s later is
         # far past the playback window, so nothing gets cancelled.
-        clock_reads = iter([0.0, 0.05, 0.05, 10.0, 10.0])
+        # Leading pair (0.0, 0.0) is the reply's own opening speech_started -- legitimate,
+        # nothing to interrupt yet (_playable_until starts at 0.0) -- so this stays a
+        # harmless prefix ahead of the five reads the rest of the scenario already used.
+        clock_reads = iter([0.0, 0.0, 0.0, 0.05, 0.05, 10.0, 10.0])
         transport = FakeTransport(
+            _event("input_audio_buffer.speech_started"),
             _event("response.created"),
             _event("response.audio.delta", delta=base64.b64encode(b"a" * 24000).decode()),
             _event("response.done"),
@@ -1160,6 +1181,7 @@ def test_speech_started_does_not_cancel_once_the_reply_would_be_done_playing() -
         )
 
         assert observer.kinds() == [
+            "user_started_speaking",
             "audio",
             "turn_completed",
             "user_started_speaking",
@@ -1484,16 +1506,18 @@ def test_a_second_audio_delta_does_not_re_stamp_first_audio_time() -> None:
 
     async def scenario() -> None:
         transport = FakeTransport(
+            _event("input_audio_buffer.speech_started"),
             _event("response.created"),
             _event("response.audio.delta", delta=base64.b64encode(b"pcm-1").decode()),
             _event("response.audio.delta", delta=base64.b64encode(b"pcm-2").decode()),
             _usage_event(),
             _event("error", error={"message": "stream ended"}),
         )
-        # created, first delta stamps _first_audio_at, second delta's guard reads
-        # nothing further (short-circuited), response.done's playable_until estimate,
-        # then its own latency report.
-        clock_reads = iter([0.0, 0.2, 0.5, 0.5])
+        # Leading pair (0.0, 0.0) is the reply's own opening speech_started (legitimate,
+        # nothing to interrupt yet). Then: created, first delta stamps _first_audio_at,
+        # second delta's guard reads nothing further (short-circuited), response.done's
+        # own latency report, then its playable_until estimate.
+        clock_reads = iter([0.0, 0.0, 0.0, 0.2, 0.5, 0.5])
         observer = RecordingObserver()
 
         await QwenAudioSession(transport, CONFIG, CONTINUOUS, clock=lambda: next(clock_reads)).pump(
@@ -1502,8 +1526,9 @@ def test_a_second_audio_delta_does_not_re_stamp_first_audio_time() -> None:
 
         usage = next(call[1] for call in observer.calls if call[0] == "usage_reported")
         assert usage["latency_first_audio_ms"] == 200.0
-        assert observer.calls[0] == ("audio", b"pcm-1")
-        assert observer.calls[1] == ("audio", b"pcm-2")
+        assert observer.calls[0] == ("user_started_speaking", None)
+        assert observer.calls[1] == ("audio", b"pcm-1")
+        assert observer.calls[2] == ("audio", b"pcm-2")
 
     asyncio.run(scenario())
 
