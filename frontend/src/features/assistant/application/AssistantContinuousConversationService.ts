@@ -276,7 +276,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
   }
 
   /** 关闭连续会话：关麦、结束流、断开连接。 */
-  async endTurn(): Promise<void> {
+  async endTurn(stopPlayback: boolean = true): Promise<void> {
     // 挂断可能同时从两个地方触发（用户点"结束对话" vs 服务端 voice.session.end），
     // 也可能在它还没跑完时被同一个来源再触发一次——不加门槛会重复关连接、
     // 重复发 voice.stream.end。
@@ -293,6 +293,11 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       // 后面几步（发 stream.end、关连接、状态归位）必须照常走完。
     }
     this.soundLevel = null;
+    // 手动挂断（用户点"结束对话"）要立刻停掉正在播的 TTS；语音挂断（服务端
+    // voice.session.end，AI 已道别）则让道别音频播完，不截断。
+    if (stopPlayback) {
+      await this.stopPlaybackImmediately();
+    }
     const connection = this.connection;
     try {
       if (connection !== null && this.streamId !== null) {
@@ -358,6 +363,8 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     // 连续模式麦克风开着的时间远长于按住说话的一次按住，组件卸载时更可能还在
     // 录，兜底停一下——失败也不影响清理连接。
     void this.deps.capture.stop().catch(() => {});
+    // 组件卸载时同样兜底停播放，避免卸载后 TTS 还在响。
+    void this.stopPlaybackImmediately();
     this.unsubscribeConnection?.();
     this.unsubscribeConnection = null;
     this.connection?.close();
@@ -545,9 +552,9 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         this.setState({ conversationId: message.conversation_id, phase: 'interrupted' });
         return;
       case 'voice.session.end':
-        // 模型识别到用户想结束对话（"结束对话"「先这样」等），走跟用户点
-        // "结束对话"一样的路径。
-        void this.endTurn();
+        // 模型识别到用户想结束对话（"结束对话"「先这样」等）。语音挂断时 AI 已先
+        // 道别，这里不截断道别音频、让它播完；连接照常关闭。
+        void this.endTurn(false);
         return;
       default:
         return;
