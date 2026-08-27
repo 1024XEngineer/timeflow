@@ -436,7 +436,9 @@ def test_mapping_rejects_each_invalid_primitive_at_the_boundary(
         mapper(arguments)
 
 
-@pytest.mark.parametrize("location_name", ["家", "公司", "学校", "到家", "回公司", "附近", "老地方"])
+@pytest.mark.parametrize(
+    "location_name", ["家", "公司", "学校", "到家", "回公司", "附近", "老地方"]
+)
 def test_create_rejects_a_personal_place_reference_as_location(location_name: str) -> None:
     arguments = {
         **create_arguments(),
