@@ -644,6 +644,47 @@ describe('AssistantContinuousConversationService', () => {
     ]);
   });
 
+  it('drops a stale duplicate of the just-completed reply instead of opening a new turn', async () => {
+    // 防御性加固：正常情况下后端不会在 done=true 之后又发一条同 reply_id 的
+    // 重复消息，但连续模式判断"是不是新一轮"完全靠 lastTurnReplyDone 这个
+    // 到达顺序猜测——一旦真的收到一条迟到/重复的消息，旧逻辑会把它当成
+    // "还没到的新一轮"，凭空开一个占位轮，造成重复气泡（跟 vendor 凭空多起
+    // response 那次实测的现象一样）。reply_id 没变就不该开新轮。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 800, language: 'zh', transcript: '明天几点开会' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '明天下午三点' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getMessages()).toEqual([
+      { id: 'turn-0:user', role: 'user', text: '明天几点开会' },
+      { id: 'turn-0:assistant', role: 'assistant', text: '明天下午三点' },
+    ]);
+
+    // 同一个 reply_id 的重复投递。
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '明天下午三点' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getMessages()).toEqual([
+      { id: 'turn-0:user', role: 'user', text: '明天几点开会' },
+      { id: 'turn-0:assistant', role: 'assistant', text: '明天下午三点' },
+    ]);
+  });
+
   it('records an assistant bubble even when a reply arrives before any transcript', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
@@ -1431,6 +1472,51 @@ describe('AssistantContinuousConversationService', () => {
 
     expect(deps.playback.stop).not.toHaveBeenCalled();
     expect(service.getState()).toEqual({ conversationId: 'conv_001', phase: 'speaking' });
+    disposeService(service);
+  });
+
+  it('tracks every abandoned audio id, not just the most recently abandoned one', async () => {
+    // 跟 AssistantConversationService（PTT）里同名 bug 一样的结构：canceledAudioId
+    // 原来是单个变量，两次打断前后脚发生、第一条的 tts.end 还没到就轮到第二条时，
+    // 第一条的 id 会被第二条覆盖掉——它自己迟到的 tts.end 就会被误判成"正常收尾"，
+    // 多余地调一次 endStream() 并把第二条也应该维持住的取消状态冲掉。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    const startMessage = (audioId: string): AssistantServerMessage =>
+      ({
+        audio_id: audioId,
+        conversation_id: 'conv_001',
+        payload: { format: 'pcm_s16le', purpose: 'reply', sample_rate_hz: 24000, speech_text: '' },
+        type: 'voice.tts.start',
+      }) as AssistantServerMessage;
+    const canceledMessage = (audioId: string): AssistantServerMessage =>
+      ({
+        audio_id: audioId,
+        conversation_id: 'conv_001',
+        type: 'voice.tts.canceled',
+      }) as AssistantServerMessage;
+    const endMessage = (audioId: string): AssistantServerMessage =>
+      ({
+        audio_id: audioId,
+        conversation_id: 'conv_001',
+        type: 'voice.tts.end',
+      }) as AssistantServerMessage;
+
+    await startListening(fake, service);
+    fake.emitMessage(startMessage('audio_001'));
+    fake.emitMessage(canceledMessage('audio_001'));
+    fake.emitMessage(startMessage('audio_002'));
+    fake.emitMessage(canceledMessage('audio_002'));
+    await flushAsync();
+
+    // 两条都迟到的收尾消息，谁先谁后都不该被当成真正的收尾。
+    fake.emitMessage(endMessage('audio_001'));
+    fake.emitMessage(endMessage('audio_002'));
+    await flushAsync();
+
+    expect(deps.playback.endStream).not.toHaveBeenCalled();
     disposeService(service);
   });
 

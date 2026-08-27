@@ -59,8 +59,12 @@ export class AssistantContinuousConversationService implements AssistantApplicat
   private streamId: string | null = null;
   /** 非 null 表示当前正处于 voice.tts.start 和 voice.tts.end/canceled 之间。 */
   private currentAudioId: string | null = null;
-  /** 最近被打断的音频 id；服务端会在 canceled 后补发同 id 的 tts.end。 */
-  private canceledAudioId: string | null = null;
+  /** 被打断、还没等到它自己 tts.end 的音频 id 集合；服务端会在 canceled 后补发
+   * 同 id 的 tts.end。用 Set 而不是单个值：跟 AssistantConversationService（PTT）
+   * 里同名 bug 一样，连续两次打断前后脚发生、第一条还没等到它的 tts.end 就被
+   * 第二条覆盖掉的话，第一条迟到的 tts.end 会落进正常收尾分支，多余地调一次
+   * endStream() 并把第二条本该维持住的取消状态冲掉。 */
+  private readonly canceledAudioIds = new Set<string>();
   private streamStartedWaiter: ((conversationId: string) => void) | null = null;
   /** 跟 streamStartedWaiter 配对；传输层报错/连接掉线时用它让等待方结束，不然会永远卡住。 */
   private streamStartRejecter: ((error: Error) => void) | null = null;
@@ -91,6 +95,13 @@ export class AssistantContinuousConversationService implements AssistantApplicat
    * 必须开一个占位轮挂上去，否则会覆盖上一条已完成的回复（改前实测：上一条
    * 回复被后一条覆盖成一样的内容）。 */
   private lastTurnReplyDone = false;
+  /** 最后一条轮次正在写入的 reply_id（没有则为 null，voice.dialogue.question
+   * 不带 reply_id）。lastTurnReplyDone 为 true 时用来加一道防御：如果新消息
+   * 跟这个 reply_id 相同，说明是同一条已经收尾的回复的迟到/重复投递，不是
+   * 真的新一轮——不能开占位轮，否则会造成重复气泡（跟 vendor 凭空多起
+   * response 那次实测的现象一样，这里是给"到达顺序"这个唯一依据加一层身份
+   * 校验）。 */
+  private lastReplyId: string | null = null;
   /** endTurn() 主动关闭连接期间为 true，让 handleClose 认出这是预期内的挂断。 */
   private endingCall = false;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -205,6 +216,8 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       this.orphanMessages = [];
       this.replyStreaming = false;
       this.lastTurnReplyDone = false;
+      this.lastReplyId = null;
+      this.canceledAudioIds.clear();
       // 上一通电话可能是在暂停期间被空闲超时兜底挂断的，muted 只在用户手动
       // togglePause() 里恢复；不在这里清一次，新开的电话会继承上一通的静音,
       // UI 显示 listening 但麦克风帧全被吞掉。
@@ -475,7 +488,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         if (this.turns.length === 0) {
           this.upsertOrphanQuestion(message.payload.question_id, message.payload.speech_text);
         } else {
-          this.writeTurnReply(message.request_id, message.payload.speech_text, false);
+          this.writeTurnReply(message.request_id, null, message.payload.speech_text, false);
         }
         this.setState({
           conversationId: message.conversation_id,
@@ -493,6 +506,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         } else {
           this.writeTurnReply(
             message.request_id,
+            message.payload.reply_id,
             message.payload.speech_text,
             message.payload.done,
           );
@@ -502,7 +516,6 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       }
       case 'voice.tts.start':
         this.playbackGeneration += 1;
-        this.canceledAudioId = null;
         this.currentAudioId = message.audio_id;
         this.setState({ conversationId: message.conversation_id, phase: 'speaking' });
         this.chainPlayback(() =>
@@ -514,22 +527,23 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         return;
       case 'voice.tts.end':
         // canceled 后服务端仍会补发同 id 的 tts.end；它不能收尾新流，也不能把
-        // interrupted 状态提前改回 listening。
-        if (
-          (this.canceledAudioId !== null && message.audio_id === this.canceledAudioId) ||
-          (this.currentAudioId !== null && message.audio_id !== this.currentAudioId)
-        ) {
+        // interrupted 状态提前改回 listening。用 Set.delete() 而不是比较单个
+        // 变量：见 canceledAudioIds 的字段注释，两次打断前后脚发生时，单个变量
+        // 会让第一条的 id 被第二条覆盖掉。
+        if (this.canceledAudioIds.delete(message.audio_id)) {
+          return;
+        }
+        if (this.currentAudioId !== null && message.audio_id !== this.currentAudioId) {
           return;
         }
         this.currentAudioId = null;
-        this.canceledAudioId = null;
         this.chainPlayback(() => this.deps.playback.endStream());
         this.setState({ conversationId: message.conversation_id, phase: 'listening' });
         // 播报完成后给一个全新的窗口，对应"播报完成后进入短暂等待"——不用单独
         // 再搞一个计时器，这次重置就当作那个等待。
         this.armIdleTimer();
         return;
-      case 'voice.tts.canceled':
+      case 'voice.tts.canceled': {
         // 用户开口打断了正在播的回复：stop 必须绕过 playbackChain 立即执行，否则
         // 已排队的 PCM 会先继续喂给原生播放器；旧队列随后由代次检查丢弃。
         if (
@@ -538,7 +552,10 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         ) {
           return;
         }
-        this.canceledAudioId = message.audio_id || this.currentAudioId;
+        const canceledAudioId = message.audio_id || this.currentAudioId;
+        if (canceledAudioId !== null) {
+          this.canceledAudioIds.add(canceledAudioId);
+        }
         this.currentAudioId = null;
         // composed 代理打断回复时只发 voice.tts.canceled、不会再补 done=true，
         // 所以这里要顺手清掉流式标记，否则被打断那条气泡的波形会一直跳。
@@ -551,6 +568,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         void this.stopPlaybackImmediately();
         this.setState({ conversationId: message.conversation_id, phase: 'interrupted' });
         return;
+      }
       case 'voice.session.end':
         // 模型识别到用户想结束对话（"结束对话"「先这样」等）。语音挂断时 AI 已先
         // 道别，这里不截断道别音频、让它播完；连接照常关闭。
@@ -714,10 +732,18 @@ export class AssistantContinuousConversationService implements AssistantApplicat
    * - 上一轮已回复完成、又来一条新回复：说明它属于"还没到的新一轮"（转写
    *   晚到或被 VAD 跳过）。必须开一个占位轮挂上去，等它的 asr 到了再补
    *   转写——否则会覆盖上一条已完成的回复（改前实测：上一条回复被后一条
-   *   覆盖成一样的内容）。
+   *   覆盖成一样的内容）。除非新消息的 reply_id 跟刚收尾那条完全一样：那
+   *   说明这不是新一轮，是同一条回复的迟到/重复投递，直接丢弃，不开占位
+   *   轮——到达顺序是唯一依据时挡不住这种情况，reply_id 相等能挡住。
    * request_id 分支只为向前兼容：万一后端将来给连续模式的每条消息带上独立
-   * request_id，就能按它认轮次。 */
-  private writeTurnReply(requestId: string | undefined, replyText: string, done: boolean): void {
+   * request_id，就能按它认轮次。voice.dialogue.question 没有 reply_id，传
+   * null 即可，不影响它原有的占位轮逻辑。 */
+  private writeTurnReply(
+    requestId: string | undefined,
+    replyId: string | null,
+    replyText: string,
+    done: boolean,
+  ): void {
     if (this.turns.length === 0) {
       return;
     }
@@ -726,17 +752,23 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       if (found >= 0) {
         this.turns = this.turns.map((turn, i) => (i === found ? { ...turn, replyText } : turn));
         this.lastTurnReplyDone = done;
+        this.lastReplyId = replyId;
         return;
       }
     }
     if (this.lastTurnReplyDone) {
+      if (replyId !== null && replyId === this.lastReplyId) {
+        return;
+      }
       this.turns = [...this.turns, { id: `turn-${this.turns.length}`, replyText, transcript: '' }];
       this.lastTurnReplyDone = done;
+      this.lastReplyId = replyId;
       return;
     }
     const index = this.turns.length - 1;
     this.turns = this.turns.map((turn, i) => (i === index ? { ...turn, replyText } : turn));
     this.lastTurnReplyDone = done;
+    this.lastReplyId = replyId;
   }
 
   /** 零散助手句（回复先于任何转写到达时的兜底）：同 id 覆盖；波形由
