@@ -8,7 +8,7 @@ TimeFlow 是一款语音优先的个人日程助手，帮你用说话的方式�
 
 **中文** | [English](README.en.md)
 
-[![TimeFlow](https://img.shields.io/website?url=https%3A%2F%2Fappetize.io%2Fapp%2Fb_tk7kw3vv4rhigcusy2uxvxof4e%3Fdevice%3Dpixel7%26osVersion%3D13.0%26toolbar%3Dtrue&up_message=online&down_message=offline&label=TimeFlow)](https://appetize.io/app/b_tk7kw3vv4rhigcusy2uxvxof4e?device=pixel7&osVersion=13.0&toolbar=true)
+[![TimeFlow](https://img.shields.io/website?url=https%3A%2F%2Ftimeflow.xcu.asia%3A10278%2F&up_message=online&down_message=offline&label=TimeFlow)](https://timeflow.xcu.asia:10278/)
 [![Frontend CI](https://img.shields.io/github/check-runs/1024XEngineer/timeflow/main?nameFilter=Frontend%20(lint%2C%20types%2C%20build)&label=Frontend%20CI&logo=github)](https://github.com/1024XEngineer/timeflow/actions/workflows/ci.yml)
 [![Backend CI](https://img.shields.io/github/check-runs/1024XEngineer/timeflow/main?nameFilter=Backend%20(lint%2C%20types%2C%20tests)&label=Backend%20CI&logo=github)](https://github.com/1024XEngineer/timeflow/actions/workflows/ci.yml)
 [![codecov](https://img.shields.io/codecov/c/github/1024XEngineer/timeflow?logo=codecov&label=codecov)](https://codecov.io/gh/1024XEngineer/timeflow)
@@ -331,7 +331,7 @@ docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
 
 ## 相关入口
 
-- 在线预览：[Appetize](https://appetize.io/app/b_tk7kw3vv4rhigcusy2uxvxof4e?device=pixel7&osVersion=13.0&toolbar=true)
+- 在线预览：[TimeFlow](https://timeflow.xcu.asia:10278/)
 - 后端启动与检查：[backend/README.md](backend/README.md)
 - 观测栈云上部署：[observability/README.md](observability/README.md)
 - 需求与进度：[Issues](https://github.com/1024XEngineer/timeflow/issues)
