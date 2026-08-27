@@ -36,6 +36,10 @@ const TALK_SCALE = { duration: 650, from: 1, to: 1.14 };
 const VOICEPRINT_BAR_COUNT = 9;
 const VOICEPRINT_TICK_MS = 80;
 const BUBBLE_VOICEPRINT_BARS = 5;
+/** normalizeLevel 之后的能量下限：低于它视为安静。安静待听时球里不画声纹条
+ * （只保留呼吸缩放），避免"点点点"在每次回答结束后一直跳；TTS 或用户开口
+ * 时麦克风电平抬起来，声纹条才出现。 */
+const ORB_SOUND_FLOOR = 0.16;
 const CALL_BACKGROUND = '#0E241F';
 const CALL_GLOW = '#18443A';
 const CALL_VIGNETTE = '#071310';
@@ -61,7 +65,6 @@ export function VoiceCallScreen({
     onLayout,
     onMomentumScrollBegin,
     onMomentumScrollEnd,
-    onScroll,
     onScrollBeginDrag,
     onScrollEndDrag,
     onTurnsLayout,
@@ -69,6 +72,11 @@ export function VoiceCallScreen({
     transcriptRef,
   } = usePinnedTranscriptScroll();
   const [scale] = useState(() => new Animated.Value(1));
+  // 声纹条只在"正在说话"或实际有声时出现：连续模式麦克风常开，安静时的 dBFS
+  // 也会让条子一直小幅跳动，看起来像回答结束后还有一串点点点。
+  const orbWaveVisible =
+    status === 'speaking' ||
+    (status === 'listening' && normalizeLevel(soundLevel) >= ORB_SOUND_FLOOR);
 
   useEffect(() => {
     scale.stopAnimation();
@@ -121,10 +129,8 @@ export function VoiceCallScreen({
         onLayout={onLayout}
         onMomentumScrollBegin={onMomentumScrollBegin}
         onMomentumScrollEnd={onMomentumScrollEnd}
-        onScroll={onScroll}
         onScrollBeginDrag={onScrollBeginDrag}
         onScrollEndDrag={onScrollEndDrag}
-        scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
         style={styles.transcript}
         testID="voice-call-transcript"
@@ -218,16 +224,18 @@ export function VoiceCallScreen({
               ]}
             >
               {status === 'listening' || status === 'speaking' ? (
-                <Voiceprint
-                  active
-                  barCount={VOICEPRINT_BAR_COUNT}
-                  barStyle={styles.orbWaveBar}
-                  maxHeight={34}
-                  minHeight={3}
-                  soundLevel={soundLevel}
-                  testID="voice-call-orb-wave"
-                  testIDPrefix="voice-call-voiceprint-bar"
-                />
+                orbWaveVisible ? (
+                  <Voiceprint
+                    active
+                    barCount={VOICEPRINT_BAR_COUNT}
+                    barStyle={styles.orbWaveBar}
+                    maxHeight={34}
+                    minHeight={3}
+                    soundLevel={soundLevel}
+                    testID="voice-call-orb-wave"
+                    testIDPrefix="voice-call-voiceprint-bar"
+                  />
+                ) : null
               ) : null}
             </Animated.View>
           </View>
