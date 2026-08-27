@@ -21,6 +21,24 @@ index c3038e4..dde8fe9 100644
    }
  
    namespace "expo.modules.audiostream"
+diff --git a/node_modules/@irvingouj/expo-audio-stream/android/src/main/java/expo/modules/audiostream/AudioPlaybackManager.kt b/node_modules/@irvingouj/expo-audio-stream/android/src/main/java/expo/modules/audiostream/AudioPlaybackManager.kt
+index 6783bba..3cffedc 100644
+--- a/node_modules/@irvingouj/expo-audio-stream/android/src/main/java/expo/modules/audiostream/AudioPlaybackManager.kt
++++ b/node_modules/@irvingouj/expo-audio-stream/android/src/main/java/expo/modules/audiostream/AudioPlaybackManager.kt
+@@ -289,7 +289,12 @@ class AudioPlaybackManager(private val eventSender: EventSender? = null) {
+ 
+     fun stopPlayback(promise: Promise? = null) {
+         Log.d("ExpoPlayStreamModule", "Stopping playback")
+-        if (!isPlaying || playbackChannel.isEmpty ) {
++        // playbackChannel 只是还没解码写入 AudioTrack 的排队分片；它在正常
++        // 流式播放中经常是空的（解码速度快于播放速度），空不代表 AudioTrack
++        // 硬件缓冲区里没有还在播的音频。原来把它也当"没在播"的判据，会让
++        // stop() 在这种（很常见的）时刻直接跳过 audioTrack.stop()/flush()，
++        // 调用方以为已经停了，实际上已经写进硬件缓冲区的音频还会继续播完。
++        if (!isPlaying) {
+             promise?.resolve(null)
+             Log.d("ExpoPlayStreamModule", "Nothing is played return")
+             return
 diff --git a/node_modules/@irvingouj/expo-audio-stream/android/src/main/java/expo/modules/audiostream/AudioRecorderManager.kt b/node_modules/@irvingouj/expo-audio-stream/android/src/main/java/expo/modules/audiostream/AudioRecorderManager.kt
 index 9ee227e..0373656 100644
 --- a/node_modules/@irvingouj/expo-audio-stream/android/src/main/java/expo/modules/audiostream/AudioRecorderManager.kt

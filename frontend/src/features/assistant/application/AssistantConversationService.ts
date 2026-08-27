@@ -48,6 +48,13 @@ export class AssistantConversationService implements AssistantApplicationPort {
   private replyText: string | null = null;
   /** 当前 turn 的 request_id；voice.dialogue.reply 拿它认轮次，对不上的是上一轮迟到的。 */
   private turnRequestId: string | null = null;
+  /** 被新一轮/dismissReply() 主动放弃、但还没等到 tts.end 的 audio_id 集合。
+   * voice.tts.start/voice.tts.end 协议里不带 request_id，没法像 dialogue.reply
+   * 那样按轮次门控，只能靠这个记住"这条迟到的收尾消息属于已经不关心的哪条
+   * 音频"，不让它把 phase 强行掰回 idle、打断已经在推进的新一轮状态。用
+   * 集合而不是单个值：连续按两次，第一条还没等到 tts.end 就被第二条覆盖掉的话，
+   * 第一条迟到的 tts.end 会落进正常分支，把 phase 错误地掰回 idle。 */
+  private readonly abandonedAudioIds = new Set<string>();
   /** 当前这一帧麦克风音量（dBFS），给波形展示；不在录音时是 null。 */
   private soundLevel: number | null = null;
   // 展示层的 onPressIn/onPressOut 不等待彼此:快速按放会让 endTurn() 在
@@ -132,8 +139,25 @@ export class AssistantConversationService implements AssistantApplicationPort {
   }
 
   private async _startTurn(turnId: number): Promise<void> {
+    // 新一轮开始等于用户主动放弃上一轮，跟点掉气泡（dismissReply）是同一个
+    // 动作：文字气泡立即清空、语音立即停播，然后干净地开始听新一段——不能
+    // 留着上一轮的气泡/声音跟新一轮混在一起。
     this.replyText = null;
     this.soundLevel = null;
+    if (this.currentAudioId !== null) {
+      // 上一轮的语音还没播完，新一轮开始时主动掐掉：不能让两轮音频同时播，
+      // 也不能放着让它的 tts.end 晚到后把 phase 强行掰回 idle。
+      this.abandonedAudioIds.add(this.currentAudioId);
+      this.currentAudioId = null;
+    }
+    // stop 放在 if 外面、无条件调用（跟 dismissReply() 一致）：长回复的 TTS
+    // 可能分好几段下发，如果按下的瞬间恰好卡在上一段 tts.end 和下一段
+    // tts.start 之间，currentAudioId 这时候是 null，放在 if 里面的话 stop
+    // 会被跳过，原生播放器收不到停止指令，只会眼睁睁看着它继续播下一段。走
+    // stopPlaybackImmediately() 而不是直接调 deps.playback.stop()：后者绕过了
+    // playbackChain/generation，会跟 chainPlayback 里在途的 pushChunk 竞争，
+    // 已经排队但还没执行的旧流分片也不会被这次 stop 作废。
+    void this.stopPlaybackImmediately();
     const previousCaptureCleanup = this.captureCleanup;
     if (this.connection === null) {
       this.setState({ phase: 'connecting' });
@@ -231,6 +255,9 @@ export class AssistantConversationService implements AssistantApplicationPort {
     this.soundLevel = null;
     this.replyText = null;
     this.currentAudioId = null;
+    // 连接马上就要整个关掉，不会再有消息进来；清空避免长会话里攒一堆再也
+    // 用不上的 id。
+    this.abandonedAudioIds.clear();
 
     const connection = this.connection;
     this.unsubscribeConnection?.();
@@ -251,7 +278,10 @@ export class AssistantConversationService implements AssistantApplicationPort {
 
   async dismissReply(): Promise<void> {
     this.replyText = null;
-    this.currentAudioId = null;
+    if (this.currentAudioId !== null) {
+      this.abandonedAudioIds.add(this.currentAudioId);
+      this.currentAudioId = null;
+    }
     this.notifyListeners();
     await this.stopPlaybackImmediately();
   }
@@ -340,6 +370,15 @@ export class AssistantConversationService implements AssistantApplicationPort {
         void this.applyCategoryUpdate(message.payload.schedule_id, message.payload.category);
         return;
       case 'voice.dialogue.question':
+        // 跟 voice.dialogue.reply 同理：上一轮被新一轮打断后晚到的追问，不能
+        // 把已经推进到新一轮的 phase 强行掰回 asking。
+        if (!this.isCurrentTurn(message.request_id)) {
+          return;
+        }
+        // 追问也要写进 replyText：气泡 UI 只读这个字段，state.speechText 只是
+        // phase 内部携带的文案，不接气泡——之前只写 speechText，语音照常播
+        // （走 voice.tts.start，跟这个无关），但追问永远不会显示成气泡。
+        this.replyText = message.payload.speech_text;
         this.setState({
           conversationId: message.conversation_id,
           phase: 'asking',
@@ -347,10 +386,10 @@ export class AssistantConversationService implements AssistantApplicationPort {
         });
         return;
       case 'voice.dialogue.reply':
-        // 上一轮被打断时它的 reply 可能晚到，把已经点掉的旧气泡重新弹出来——气泡
-        // 是全屏点击层，会挡住语音条，用户得再点一次才能说话。只认当前这一轮的
-        // request_id；服务端把 voice.stream.start 上带的 id 回显在这条消息上。
-        if (!this.isCurrentTurnReply(message.request_id)) {
+        // 上一轮被新一轮打断（或被点掉）时它的 reply 可能晚到，把已经清空的
+        // 气泡重新弹出来——气泡是全屏点击层，会挡住语音条，用户得再点一次
+        // 才能说话。只认当前这一轮的 request_id。
+        if (!this.isCurrentTurn(message.request_id)) {
           return;
         }
         this.replyText = message.payload.speech_text;
@@ -368,6 +407,11 @@ export class AssistantConversationService implements AssistantApplicationPort {
         );
         return;
       case 'voice.tts.end':
+        if (this.abandonedAudioIds.delete(message.audio_id)) {
+          // 已经主动放弃的那条音频，收尾消息迟到了：清掉记录就行，不能再碰
+          // phase——这时它早就是新一轮的状态，不能被这条迟到消息掰回 idle。
+          return;
+        }
         this.currentAudioId = null;
         this.chainPlayback(() => this.deps.playback.endStream());
         this.setState({ phase: 'idle' });
@@ -379,7 +423,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
 
   /** 拿不到判断依据时一律放行：后端把缺省的 request_id 序列化成 null 而不是省略字段，
    * 所以 null 和 undefined 都要当作"不知道是哪一轮"，不能误伤。 */
-  private isCurrentTurnReply(requestId: string | null | undefined): boolean {
+  private isCurrentTurn(requestId: string | null | undefined): boolean {
     if (this.turnRequestId === null || requestId === null || requestId === undefined) {
       return true;
     }
