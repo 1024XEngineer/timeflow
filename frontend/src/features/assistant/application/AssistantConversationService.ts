@@ -53,11 +53,13 @@ export class AssistantConversationService implements AssistantApplicationPort {
    * isCurrentTurn 当成"别人的"丢掉；点掉/取消气泡时清空，避免真正过期的
    * 回复把已经点掉的气泡重新弹出来。 */
   private displayedReplyRequestId: string | null = null;
-  /** 上一轮还没播完就被新一轮/dismissReply() 主动放弃的 audio_id。voice.tts.start/
-   * voice.tts.end 协议里不带 request_id，没法像 dialogue.reply 那样按轮次门控，
-   * 只能靠这个记住"这条迟到的收尾消息属于已经不关心的那条音频"，不让它把
-   * phase 强行掰回 idle、打断已经在推进的新一轮状态。 */
-  private abandonedAudioId: string | null = null;
+  /** 被新一轮/dismissReply() 主动放弃、但还没等到 tts.end 的 audio_id 集合。
+   * voice.tts.start/voice.tts.end 协议里不带 request_id，没法像 dialogue.reply
+   * 那样按轮次门控，只能靠这个记住"这条迟到的收尾消息属于已经不关心的哪条
+   * 音频"，不让它把 phase 强行掰回 idle、打断已经在推进的新一轮状态。用
+   * 集合而不是单个值：连续按两次，第一条还没等到 tts.end 就被第二条覆盖掉的话，
+   * 第一条迟到的 tts.end 会落进正常分支，把 phase 错误地掰回 idle。 */
+  private readonly abandonedAudioIds = new Set<string>();
   /** 当前这一帧麦克风音量（dBFS），给波形展示；不在录音时是 null。 */
   private soundLevel: number | null = null;
   // 展示层的 onPressIn/onPressOut 不等待彼此:快速按放会让 endTurn() 在
@@ -143,7 +145,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
     if (this.currentAudioId !== null) {
       // 上一轮的语音还没播完，新一轮开始时主动掐掉：不能让两轮音频同时播，
       // 也不能放着让它的 tts.end 晚到后把 phase 强行掰回 idle。
-      this.abandonedAudioId = this.currentAudioId;
+      this.abandonedAudioIds.add(this.currentAudioId);
       this.currentAudioId = null;
       void this.deps.playback.stop().catch(() => {});
     }
@@ -245,6 +247,9 @@ export class AssistantConversationService implements AssistantApplicationPort {
     this.replyText = null;
     this.displayedReplyRequestId = null;
     this.currentAudioId = null;
+    // 连接马上就要整个关掉，不会再有消息进来；清空避免长会话里攒一堆再也
+    // 用不上的 id。
+    this.abandonedAudioIds.clear();
 
     const connection = this.connection;
     this.unsubscribeConnection?.();
@@ -266,8 +271,10 @@ export class AssistantConversationService implements AssistantApplicationPort {
   async dismissReply(): Promise<void> {
     this.replyText = null;
     this.displayedReplyRequestId = null;
-    this.abandonedAudioId = this.currentAudioId;
-    this.currentAudioId = null;
+    if (this.currentAudioId !== null) {
+      this.abandonedAudioIds.add(this.currentAudioId);
+      this.currentAudioId = null;
+    }
     this.notifyListeners();
     await this.deps.playback.stop().catch(() => {});
   }
@@ -395,10 +402,9 @@ export class AssistantConversationService implements AssistantApplicationPort {
           .catch(() => {});
         return;
       case 'voice.tts.end':
-        if (message.audio_id === this.abandonedAudioId) {
+        if (this.abandonedAudioIds.delete(message.audio_id)) {
           // 已经主动放弃的那条音频，收尾消息迟到了：清掉记录就行，不能再碰
           // phase——这时它早就是新一轮的状态，不能被这条迟到消息掰回 idle。
-          this.abandonedAudioId = null;
           return;
         }
         this.currentAudioId = null;

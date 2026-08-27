@@ -868,7 +868,7 @@ describe('AssistantConversationService', () => {
     await completeStreamStart(fake, nextTurn);
   });
 
-  it('does not let a stale tts.end from an abandoned turn clobber the new turn\'s phase', async () => {
+  it("does not let a stale tts.end from an abandoned turn clobber the new turn's phase", async () => {
     // 同类问题：voice.tts.start/voice.tts.end 协议里不带 request_id，没法像
     // voice.dialogue.reply 那样按轮次门控。turn 1 的语音还没播完，用户又按住
     // 说话开始 turn 2——turn 1 的音频应该被主动掐掉；turn 1 迟到的 tts.end
@@ -911,7 +911,71 @@ describe('AssistantConversationService', () => {
     expect(service.getState()).toMatchObject({ phase: 'recording' });
   });
 
-  it('drops a stale dialogue.question from a previous turn so it cannot hijack the new turn\'s phase', async () => {
+  it('tracks every abandoned audio id, not just the most recently abandoned one', async () => {
+    // 连续按两次：turn 1 的音频 A 还没等到自己的 tts.end，就被 turn 2 自己的
+    // 音频 B 顶替成"当前正在播的"，然后 turn 2 也被 turn 3 打断——B 被放弃时
+    // 如果放弃记录只存一个值，会把 A 那条覆盖掉，A 迟到的 tts.end 就会落进
+    // 正常分支，把已经推进到 turn 3 的 phase 错误地掰回 idle。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    // turn 1：音频 A 开始播。
+    await completeStreamStart(fake, service.startTurn());
+    fake.emitMessage({
+      audio_id: 'audio_a',
+      conversation_id: 'conv_001',
+      payload: {
+        format: 'pcm',
+        purpose: 'command_result',
+        sample_rate_hz: 24000,
+        speech_text: '',
+      },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    // turn 2 开始：A 被放弃。
+    await completeStreamStart(fake, service.startTurn());
+
+    // turn 2 自己的音频 B 开始播。
+    fake.emitMessage({
+      audio_id: 'audio_b',
+      conversation_id: 'conv_001',
+      payload: {
+        format: 'pcm',
+        purpose: 'command_result',
+        sample_rate_hz: 24000,
+        speech_text: '',
+      },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    // turn 3 开始：B 也被放弃，此时 A 还没等到自己的 tts.end。
+    await completeStreamStart(fake, service.startTurn());
+    expect(service.getState()).toMatchObject({ phase: 'recording' });
+
+    // A 迟到的 tts.end 到达：不能把已经推进到 turn 3 的 phase 掰回 idle。
+    fake.emitMessage({
+      audio_id: 'audio_a',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.end',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getState()).toMatchObject({ phase: 'recording' });
+
+    // B 迟到的 tts.end 到达：同样不能把 phase 掰回 idle。
+    fake.emitMessage({
+      audio_id: 'audio_b',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.end',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getState()).toMatchObject({ phase: 'recording' });
+  });
+
+  it("drops a stale dialogue.question from a previous turn so it cannot hijack the new turn's phase", async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
     const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
