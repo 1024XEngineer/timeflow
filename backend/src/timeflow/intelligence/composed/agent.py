@@ -730,6 +730,13 @@ class ComposedVoiceAgent:
         speech = SpeechPipeline(self._tts).stream(timed_events())
         queue: asyncio.Queue[bytes | None] | None = None
         delivery: asyncio.Task[None] | None = None
+        # 诊断用：vendor 帧粒度与帧间间隙。用真实单调时钟而非 self._monotonic，避免
+        # 消耗测试注入的 StepClock、打乱 _TurnTiming 的确定性时序。
+        tts_sample_rate_hz = 0
+        chunk_count = 0
+        chunk_bytes = 0
+        max_gap_ms = 0
+        last_chunk_at: float | None = None
         try:
             async for event in speech:
                 if not await self._is_current(session, generation):
@@ -745,6 +752,7 @@ class ComposedVoiceAgent:
                         event.purpose,
                         event.speech_text,
                     )
+                    tts_sample_rate_hz = event.sample_rate_hz
                     async with session.lock:
                         if session.generation != generation:
                             return
@@ -758,11 +766,38 @@ class ComposedVoiceAgent:
                         raise ValueError("Speech audio chunk arrived before start")
                     if delivery is not None and delivery.done():
                         delivery.result()
+                    now = time.monotonic()
+                    if last_chunk_at is not None:
+                        gap_ms = round((now - last_chunk_at) * 1000)
+                        if gap_ms > max_gap_ms:
+                            max_gap_ms = gap_ms
+                    last_chunk_at = now
+                    chunk_count += 1
+                    chunk_bytes += len(event.data)
                     await queue.put(event.data)
                 elif isinstance(event, SpeechAudioCompleted):
                     if queue is None or delivery is None:
                         raise ValueError("Speech audio completed before start")
                     timing.tts_completed_at = self._monotonic()
+                    if chunk_count:
+                        audio_duration_ms = (
+                            round(chunk_bytes / (tts_sample_rate_hz * 2 / 1000))
+                            if tts_sample_rate_hz
+                            else 0
+                        )
+                        logger.info(
+                            "composed tts frames=%d bytes=%d audio_ms=%d max_gap_ms=%d",
+                            chunk_count,
+                            chunk_bytes,
+                            audio_duration_ms,
+                            max_gap_ms,
+                            extra={
+                                "tts_frame_count": chunk_count,
+                                "tts_frame_bytes": chunk_bytes,
+                                "tts_audio_duration_ms": audio_duration_ms,
+                                "tts_max_gap_ms": max_gap_ms,
+                            },
+                        )
                     await queue.put(None)
                     await delivery
                     async with session.lock:
