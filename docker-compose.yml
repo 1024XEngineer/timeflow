@@ -23,9 +23,7 @@ services:
     build:
       context: ./backend
     restart: unless-stopped
-    env_file:
-      - path: .env
-        required: false
+    # 根目录 .env 只用于 ${VAR} 插值。不要 env_file 整文件，Grafana / Sentry 密钥不能进 API。
     environment:
       TIMEFLOW_ENVIRONMENT: ${TIMEFLOW_ENVIRONMENT:-development}
       TIMEFLOW_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-timeapp}:${POSTGRES_PASSWORD:-timeapp}@db:5432/${POSTGRES_DB:-timeapp}

@@ -295,7 +295,7 @@ npm run test:coverage
 | [`backend/.env.example`](backend/.env.example) | 本机 `uvicorn`：数据库 URL、JWT、语音、地图、追踪 |
 | [`frontend/.env.example`](frontend/.env.example) | Android 客户端：API / WebSocket 地址、设备 ID |
 
-仓库根 `.env` 里 Compose 会读取的项：
+仓库根 `.env` 供 Compose 做 `${VAR}` 插值。API 容器只注入 `docker-compose.yml` 列出的后端变量；`GRAFANA_*` / `SENTRY_AUTH_TOKEN` 只进 Grafana。
 
 | 变量 | 说明 |
 | --- | --- |

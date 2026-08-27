@@ -294,7 +294,7 @@ There are three templates, depending on how you run things:
 | [`backend/.env.example`](backend/.env.example) | Host `uvicorn`: database URL, JWT, voice, maps, tracing |
 | [`frontend/.env.example`](frontend/.env.example) | Android client: API / WebSocket URLs, device ID |
 
-Root `.env` values Compose reads:
+Compose interpolates the root `.env` for `${VAR}` substitution. The API container only receives the backend allowlist in `docker-compose.yml`; `GRAFANA_*` and `SENTRY_AUTH_TOKEN` go to Grafana only.
 
 | Variable | Notes |
 | --- | --- |

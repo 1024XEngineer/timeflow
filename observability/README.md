@@ -77,7 +77,7 @@ docker compose -f docker-compose.yml -f docker-compose.observability.yml \
 
 `timeflow` target 应为 `up`。公网不要暴露 `/metrics`、9090、3200、4318。
 
-Grafana 装 Sentry 插件需要访问 grafana.com。失败时 `.env` 设 `GF_INSTALL_PLUGINS=`（空）再 `up -d grafana`；服务端看板仍可用。
+Grafana 装 Sentry 插件需要访问 grafana.com。失败时在 `.env` 写成 `GF_INSTALL_PLUGINS=`（空字符串，不要删掉这一行）再 `up -d grafana`；服务端看板仍可用。
 
 ## 本机（有源码）
 
