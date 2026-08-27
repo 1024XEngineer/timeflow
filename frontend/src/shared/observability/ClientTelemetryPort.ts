@@ -11,19 +11,10 @@ export type ReminderTelemetryChannel =
   'native_full_screen' | 'system_notification' | 'popup' | 'vibration' | 'tts' | 'local_sound';
 
 export type ReminderTriggerSource =
-  | 'native_alarm'
-  | 'js_time'
-  | 'location'
-  | 'stuck_pending'
-  | 'headless_guard';
+  'native_alarm' | 'js_time' | 'location' | 'stuck_pending' | 'headless_guard';
 
 export type ReminderLatencyBucket =
-  | 'on_time'
-  | 'late_1m'
-  | 'late_5m'
-  | 'late_30m'
-  | 'late_hour_plus'
-  | 'unknown';
+  'on_time' | 'late_1m' | 'late_5m' | 'late_30m' | 'late_hour_plus' | 'unknown';
 
 export type ReminderCountBucket = 'none' | 'one' | 'few' | 'many';
 

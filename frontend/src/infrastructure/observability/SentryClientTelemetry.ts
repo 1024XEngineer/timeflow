@@ -31,9 +31,7 @@ function lifecycleLevel(event: ReminderLifecycleTelemetry): 'info' | 'warning' {
   return event.overdue_unarmed === 'none' ? 'info' : 'warning';
 }
 
-function nativeBackgroundLevel(
-  event: ReminderNativeBackgroundTelemetry,
-): 'warning' | 'error' {
+function nativeBackgroundLevel(event: ReminderNativeBackgroundTelemetry): 'warning' | 'error' {
   return event.result === 'fallback_notification' ? 'warning' : 'error';
 }
 

@@ -12,9 +12,7 @@ const mockedScope = (
   }
 ).mockedScope;
 
-function delivery(
-  overrides: Partial<ReminderDeliveryTelemetry> = {},
-): ReminderDeliveryTelemetry {
+function delivery(overrides: Partial<ReminderDeliveryTelemetry> = {}): ReminderDeliveryTelemetry {
   return {
     app_state: 'active',
     channel: 'popup',

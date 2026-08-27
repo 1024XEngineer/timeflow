@@ -47,9 +47,9 @@ describe('device telemetry tags', () => {
     expect(latencyBucket(3 * 60_000)).toBe('late_5m');
     expect(latencyBucket(12 * 60_000)).toBe('late_30m');
     expect(latencyBucket(2 * 60 * 60_000)).toBe('late_hour_plus');
-    expect(
-      latencyBucketFromTimes('2026-08-18T10:00:00.000Z', '2026-08-18T10:30:00.000Z'),
-    ).toBe('late_30m');
+    expect(latencyBucketFromTimes('2026-08-18T10:00:00.000Z', '2026-08-18T10:30:00.000Z')).toBe(
+      'late_30m',
+    );
   });
 
   it('buckets counts and native background results', () => {
