@@ -290,9 +290,27 @@ export class AssistantContinuousConversationService implements AssistantApplicat
 
   /** 关闭连续会话：关麦、结束流、断开连接。 */
   async endTurn(stopPlayback: boolean = true): Promise<void> {
+    await this.hangUp({ phase: 'idle' }, stopPlayback);
+  }
+
+  /**
+   * 服务端报错就等于这条流已经不能用了：走跟挂断完全一样的收尾，只是把原因
+   * 留在界面上，而不是悄悄归 idle 让通话凭空消失。
+   *
+   * 光设一个 error 状态是不够的——麦克风还开着、音频帧还在往一条服务端已经回收
+   * 掉的流上发，服务端就一帧回一条错误（100ms 一条），用户看到"出错了"却发现通话
+   * 还在继续，只能自己想起来去点"结束对话"。而且不发 voice.stream.end 的话，服务端
+   * 那条流还挂着，下一次 voice.stream.start 会被当成"已有活跃流"直接拒绝。
+   */
+  private async abortCall(message: string): Promise<void> {
+    await this.hangUp({ message, phase: 'error' }, true);
+  }
+
+  private async hangUp(finalState: ConversationTurnState, stopPlayback: boolean): Promise<void> {
     // 挂断可能同时从两个地方触发（用户点"结束对话" vs 服务端 voice.session.end），
     // 也可能在它还没跑完时被同一个来源再触发一次——不加门槛会重复关连接、
-    // 重复发 voice.stream.end。
+    // 重复发 voice.stream.end。收尾途中到达的服务端报错同样被这道门槛挡掉：
+    // 已经在挂了，不该再被掰成 error。
     if (this.endTurnInFlight) {
       return;
     }
@@ -327,7 +345,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       this.streamId = null;
       this.unsubscribeConnection = null;
       this.connection = null;
-      this.setState({ phase: 'idle' });
+      this.setState(finalState);
       this.endTurnInFlight = false;
     }
   }
@@ -423,8 +441,8 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       return;
     }
     if (isTransportError(message)) {
-      this.setState({ message: message.error.message, phase: 'error' });
       this.rejectPendingStreamStart(new Error(message.error.message));
+      void this.abortCall(message.error.message);
       return;
     }
 

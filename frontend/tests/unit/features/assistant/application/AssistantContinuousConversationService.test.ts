@@ -1644,4 +1644,58 @@ describe('AssistantContinuousConversationService', () => {
     expect(retryOnChunk).not.toBeNull();
     expect(service.getState()).toEqual({ conversationId: 'conv_001', phase: 'listening' });
   });
+
+  it('hangs up the call when the server rejects an audio frame mid-conversation', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    // 服务端这一侧的流已经没了（后端 agent 提前退出/流被回收），每一个音频帧都会
+    // 换回来一条这样的错误。只把 phase 设成 error 是不够的：麦克风还开着，帧还在
+    // 发，服务端就一帧回一条错误，直到用户自己想起来点"结束对话"。
+    fake.emitMessage({
+      error: {
+        code: 'AUDIO_INVALID',
+        message: 'Audio frames require voice.stream.start first',
+        retryable: false,
+      },
+      ok: false,
+      type: 'voice.command.error',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(deps.capture.stop).toHaveBeenCalled();
+    // 服务端那条流必须放掉，否则下一次 voice.stream.start 会被当成"已有活跃流"拒绝。
+    expect(fake.sent).toContainEqual({
+      payload: { stream_id: 'stream_001' },
+      type: 'voice.stream.end',
+    });
+    expect(fake.unsubscribeCalls).toEqual({ audio: 1, close: 1, message: 1 });
+    // 报错原因要留在界面上，不能像正常挂断那样直接归 idle 悄悄消失。
+    expect(service.getState()).toEqual({
+      message: 'Audio frames require voice.stream.start first',
+      phase: 'error',
+    });
+  });
+
+  it('does not fight a hangup already in progress when an error arrives during it', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    const ending = service.endTurn();
+    // 我们自己发的 voice.stream.end 之后，服务端可能补一条"这条流没有音频"的错误。
+    // 挂断已经在路上了，它不该把已经归位的状态又掰成 error。
+    fake.emitMessage({
+      error: { code: 'AUDIO_INVALID', message: 'The audio stream carried no audio' },
+      ok: false,
+      type: 'voice.command.error',
+    } as AssistantServerMessage);
+    await ending;
+    await flushAsync();
+
+    expect(service.getState()).toEqual({ phase: 'idle' });
+  });
 });
