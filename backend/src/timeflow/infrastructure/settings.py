@@ -47,7 +47,7 @@ class Settings:
     openai_api_key: str = ""
     openai_model: str = "qwen-flash"
     openai_timeout_seconds: float = 30.0
-    schedule_category_timeout_seconds: float = 5.0
+    schedule_category_timeout_seconds: float = 10.0
     agent_max_tool_rounds: int = 4
     aliyun_tts_ws_url: str = ""
     aliyun_tts_api_key: str = ""
@@ -96,7 +96,7 @@ class Settings:
 
         openai_timeout_seconds = float(environ.get("TIMEFLOW_OPENAI_TIMEOUT_SECONDS", "30.0"))
         schedule_category_timeout_seconds = float(
-            environ.get("TIMEFLOW_SCHEDULE_CATEGORY_TIMEOUT_SECONDS", "5.0")
+            environ.get("TIMEFLOW_SCHEDULE_CATEGORY_TIMEOUT_SECONDS", "10.0")
         )
         agent_max_tool_rounds = int(environ.get("TIMEFLOW_AGENT_MAX_TOOL_ROUNDS", "4"))
         tencent_map_timeout_seconds = float(

@@ -203,8 +203,10 @@ class ScheduleApplicationService(ScheduleAgentService):
                 )
             except Exception as exc:
                 logger.warning(
-                    "schedule category task could not be submitted; leaving category null",
-                    extra={"error_type": type(exc).__name__},
+                    "schedule category task could not be submitted (error_type=%s): %s; "
+                    "leaving category null",
+                    type(exc).__name__,
+                    exc,
                 )
         return ScheduleMutationResult(schedules=(persisted,))
 
@@ -233,13 +235,17 @@ class ScheduleApplicationService(ScheduleAgentService):
                             self._category_event_publisher(account_id, schedule_id, category)
                         except Exception as exc:
                             logger.warning(
-                                "schedule category event could not be published",
-                                extra={"error_type": type(exc).__name__},
+                                "schedule category event could not be published "
+                                "(error_type=%s): %s",
+                                type(exc).__name__,
+                                exc,
                             )
         except Exception as exc:
             logger.warning(
-                "schedule category result could not be persisted; leaving category null",
-                extra={"error_type": type(exc).__name__},
+                "schedule category result could not be persisted (error_type=%s): %s; "
+                "leaving category null",
+                type(exc).__name__,
+                exc,
             )
 
     def _classify_category(self, command: CreateScheduleCommand) -> ScheduleCategory | None:
@@ -249,8 +255,10 @@ class ScheduleApplicationService(ScheduleAgentService):
             category = self._category_classifier.classify(command)
         except Exception as exc:
             logger.warning(
-                "schedule category classifier raised unexpectedly; leaving category null",
-                extra={"error_type": type(exc).__name__},
+                "schedule category classifier raised unexpectedly (error_type=%s): %s; "
+                "leaving category null",
+                type(exc).__name__,
+                exc,
             )
             return None
         if category is None:
