@@ -1192,6 +1192,131 @@ def test_speech_started_does_not_cancel_once_the_reply_would_be_done_playing() -
     asyncio.run(scenario())
 
 
+def test_a_response_created_with_no_speech_or_followup_behind_it_is_canceled_on_sight() -> None:
+    """The vendor has been seen to start a response on its own -- no new speech_started,
+    no follow-up we asked for -- re-answering an already-settled query under a fresh
+    reply_id. Cancelled before any of its text can reach the client.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("input_audio_buffer.speech_started"),
+            _event("response.created"),
+            _event("response.audio_transcript.done", transcript="今天没有日程。"),
+            _event("response.done"),
+            _event("response.created"),  # unsolicited: no speech_started, no follow-up
+            _event("response.audio_transcript.delta", delta="今天没有日程"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+
+        assert observer.calls == [
+            ("user_started_speaking", None),
+            ("spoke", "今天没有日程。"),
+            ("turn_completed", None),
+            ("failed", "stream ended"),
+        ]
+        assert transport.types() == ["response.cancel"]
+
+    asyncio.run(scenario())
+
+
+def test_a_cancel_that_races_the_vendor_already_finishing_does_not_end_the_call() -> None:
+    """Found in production: cancelling an unsolicited response.created can lose the race
+    against the vendor finishing that same response a moment earlier on its own, which
+    comes back as an "error" event ("Conversation has no active response") rather than
+    silently succeeding. Treating every error as fatal hung up the whole call over what
+    was actually a no-op -- this must be swallowed and the call carries on.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("response.created"),  # unsolicited: no speech_started yet at all
+            _event("error", error={"message": "Conversation has no active response."}),
+            _event("input_audio_buffer.speech_started"),
+            _event("response.created"),
+            _event("response.audio_transcript.done", transcript="真正的回复"),
+            _event("response.done"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+
+        assert observer.calls == [
+            ("user_started_speaking", None),
+            ("spoke", "真正的回复"),
+            ("turn_completed", None),
+            ("failed", "stream ended"),
+        ]
+        assert transport.types() == ["response.cancel"]
+
+    asyncio.run(scenario())
+
+
+def test_an_unrelated_error_after_a_cancel_still_ends_the_call() -> None:
+    """The benign-race allowance is narrow: an error that is not the vendor saying
+    there was nothing to cancel must still be treated as fatal, even right after a
+    cancel_response() call.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("input_audio_buffer.speech_started"),
+            _event("response.created"),
+            _event("response.audio.delta", delta=base64.b64encode(b"a" * 24000).decode()),
+            _event("input_audio_buffer.speech_started"),  # barge-in: cancels the reply
+            _event("error", error={"message": "internal server error"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+
+        assert observer.calls[-1] == ("failed", "internal server error")
+        assert transport.types() == ["response.cancel"]
+
+    asyncio.run(scenario())
+
+
+def test_a_response_done_between_the_cancel_and_its_error_does_not_end_the_call() -> None:
+    """The benign cancel race, in the order it actually arrives from the vendor.
+
+    The vendor having already finished that response on its own is the very thing that
+    makes our cancel a no-op, so its response.done lands *between* the response.cancel
+    and the error saying there was nothing to cancel. An allowance that only covers the
+    single next event is spent on that response.done, and the call is then hung up over
+    exactly the race the allowance was added for.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("response.created"),  # unsolicited: no speech_started, no follow-up
+            _event("response.done"),  # the vendor had already finished it on its own
+            _event("error", error={"message": "Conversation has no active response."}),
+            _event("input_audio_buffer.speech_started"),
+            _event("response.created"),
+            _event("response.audio_transcript.done", transcript="真正的回复"),
+            _event("response.done"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+
+        assert observer.calls == [
+            ("turn_completed", None),
+            ("user_started_speaking", None),
+            ("spoke", "真正的回复"),
+            ("turn_completed", None),
+            ("failed", "stream ended"),
+        ]
+        assert transport.types() == ["response.cancel"]
+
+    asyncio.run(scenario())
+
+
 def test_continuous_pump_reports_tool_calls_and_a_bad_one_ends_the_stream() -> None:
     """Continuous mode reports tool calls the same way push-to-talk does."""
 

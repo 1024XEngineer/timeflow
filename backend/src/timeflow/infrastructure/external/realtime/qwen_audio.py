@@ -207,6 +207,16 @@ class QwenAudioSession:
         # under a fresh reply_id. _pump_continuous cancels a response.created it sees
         # while this is false, before any of its text or audio can reach the client.
         self._expecting_response = False
+        # True from the moment cancel_response() sends response.cancel until a new
+        # response actually starts. A cancel can race a response that the vendor was
+        # already finishing on its own -- observed in production as an "error" event
+        # back, "Conversation has no active response" -- which _pump_continuous would
+        # otherwise treat as fatal and hang up the whole call over a no-op. Held open
+        # until response.created rather than cleared on the next event, because the
+        # vendor having finished that response is exactly what makes its response.done
+        # arrive in between: a one-event allowance is spent on that response.done and
+        # never reaches the error it was meant for.
+        self._cancel_pending = False
 
     async def configure(self, instructions: str, tools: list[dict[str, Any]]) -> None:
         """Set the session up before any audio; turn_detection only takes effect here."""
@@ -295,6 +305,7 @@ class QwenAudioSession:
         self._followup_requested = False
         self._followup_suppressed = False
         await self._send({"type": "response.cancel"})
+        self._cancel_pending = True
 
     async def close(self) -> None:
         """Close the underlying connection, ignoring an already-closed one."""
@@ -443,6 +454,9 @@ class QwenAudioSession:
                     await observer.interrupted()
             elif kind == "response.created":
                 self._responses_created += 1
+                # A response is running again, so any cancel still awaiting its verdict
+                # is settled: whatever the vendor says from here on is about this one.
+                self._cancel_pending = False
                 if not self._expecting_response:
                     logger.warning(
                         "realtime vendor started a response with no user speech or "
@@ -524,6 +538,14 @@ class QwenAudioSession:
                 self._playable_until = self._clock() + self._reply_bytes / _OUTPUT_BYTES_PER_SECOND
                 await observer.turn_completed()
             elif kind == "error":
+                if self._cancel_pending and _is_benign_cancel_race(event):
+                    self._cancel_pending = False
+                    logger.info(
+                        "realtime response.cancel raced a response the vendor had "
+                        "already finished on its own -- nothing to actually cancel, "
+                        "continuing the call"
+                    )
+                    continue
                 await observer.failed(_error_message(event))
                 return
 
@@ -595,6 +617,17 @@ def _error_message(event: dict[str, Any]) -> str:
         if isinstance(message, str) and message:
             return message
     return "realtime session reported an error"
+
+
+def _is_benign_cancel_race(event: dict[str, Any]) -> bool:
+    """Whether an error event is the vendor saying there was nothing to cancel.
+
+    Sent back when our own response.cancel loses a race against the vendor finishing
+    that same response on its own a moment earlier -- expected, not a real failure,
+    and safe to ignore: we already treat that response as discarded either way at both
+    cancel_response() call sites, whether the vendor got to finish it or not.
+    """
+    return "no active response" in _error_message(event).lower()
 
 
 def _parse_usage(event: dict[str, Any]) -> dict[str, Any] | None:
