@@ -436,6 +436,38 @@ def test_mapping_rejects_each_invalid_primitive_at_the_boundary(
         mapper(arguments)
 
 
+@pytest.mark.parametrize(
+    "location_name", ["家", "公司", "学校", "到家", "回公司", "附近", "老地方"]
+)
+def test_create_rejects_a_personal_place_reference_as_location(location_name: str) -> None:
+    arguments = {
+        **create_arguments(),
+        "schedule_type": "location",
+        "location_name": location_name,
+    }
+    with pytest.raises(ScheduleToolInputError, match="模糊指代"):
+        map_create_schedule_command(arguments)
+
+
+def test_create_accepts_a_concrete_location_name() -> None:
+    arguments = {**create_arguments(), "schedule_type": "location", "location_name": "张江路地铁站"}
+
+    command = map_create_schedule_command(arguments)
+
+    assert command.schedule_type is ScheduleType.LOCATION
+    assert command.location_name == "张江路地铁站"
+
+
+def test_create_does_not_reject_vague_location_for_a_time_schedule() -> None:
+    # 时间型日程的 location_name 只是附带备注，不参与地点解析，不该被拦截。
+    arguments = {**create_arguments(), "location_name": "家"}
+
+    command = map_create_schedule_command(arguments)
+
+    assert command.schedule_type is ScheduleType.TIME
+    assert command.location_name == "家"
+
+
 def test_recurring_delete_requires_scope_and_once_rejects_it() -> None:
     with pytest.raises(ScheduleToolInputError, match="required"):
         map_delete_schedule_command(

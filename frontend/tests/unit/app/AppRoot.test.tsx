@@ -79,7 +79,12 @@ jest.mock('../../../src/features/assistant/data/audio/ExpoAudioCapture', () => (
   })),
 }));
 jest.mock('../../../src/features/assistant/data/audio/ExpoAudioPlayback', () => ({
-  ExpoAudioPlayback: jest.fn(),
+  ExpoAudioPlayback: jest.fn().mockImplementation(() => ({
+    startStream: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    pushChunk: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    endStream: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    stop: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+  })),
 }));
 jest.mock('../../../src/infrastructure/location/ExpoLocationProvider', () => ({
   ExpoLocationProvider: jest.fn(),

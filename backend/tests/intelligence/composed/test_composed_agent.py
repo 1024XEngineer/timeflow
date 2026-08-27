@@ -175,6 +175,81 @@ def timing_record(caplog: Any) -> logging.LogRecord:
     )
 
 
+def test_composed_turn_streams_a_multi_frame_reply() -> None:
+    """Several vendor frames per segment reach the client in order (one sink chunk each)."""
+
+    class MultiFrameTts:
+        def stream(self, segments: AsyncIterable[SpeechSegment]) -> AsyncIterator[Any]:
+            async def events() -> AsyncIterator[Any]:
+                async for segment in segments:
+                    text = segment.text.encode()
+                    for index in range(3):
+                        yield TtsAudioChunk(text + bytes([index]))
+                yield TtsCompleted(0)
+
+            return events()
+
+    async def scenario() -> None:
+        sink = RecordingSink()
+        agent = ComposedVoiceAgent(
+            FakeAsr(["明天下午三点提醒我"]),
+            lambda account_id, observer, client_location: Agent(
+                FakeLlm([[TextDelta("好的。"), completed()]]),
+                ToolRegistry([]),
+            ),
+            MultiFrameTts(),
+            sink,
+            clock=lambda: datetime(2026, 8, 12, 6, tzinfo=UTC),
+            reply_id_factory=lambda: "reply_1",
+        )
+
+        await agent.handle_audio(chunks(), Stream())
+
+        audio_kinds = [
+            kind for kind, _ in sink.calls if kind in ("audio_start", "audio", "audio_end")
+        ]
+        # 每个 vendor 帧原样转发，三个小帧各自成为一次 audio 事件。
+        assert audio_kinds == ["audio_start", "audio", "audio", "audio", "audio_end"]
+
+    asyncio.run(scenario())
+
+
+def test_composed_turn_with_empty_tts_reply_delivers_no_audio_frames() -> None:
+    """TTS 无音频帧时（chunk_count 为 0）不产生 audio 事件，也不抛诊断异常。"""
+
+    class EmptyTts:
+        def stream(self, segments: AsyncIterable[SpeechSegment]) -> AsyncIterator[Any]:
+            async def events() -> AsyncIterator[Any]:
+                async for _ in segments:
+                    pass
+                yield TtsCompleted(0)
+
+            return events()
+
+    async def scenario() -> None:
+        sink = RecordingSink()
+        agent = ComposedVoiceAgent(
+            FakeAsr(["明天下午三点提醒我"]),
+            lambda account_id, observer, client_location: Agent(
+                FakeLlm([[TextDelta("好的。"), completed()]]),
+                ToolRegistry([]),
+            ),
+            EmptyTts(),
+            sink,
+            clock=lambda: datetime(2026, 8, 12, 6, tzinfo=UTC),
+            reply_id_factory=lambda: "reply_1",
+        )
+
+        await agent.handle_audio(chunks(), Stream())
+
+        audio_kinds = [
+            kind for kind, _ in sink.calls if kind in ("audio_start", "audio", "audio_end")
+        ]
+        assert audio_kinds == ["audio_start", "audio_end"]
+
+    asyncio.run(scenario())
+
+
 def test_client_location_degrades_to_none_without_permission() -> None:
     """No coordinates, an unknown system, or out-of-range values all become None."""
     assert _client_location_from_stream(Stream()) is None

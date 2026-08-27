@@ -173,7 +173,7 @@ def test_settings_use_qwen_llm_defaults(
     assert settings.openai_api_key == ""
     assert settings.openai_model == "qwen-flash"
     assert settings.openai_timeout_seconds == 30.0
-    assert settings.schedule_category_timeout_seconds == 5.0
+    assert settings.schedule_category_timeout_seconds == 10.0
     assert settings.openai_is_configured() is False
     assert settings.agent_max_tool_rounds == 4
     assert settings.voice_agent_mode == "1"

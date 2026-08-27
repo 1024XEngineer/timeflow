@@ -8,7 +8,7 @@ TimeFlow 是一款语音优先的个人日程助手，帮你用说话的方式�
 
 **中文** | [English](README.en.md)
 
-[![TimeFlow](https://img.shields.io/website?url=https%3A%2F%2Fappetize.io%2Fapp%2Fb_tk7kw3vv4rhigcusy2uxvxof4e%3Fdevice%3Dpixel7%26osVersion%3D13.0%26toolbar%3Dtrue&up_message=online&down_message=offline&label=TimeFlow)](https://appetize.io/app/b_tk7kw3vv4rhigcusy2uxvxof4e?device=pixel7&osVersion=13.0&toolbar=true)
+[![TimeFlow](https://img.shields.io/website?url=https%3A%2F%2Ftimeflow.xcu.asia%3A10278%2F&up_message=online&down_message=offline&label=TimeFlow)](https://timeflow.xcu.asia:10278/)
 [![Frontend CI](https://img.shields.io/github/check-runs/1024XEngineer/timeflow/main?nameFilter=Frontend%20(lint%2C%20types%2C%20build)&label=Frontend%20CI&logo=github)](https://github.com/1024XEngineer/timeflow/actions/workflows/ci.yml)
 [![Backend CI](https://img.shields.io/github/check-runs/1024XEngineer/timeflow/main?nameFilter=Backend%20(lint%2C%20types%2C%20tests)&label=Backend%20CI&logo=github)](https://github.com/1024XEngineer/timeflow/actions/workflows/ci.yml)
 [![codecov](https://img.shields.io/codecov/c/github/1024XEngineer/timeflow?logo=codecov&label=codecov)](https://codecov.io/gh/1024XEngineer/timeflow)
@@ -30,6 +30,7 @@ TimeFlow 是一款语音优先的个人日程助手，帮你用说话的方式�
 - [质量检查](#质量检查)
 - [HTTP 与 WebSocket](#http-与-websocket)
 - [环境变量](#环境变量)
+- [云上部署与观测](#云上部署与观测)
 - [CI 与 Android 预览](#ci-与-android-预览)
 - [相关入口](#相关入口)
 
@@ -81,7 +82,9 @@ TimeFlow/
 │   │   ├── intelligence/     # 语音对话编排
 │   │   └── infrastructure/   # 配置、JWT、外部供应商
 │   └── alembic/              # 数据库迁移
-├── docker-compose.yml        # PostgreSQL + API
+├── docker-compose.yml        # PostgreSQL + API（可 build 或拉 GHCR 镜像）
+├── docker-compose.observability.yml  # Grafana / Prometheus / Tempo
+├── observability/            # 观测配置与云上部署说明
 ├── .env.example              # Compose 用的仓库根环境变量
 ├── README.md
 └── README.en.md
@@ -311,20 +314,26 @@ npm run test:coverage
 
 | 文件 | 何时使用 |
 | --- | --- |
-| [`.env.example`](.env.example) | `docker compose`：数据库、API 端口、JWT、CORS |
+| [`.env.example`](.env.example) | `docker compose`：数据库、API 端口、JWT、CORS、观测 |
 | [`backend/.env.example`](backend/.env.example) | 本机 `uvicorn`：数据库 URL、JWT、语音、地图、追踪 |
 | [`frontend/.env.example`](frontend/.env.example) | Android 客户端：API / WebSocket 地址、设备 ID、可选 `EXPO_PUBLIC_SENTRY_DSN` |
 
-仓库根 `.env` 里 Compose 会读取的项：
+仓库根 `.env` 供 Compose 做 `${VAR}` 插值。API 容器只注入 `docker-compose.yml` 列出的后端变量；`GRAFANA_*` / `SENTRY_AUTH_TOKEN` 只进 Grafana。
 
 | 变量 | 说明 |
 | --- | --- |
 | `TIMEFLOW_JWT_SECRET` | 必填，至少 32 个 UTF-8 字节 |
 | `POSTGRES_DB` / `USER` / `PASSWORD` / `PORT` | 默认 `timeapp` / `5432` |
+| `POSTGRES_HOST` / `API_HOST` | 端口绑定地址，默认 `0.0.0.0`；云上建议 `127.0.0.1` |
 | `API_PORT` | 默认 `8000` |
 | `TIMEFLOW_ENVIRONMENT` | 默认 `development` |
 | `TIMEFLOW_CORS_ALLOWED_ORIGINS` | 默认 `http://localhost:8081,http://127.0.0.1:8081`（Expo Metro） |
-| `SENTRY_AUTH_TOKEN` | 可选；Grafana 读 Sentry 时用，与客户端 DSN 不是同一项 |
+| `TIMEFLOW_API_IMAGE_TAG` | GHCR 镜像 tag，默认 `latest` |
+| `GRAFANA_ADMIN_PASSWORD` | 启动观测 overlay 时必填 |
+| `GRAFANA_ROOT_URL` | 浏览器访问 Grafana 的 URL；同域名 `/grafana/` 时末尾加 `/` |
+| `GF_SERVER_SERVE_FROM_SUB_PATH` | 同域名子路径时设 `true` |
+| `SENTRY_AUTH_TOKEN` | Grafana 读 sentry.io；不是 App 的 DSN |
+| `TIMEFLOW_OTEL_EXPORTER_OTLP_ENDPOINT` | 空则不上报 trace；观测 overlay 默认 `http://tempo:4318` |
 
 `frontend/.env` 里客户端会读取的项：
 
@@ -334,14 +343,27 @@ npm run test:coverage
 | `EXPO_PUBLIC_DEVICE_ID` | WebSocket 会话标识，开发可保持 `device_001` |
 | `EXPO_PUBLIC_SENTRY_DSN` | 可选；空则 Sentry SDK 关闭。取值来自 Sentry 项目 Client Keys，不要提交 |
 
+## 云上部署与观测
+
+`main` 上的 CI 会把后端打成 `ghcr.io/1024xengineer/timeflow-backend:latest`。观测三件套是 Grafana / Prometheus / Tempo 官方镜像，配置在 [`observability/`](observability/README.md)。
+
+云上可以只有 Compose + `.env` + `observability/`，用 GHCR 镜像跑 API，**不要** `--build`。同域名把 Grafana 挂在 `/grafana/` 的 Nginx 示例见 [`observability/nginx.example.conf`](observability/nginx.example.conf)。
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
+```
+
+国内拉 Docker Hub 失败、以及「目录里没有源码」时的步骤，见 [observability/README.md](observability/README.md)。
+
 ## CI 与 Android 预览
 
-- 推送到 `main` 或打开非 draft PR 会跑 [ci.yml](.github/workflows/ci.yml)：后端 lint/类型/测试、迁移、前端检查与 Android export。
+- 推送到 `main` 或打开非 draft PR 会跑 [ci.yml](.github/workflows/ci.yml)：后端 lint/类型/测试、迁移、前端检查与 Android export。合进 `main` 后还会把后端镜像推到 GHCR。
 - 需要在浏览器里点这次提交的 APK 时，在 PR 评论 `/android-preview`（需仓库写权限），或在 Actions 里手动跑 **Android Preview**。日常 push 不会自动打 APK。
 
 ## 相关入口
 
-- 在线预览：[Appetize](https://appetize.io/app/b_tk7kw3vv4rhigcusy2uxvxof4e?device=pixel7&osVersion=13.0&toolbar=true)
+- 在线预览：[TimeFlow](https://timeflow.xcu.asia:10278/)
 - 后端启动与检查：[backend/README.md](backend/README.md)
+- 观测栈云上部署：[observability/README.md](observability/README.md)
 - 需求与进度：[Issues](https://github.com/1024XEngineer/timeflow/issues)
 - 英文说明：[README.en.md](README.en.md)
