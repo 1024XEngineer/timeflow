@@ -661,6 +661,85 @@ describe('AssistantContinuousConversationService', () => {
     expect(service.getMessages()).toEqual([{ id: 'reply_1', role: 'assistant', text: '好的' }]);
   });
 
+  it('ignores a reply that arrives before any transcript with blank speech text', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '   ' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getMessages()).toEqual([]);
+  });
+
+  it('records a clarifying question as an orphan bubble when it arrives before any transcript', async () => {
+    // voice.dialogue.question 跟 voice.dialogue.reply 一样，正常流程不会先于
+    // 任何 transcript 到达，但要是真的发生了，得挂到零散气泡列表兜底，而不是
+    // 丢掉。同一个 question_id 再来一次要原地更新，不能变成两条气泡。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: {
+        candidates: [],
+        question_id: 'q_1',
+        question_kind: 'missing_field',
+        speech_text: '你是想订哪一天的会议室？',
+      },
+      type: 'voice.dialogue.question',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getMessages()).toEqual([
+      { id: 'q_1', role: 'assistant', text: '你是想订哪一天的会议室？' },
+    ]);
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: {
+        candidates: [],
+        question_id: 'q_1',
+        question_kind: 'missing_field',
+        speech_text: '你是想订哪一天的会议室，上午还是下午？',
+      },
+      type: 'voice.dialogue.question',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getMessages()).toEqual([
+      { id: 'q_1', role: 'assistant', text: '你是想订哪一天的会议室，上午还是下午？' },
+    ]);
+  });
+
+  it('ignores a question that arrives before any transcript with blank speech text', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: {
+        candidates: [],
+        question_id: 'q_1',
+        question_kind: 'missing_field',
+        speech_text: '  ',
+      },
+      type: 'voice.dialogue.question',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getMessages()).toEqual([]);
+  });
+
   it('clears turn history when a new call starts', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
