@@ -826,6 +826,7 @@ describe('AssistantConversationService', () => {
     await flushAsync();
     expect(service.getReplyText()).toBe('好的，明天下午');
     expect(deps.playback.startStream).toHaveBeenCalledTimes(1);
+    jest.mocked(deps.playback.stop).mockClear();
 
     // 语音还在播，用户又按住说话 → 新一轮开始：气泡立即清空，语音立即停播。
     const nextTurn = service.startTurn();
@@ -887,6 +888,7 @@ describe('AssistantConversationService', () => {
     } as AssistantServerMessage);
     await flushAsync();
     expect(service.getState()).toMatchObject({ phase: 'speaking' });
+    jest.mocked(deps.playback.stop).mockClear();
 
     // 语音还没播完，用户又按住说话 → turn 2 开始：应该主动掐掉 turn 1 的播放。
     const nextTurn = service.startTurn();
@@ -992,6 +994,7 @@ describe('AssistantConversationService', () => {
     } as AssistantServerMessage);
     await flushAsync();
     expect(service.getState()).toMatchObject({ phase: 'speaking' });
+    jest.mocked(deps.playback.stop).mockClear();
 
     await service.dismissReply();
     expect(deps.playback.stop).toHaveBeenCalledTimes(1);
@@ -1008,6 +1011,46 @@ describe('AssistantConversationService', () => {
     } as AssistantServerMessage);
     await flushAsync();
     expect(service.getState()).toMatchObject({ phase: 'recording' });
+  });
+
+  it('still stops playback when a new press lands in the gap between two TTS segments', async () => {
+    // 长回复的 TTS 可能分好几段下发（一句一个 tts.start/tts.end）。如果按下
+    // 的瞬间恰好卡在上一段 tts.end 和下一段 tts.start 之间，currentAudioId
+    // 这时候是 null——stop() 之前是放在 `if (currentAudioId !== null)` 里面
+    // 调用的，这种情况下会被跳过，原生播放器收不到停止指令，眼睁睁看着它
+    // 继续播下一段。stop() 现在挪到 if 外面、无条件调用，不依赖这个判断。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    await completeStreamStart(fake, service.startTurn());
+    fake.emitMessage({
+      audio_id: 'audio_1',
+      conversation_id: 'conv_001',
+      payload: {
+        format: 'pcm',
+        purpose: 'command_result',
+        sample_rate_hz: 24000,
+        speech_text: '',
+      },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    // 第一段说完，收尾——currentAudioId 回到 null，但原生播放器可能还没真正
+    // 播完硬件缓冲区里的音频，下一段的 tts.start 也还没到。
+    fake.emitMessage({
+      audio_id: 'audio_1',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.end',
+    } as AssistantServerMessage);
+    await flushAsync();
+    jest.mocked(deps.playback.stop).mockClear();
+
+    // 恰好在这个间隙按住说话：即使没有正在追踪的 audio_id，也要把 stop()
+    // 发出去。
+    await completeStreamStart(fake, service.startTurn());
+    expect(deps.playback.stop).toHaveBeenCalledTimes(1);
   });
 
   it("drops a stale dialogue.question from a previous turn so it cannot hijack the new turn's phase", async () => {
