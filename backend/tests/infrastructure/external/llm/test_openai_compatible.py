@@ -349,6 +349,39 @@ async def test_text_tool_and_usage_chunks_are_mapped() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tool_call_deltas_accept_null_and_object_arguments() -> None:
+    stream = FakeStream(
+        [
+            tool_chunk(
+                index=0,
+                call_id="call_1",
+                name="schedule_update",
+                arguments=None,
+            ),
+            tool_chunk(
+                index=0,
+                call_id=None,
+                name=None,
+                arguments={"title": "测试"},
+                finish_reason="tool_calls",
+            ),
+            usage_chunk(3, 4, 7),
+        ]
+    )
+    provider = OpenAICompatibleLlm(settings(), client=FakeClient(stream))
+
+    events = [
+        event async for event in provider.stream([ChatMessage(role="user", content="改名")], [])
+    ]
+
+    assert events == [
+        ToolCallDelta(0, "call_1", "schedule_update", ""),
+        ToolCallDelta(0, None, None, '{"title":"测试"}'),
+        LlmStreamCompleted("tool_calls", LlmUsage(3, 4, 7)),
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "chunk",
     [

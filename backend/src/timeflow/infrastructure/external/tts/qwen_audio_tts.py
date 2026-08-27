@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -12,6 +13,8 @@ from uuid import uuid4
 
 from websockets.asyncio.client import connect
 
+from timeflow.infrastructure.observability.external import ExternalCall
+from timeflow.infrastructure.observability.metrics import TTS_CONNECT_DURATION, TTS_CONNECTIONS
 from timeflow.infrastructure.settings import Settings
 from timeflow.intelligence.speech.tts import (
     SpeechSegment,
@@ -242,6 +245,7 @@ class QwenAudioTts(TtsPort):
         sender: asyncio.Task[None] | None = None
         task_started = False
         task_finished = False
+        call = ExternalCall("tts", "session")
 
         try:
             websocket = await self._connect()
@@ -304,6 +308,7 @@ class QwenAudioTts(TtsPort):
                     if not raw_message:
                         raise TtsProtocolError("TTS provider returned an empty audio frame")
                     expect_audio = False
+                    call.mark_first_byte()
                     yield TtsAudioChunk(raw_message)
                     continue
 
@@ -327,14 +332,24 @@ class QwenAudioTts(TtsPort):
                 raise TtsProtocolError("TTS task finished before its audio frame arrived")
             yield TtsCompleted(characters)
         except asyncio.CancelledError:
+            call.cancel()
             if websocket is not None and task_started and not task_finished:
                 await self._try_cancel(websocket, task_id)
             raise
-        except TtsError:
+        except TtsConnectionError:
+            call.fail("connection")
+            raise
+        except TtsProtocolError:
+            call.fail("protocol")
+            raise
+        except TtsSynthesisError:
+            call.fail("synthesis")
             raise
         except TimeoutError as exc:
+            call.fail("timeout")
             raise TtsConnectionError("Timed out during TTS WebSocket setup") from exc
         except Exception as exc:
+            call.fail("connection")
             raise TtsConnectionError("TTS WebSocket connection failed") from exc
         finally:
             if sender is not None and not sender.done():
@@ -343,8 +358,11 @@ class QwenAudioTts(TtsPort):
                 await asyncio.gather(sender, return_exceptions=True)
             if websocket is not None:
                 await websocket.close()
+            call.__exit__(None, None, None)
 
     async def _connect(self) -> WebSocketConnection:
+        started = time.perf_counter()
+        status = "ok"
         try:
             return await asyncio.wait_for(
                 self._connector(
@@ -355,11 +373,17 @@ class QwenAudioTts(TtsPort):
                 timeout=self._settings.aliyun_tts_connect_timeout_seconds,
             )
         except TimeoutError as exc:
+            status = "error"
             raise TtsConnectionError("Timed out connecting to TTS provider") from exc
         except TtsError:
+            status = "error"
             raise
         except Exception as exc:
+            status = "error"
             raise TtsConnectionError("Failed to connect to TTS provider") from exc
+        finally:
+            TTS_CONNECTIONS.labels(status).inc()
+            TTS_CONNECT_DURATION.labels(status).observe(time.perf_counter() - started)
 
     def _validate_settings(self) -> None:
         if not self._settings.aliyun_tts_ws_url:

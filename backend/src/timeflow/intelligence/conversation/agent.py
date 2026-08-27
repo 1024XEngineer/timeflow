@@ -24,6 +24,7 @@ from timeflow.intelligence.conversation.llm import (
     ToolResultMessage,
 )
 from timeflow.intelligence.conversation.tools import ToolRegistry
+from timeflow.intelligence.telemetry import NOOP_TELEMETRY, VoiceTelemetry, tool_result_status
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,7 @@ class AgentTurnContext:
 
     now: datetime
     timezone: str
+    session_id: str = ""
 
     def system_message(self) -> str:
         """Describe the same instant in UTC and the session's local timezone."""
@@ -212,6 +214,8 @@ class Agent:
         tools: ToolRegistry,
         max_tool_rounds: int = 4,
         monotonic: Callable[[], float] | None = None,
+        *,
+        telemetry: VoiceTelemetry | None = None,
     ) -> None:
         if max_tool_rounds <= 0:
             raise ValueError("max_tool_rounds must be positive")
@@ -219,6 +223,7 @@ class Agent:
         self._tools = tools
         self._max_tool_rounds = max_tool_rounds
         self._monotonic = monotonic or time.monotonic
+        self._telemetry = telemetry if telemetry is not None else NOOP_TELEMETRY
 
     def run_turn(
         self,
@@ -237,6 +242,7 @@ class Agent:
         turn_context: AgentTurnContext | None,
     ) -> AsyncIterator[AgentEvent]:
         self._prepare_turn(conversation, user_text, turn_context)
+        session_id = turn_context.session_id if turn_context is not None else ""
         tool_rounds = 0
         usages: list[LlmUsage] = []
         usage_complete = True
@@ -333,9 +339,11 @@ class Agent:
             tool_rounds += 1
 
             if tool_call.name == "request_user_input":
+                tool_span = self._telemetry.start_tool("request_user_input", agent_mode="composed")
                 try:
                     pending = _pending_question_from_arguments(tool_call.call_id, arguments)
                 except AgentRefusal as refusal:
+                    tool_span.finish(status="failed")
                     conversation.messages.extend(
                         [
                             assistant_message,
@@ -348,6 +356,7 @@ class Agent:
                     continue
                 conversation.messages.append(assistant_message)
                 conversation.pending_question = pending
+                tool_span.finish(status="ok")
                 yield AgentQuestion(
                     pending.question_kind,
                     pending.speech_text,
@@ -356,9 +365,12 @@ class Agent:
                 )
                 return
             if tool_call.name == "end_conversation":
+                tool_span = self._telemetry.start_tool("end_conversation", agent_mode="composed")
                 if arguments:
+                    tool_span.finish(status="error", error_kind="exception")
                     raise AgentToolError("end_conversation arguments must be empty")
                 conversation.messages.append(assistant_message)
+                tool_span.finish(status="ok")
                 if not streamed:
                     for text in text_parts:
                         yield AgentTextDelta(text)
@@ -384,18 +396,28 @@ class Agent:
                 )
                 continue
 
+            tool_span = self._telemetry.start_tool(tool_call.name, agent_mode="composed")
             try:
                 tool = self._tools.get(tool_call.name)
             except KeyError as exc:
+                tool_span.finish(status="error", error_kind="exception")
                 raise AgentToolError(f"Unknown Agent tool: {tool_call.name}") from exc
             exec_started = self._monotonic()
+            if session_id:
+                self._telemetry.set_session_stage(session_id, "tool")
             try:
                 result = await tool.execute(arguments)
             except Exception as exc:
+                tool_span.finish(status="error", error_kind="exception")
                 raise AgentToolError(f"Agent tool execution failed: {tool_call.name}") from exc
+            finally:
+                if session_id:
+                    self._telemetry.set_session_stage(session_id, "llm")
             tool_execution_ms += round((self._monotonic() - exec_started) * 1000, 1)
             if not isinstance(result, str):
+                tool_span.finish(status="error", error_kind="exception")
                 raise AgentToolError(f"Agent tool returned a non-string result: {tool_call.name}")
+            tool_span.finish(status=tool_result_status(result))
 
             conversation.messages.extend(
                 [

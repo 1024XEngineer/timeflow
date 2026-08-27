@@ -23,6 +23,10 @@ class AccountRepository:
         model = self._require_session().scalar(select(Account).where(Account.username == username))
         return None if model is None else _to_record(model)
 
+    def get_by_id(self, account_id: str) -> AccountRecord | None:
+        model = self._require_session().get(Account, account_id)
+        return None if model is None else _to_record(model)
+
     def add(self, account: NewAccount) -> AccountRecord:
         session = self._require_session()
         model = Account(

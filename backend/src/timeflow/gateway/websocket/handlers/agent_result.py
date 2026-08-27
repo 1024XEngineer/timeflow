@@ -1,9 +1,14 @@
 """Result sink translating each of the agent's outlets into the protocol message for it."""
 
 import logging
+import time
 from collections.abc import AsyncIterator
 
 from timeflow.business.calendar.contracts import ScheduleCategory
+from timeflow.gateway.observability.sessions import (
+    NOOP_SESSION_TRACKER,
+    VoiceSessionTracker,
+)
 from timeflow.gateway.websocket.agent_ports import (
     AudioCanceledInfo,
     AudioReplyInfo,
@@ -51,9 +56,14 @@ def _question_kind(value: str) -> QuestionKind:
 class WebSocketResultSink:
     """Translate results into wire messages and push them to the session."""
 
-    def __init__(self, connections: ConnectionManager) -> None:
+    def __init__(
+        self,
+        connections: ConnectionManager,
+        sessions: VoiceSessionTracker | None = None,
+    ) -> None:
         """Store the registry used to reach the session."""
         self._connections = connections
+        self._sessions = sessions if sessions is not None else NOOP_SESSION_TRACKER
 
     async def deliver_transcript(
         self, transcript: TranscriptResult, stream: StreamIdentity
@@ -69,6 +79,7 @@ class WebSocketResultSink:
             ),
         )
         await self._send(stream.session_id, message.type, message.model_dump())
+        self._sessions.mark_activity(stream.session_id)
 
     async def deliver_reply_text(self, reply: ReplyTextProgress, stream: StreamIdentity) -> None:
         """Push how much of the reply's wording is known so far."""
@@ -132,13 +143,42 @@ class WebSocketResultSink:
         )
         end = VoiceTtsEnd(conversation_id=stream.conversation_id, audio_id=reply.audio_id)
 
-        delivered = await self._connections.stream_audio(
-            stream.session_id, start.model_dump(), chunks, end.model_dump()
-        )
+        session_id = stream.session_id
+        self._sessions.set_stage(session_id, "tts")
+        first_chunk = True
+        bytes_sent = 0
+        sent_at = time.monotonic()
+
+        async def watched() -> AsyncIterator[bytes]:
+            nonlocal first_chunk, bytes_sent
+            async for chunk in chunks:
+                if not chunk:
+                    continue
+                bytes_sent += len(chunk)
+                if first_chunk:
+                    first_chunk = False
+                    self._sessions.set_stage(session_id, "speaking")
+                yield chunk
+
+        delivered = False
+        try:
+            delivered = await self._connections.stream_audio(
+                session_id, start.model_dump(), watched(), end.model_dump()
+            )
+        finally:
+            self._sessions.mark_activity(session_id)
+            elapsed = time.monotonic() - sent_at
+            remaining = bytes_sent / max(reply.sample_rate_hz * 2, 1) - elapsed
+            if remaining > 0.05:
+                self._sessions.hold_speaking(session_id, remaining)
+            else:
+                self._sessions.set_stage_if_current(
+                    session_id, "waiting_user", current=("tts", "speaking")
+                )
         if not delivered:
             logger.info(
                 "stopped speaking to a session that had gone",
-                extra={"session_id": stream.session_id, "audio_id": reply.audio_id},
+                extra={"session_id": session_id, "audio_id": reply.audio_id},
             )
 
     async def deliver_canceled(self, canceled: AudioCanceledInfo, stream: StreamIdentity) -> None:
@@ -151,11 +191,13 @@ class WebSocketResultSink:
             audio_id=canceled.audio_id,
         )
         await self._send(stream.session_id, message.type, message.model_dump())
+        self._sessions.record_interrupt(stream.session_id)
 
     async def deliver_session_end(self, stream: StreamIdentity) -> None:
         """Push that this voice session should end now."""
         message = VoiceSessionEnd(conversation_id=stream.conversation_id)
         await self._send(stream.session_id, message.type, message.model_dump())
+        self._sessions.mark_tool_end(stream.session_id)
 
     def publish_schedule_category_updated(
         self, account_id: str, schedule_id: str, category: ScheduleCategory

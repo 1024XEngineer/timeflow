@@ -8,6 +8,7 @@ from auth_test_support import build_test_token_service
 from fastapi import FastAPI, WebSocket
 from fastapi.testclient import TestClient
 
+from timeflow.gateway.observability.sessions import VoiceSessionTracker
 from timeflow.gateway.websocket.connection_manager import ConnectionManager
 from timeflow.gateway.websocket.endpoint import (
     UnauthenticatedConnectionLimiter,
@@ -88,6 +89,8 @@ def _build_app(
     max_audio_duration_ms: int = 120_000,
     max_continuous_audio_duration_ms: int = 1_800_000,
     queue_max_chunks: int = 32,
+    sessions: VoiceSessionTracker | None = None,
+    agent_mode: str = "composed",
 ) -> FastAPI:
     """Build an app wiring the transport to the given sink."""
     application = FastAPI()
@@ -101,6 +104,8 @@ def _build_app(
         queue_max_chunks=queue_max_chunks,
         stream_id_factory=lambda: "stream_test",
         conversation_id_factory=lambda: "conversation_test",
+        sessions=sessions,
+        agent_mode=agent_mode,
     )
     router = MessageRouter()
     router.register("voice.stream.start", voice_streams.handle_start)
@@ -118,6 +123,8 @@ def _build_app(
             handshake_timeout_seconds=5.0,
             binary_handler=voice_streams.handle_binary,
             disconnect_handler=voice_streams.handle_disconnect,
+            agent_mode=agent_mode,
+            sessions=sessions,
         )
 
     return application
@@ -529,3 +536,75 @@ def test_a_rejected_second_start_names_the_conversation_holding_the_stream() -> 
         assert refused["type"] == "voice.command.error"
         assert "already active" in refused["error"]["message"]
         assert refused["conversation_id"] == "conversation_test"
+
+
+class _RecordingSessions:
+    """Capture occupancy so hangup-on-stream-end can be asserted without Prometheus."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, ...]] = []
+
+    def attach(self, session_id: str, *, voice_mode: str, agent_mode: str) -> None:
+        self.calls.append(("attach", session_id, voice_mode, agent_mode))
+
+    def finish(self, session_id: str, *, server_error: bool = False) -> None:
+        self.calls.append(("finish", session_id, server_error))
+
+    def set_stage(self, session_id: str, stage: str) -> None:
+        self.calls.append(("set_stage", session_id, stage))
+
+    def set_stage_if_current(
+        self, session_id: str, stage: str, *, current: tuple[str, ...]
+    ) -> None:
+        self.calls.append(("set_stage_if_current", session_id, stage, current))
+
+    def hold_speaking(self, session_id: str, remaining_seconds: float) -> None:
+        self.calls.append(("hold_speaking", session_id, remaining_seconds))
+
+    def mark_activity(self, session_id: str) -> None:
+        self.calls.append(("mark_activity", session_id))
+
+    def mark_tool_end(self, session_id: str) -> None:
+        self.calls.append(("mark_tool_end", session_id))
+
+    def record_interrupt(self, session_id: str) -> None:
+        self.calls.append(("record_interrupt", session_id))
+
+
+def test_continuous_stream_end_classifies_hangup_while_the_socket_stays_open() -> None:
+    """The shared WebSocket is not closed on hangup; occupancy must finish on stream.end."""
+    tracker = _RecordingSessions()
+    sink = CapturingSink()
+    client = TestClient(_build_app(sink, sessions=tracker, agent_mode="composed"))
+    hello = {**VALID_HELLO, "payload": {**VALID_HELLO["payload"], "voice_mode": "continuous"}}
+
+    with client.websocket_connect("/ws?device_id=device_001") as websocket:
+        websocket.send_json(hello)
+        websocket.receive_json()
+        websocket.send_json(START)
+        websocket.receive_json()
+        websocket.send_bytes(b"\x01\x02")
+        websocket.send_json({"type": "voice.stream.end", "payload": {"stream_id": "stream_test"}})
+        assert sink.completed.wait(timeout=2)
+        finishes = [call for call in tracker.calls if call[0] == "finish"]
+        assert finishes == [("finish", "ws_session_test", False)]
+
+    assert tracker.calls[0] == ("attach", "ws_session_test", "continuous", "composed")
+    assert ("finish", "ws_session_test", False) in tracker.calls
+
+
+def test_push_to_talk_stream_end_is_not_a_hangup() -> None:
+    """Releasing the button ends a press, not the call."""
+    tracker = _RecordingSessions()
+    sink = CapturingSink()
+    client = TestClient(_build_app(sink, sessions=tracker, agent_mode="composed"))
+
+    with client.websocket_connect("/ws?device_id=device_001") as websocket:
+        websocket.send_json(VALID_HELLO)
+        websocket.receive_json()
+        websocket.send_json(START)
+        websocket.receive_json()
+        websocket.send_bytes(b"\x01\x02")
+        websocket.send_json({"type": "voice.stream.end", "payload": {"stream_id": "stream_test"}})
+        assert sink.completed.wait(timeout=2)
+        assert [call for call in tracker.calls if call[0] == "finish"] == []

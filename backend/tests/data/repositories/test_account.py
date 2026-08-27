@@ -48,6 +48,8 @@ def test_repository_adds_and_reads_framework_independent_record(
         assert added.password_hash == "hashed:password"
         assert "hashed:password" not in repr(added)
         assert repository.get_by_username("alice") == added
+        assert repository.get_by_id("acc_alice") == added
+        assert repository.get_by_id("missing") is None
 
 
 def test_repository_flush_does_not_commit_owner_transaction(

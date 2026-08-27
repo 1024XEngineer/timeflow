@@ -2,6 +2,13 @@
 .idea/
 .cursor/
 scripts/
+# Local Grafana/Prometheus/Tempo install (binaries, WAL, plugins). Config is tracked.
+/observability/data/
+/observability/downloads/
+/observability/grafana/
+/observability/prometheus/prometheus
+/observability/prometheus/promtool
+/observability/tempo/tempo
 .env
 .venv/
 node_modules/

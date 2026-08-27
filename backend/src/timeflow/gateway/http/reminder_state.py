@@ -1,6 +1,7 @@
 """HTTP adapter for syncing a schedule reminder's final confirmed state."""
 
 import logging
+import time
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
@@ -24,6 +25,7 @@ from timeflow.gateway.http.dependencies import (
     AuthenticatedAccount,
     AuthenticatedAccountDependency,
 )
+from timeflow.gateway.observability.http import record_reminder_state
 
 logger = logging.getLogger(__name__)
 
@@ -91,9 +93,11 @@ class _ReminderStateRoute(APIRoute):
         original_handler = super().get_route_handler()
 
         async def route_handler(request: Request) -> Response:
+            started = time.perf_counter()
             try:
                 return await original_handler(request)
             except RequestValidationError:
+                record_reminder_state("invalid", time.perf_counter() - started)
                 response = ReminderStateInvalidRequestResponse()
                 return JSONResponse(
                     status_code=422,
@@ -135,6 +139,7 @@ def create_reminder_state_router(
         request: ReminderStateRequest,
         account: Annotated[AuthenticatedAccount, Security(trusted_account)],
     ) -> Response:
+        started = time.perf_counter()
         try:
             result = confirmer.confirm(
                 account_id=account.account_id,
@@ -145,18 +150,23 @@ def create_reminder_state_router(
                 disposition_state=result.disposition_state,
                 updated_at=_as_utc(result.updated_at),
             )
+            record_reminder_state("confirmed", time.perf_counter() - started)
             return JSONResponse(status_code=200, content=response.model_dump(mode="json"))
         except ScheduleBusinessError as error:
             if error.code is ScheduleErrorCode.SCHEDULE_NOT_FOUND:
+                record_reminder_state("not_found", time.perf_counter() - started)
                 return _error_response(404, "SCHEDULE_NOT_FOUND", "Schedule not found")
             if error.code is ScheduleErrorCode.REMINDER_NOT_CONFIGURED:
+                record_reminder_state("conflict", time.perf_counter() - started)
                 return _error_response(
                     409,
                     "REMINDER_NOT_CONFIGURED",
                     "Reminder not configured",
                 )
+            record_reminder_state("error", time.perf_counter() - started)
             return _internal_error_response(error)
         except Exception as error:
+            record_reminder_state("error", time.perf_counter() - started)
             return _internal_error_response(error)
 
     return router

@@ -67,6 +67,10 @@ class RecordingObserver:
         """Record the user's transcript."""
         self.calls.append(("heard", text))
 
+    async def user_started_speaking(self) -> None:
+        """Record that the vendor detected user speech."""
+        self.calls.append(("user_started_speaking", None))
+
     async def spoke(self, text: str) -> None:
         """Record the assistant's own words."""
         self.calls.append(("spoke", text))
@@ -800,6 +804,9 @@ class _SeamObserver:
     async def heard(self, text: str) -> None:
         """Ignore what the user said."""
 
+    async def user_started_speaking(self) -> None:
+        """Ignore detected user speech."""
+
     async def spoke(self, text: str) -> None:
         """Ignore what the model said."""
 
@@ -1071,6 +1078,7 @@ def test_continuous_pump_cancels_and_reports_an_interruption() -> None:
 
         assert observer.calls == [
             ("spoke", "半句"),
+            ("user_started_speaking", None),
             ("interrupted", None),
             ("turn_completed", None),
             ("spoke", "新的回复"),
@@ -1113,7 +1121,13 @@ def test_speech_started_still_cancels_after_generation_finishes_if_playback_is_n
             observer
         )
 
-        assert observer.kinds() == ["audio", "turn_completed", "interrupted", "failed"]
+        assert observer.kinds() == [
+            "audio",
+            "turn_completed",
+            "user_started_speaking",
+            "interrupted",
+            "failed",
+        ]
         # Nothing was still generating, so there is nothing to tell the vendor to
         # abandon -- only the observer needs to hear about the barge-in.
         assert transport.types() == []
@@ -1145,7 +1159,13 @@ def test_speech_started_does_not_cancel_once_the_reply_would_be_done_playing() -
             observer
         )
 
-        assert observer.kinds() == ["audio", "turn_completed", "heard", "failed"]
+        assert observer.kinds() == [
+            "audio",
+            "turn_completed",
+            "user_started_speaking",
+            "heard",
+            "failed",
+        ]
 
     asyncio.run(scenario())
 
@@ -1296,7 +1316,11 @@ def test_continuous_pump_ignores_speech_started_before_any_reply() -> None:
 
         await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
 
-        assert observer.calls == [("heard", "你好"), ("failed", "stream ended")]
+        assert observer.calls == [
+            ("user_started_speaking", None),
+            ("heard", "你好"),
+            ("failed", "stream ended"),
+        ]
         assert transport.types() == []
 
     asyncio.run(scenario())

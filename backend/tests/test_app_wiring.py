@@ -14,6 +14,7 @@ from auth_test_support import (
 )
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from observability_support import metric_value
 from sqlalchemy import create_engine, event
 
 from timeflow.business.auth import AuthAccessResult
@@ -207,6 +208,80 @@ def test_injected_token_service_is_shared_by_http_and_websocket() -> None:
 
     dependency = application.state.authenticated_account_dependency
     assert dependency(f"Bearer {issued.access_token}").account_id == "acc_shared"
+
+
+def test_composition_root_counts_live_sessions_and_ui_hangup() -> None:
+    """Authenticated /ws sessions occupy waiting_user and hang up as ui_hangup."""
+    tokens = build_test_token_service()
+    issued = tokens.issue("acc_occupancy")
+    application = _build_with_environment(
+        "development",
+        jwt_secret="",
+        access_token_service=tokens,
+        audio_sink=_Sink(),
+    )
+    occupancy = {
+        "stage": "waiting_user",
+        "voice_mode": "push_to_talk",
+        "agent_mode": "realtime",
+    }
+    hangup = {
+        "reason": "ui_hangup",
+        "voice_mode": "push_to_talk",
+        "agent_mode": "realtime",
+    }
+    waiting_before = metric_value("timeflow_voice_sessions", occupancy)
+    hangup_before = metric_value("timeflow_voice_session_ends_total", hangup)
+
+    with TestClient(application) as client:
+        with client.websocket_connect("/ws?device_id=device_001") as websocket:
+            websocket.send_json(
+                {
+                    "type": "session.hello",
+                    "payload": {
+                        "access_token": issued.access_token,
+                        "device_id": "device_001",
+                    },
+                }
+            )
+            assert websocket.receive_json()["type"] == "session.ready"
+            assert metric_value("timeflow_voice_sessions", occupancy) == waiting_before + 1
+
+    assert metric_value("timeflow_voice_sessions", occupancy) == waiting_before
+    assert metric_value("timeflow_voice_session_ends_total", hangup) == hangup_before + 1
+
+
+def test_failed_handshake_does_not_occupy_or_end_a_voice_session() -> None:
+    """Auth failure closes the socket without touching occupancy gauges."""
+    application = _build_with_environment("development", audio_sink=_Sink())
+    occupancy = {
+        "stage": "waiting_user",
+        "voice_mode": "push_to_talk",
+        "agent_mode": "realtime",
+    }
+    hangup = {
+        "reason": "ui_hangup",
+        "voice_mode": "push_to_talk",
+        "agent_mode": "realtime",
+    }
+    waiting_before = metric_value("timeflow_voice_sessions", occupancy)
+    hangup_before = metric_value("timeflow_voice_session_ends_total", hangup)
+
+    with TestClient(application) as client:
+        with client.websocket_connect("/ws?device_id=device_001") as websocket:
+            websocket.send_json(
+                {
+                    "type": "session.hello",
+                    "payload": {
+                        "access_token": "arbitrary-non-jwt-token",
+                        "device_id": "device_001",
+                    },
+                }
+            )
+            assert websocket.receive_json()["error"]["code"] == "UNAUTHENTICATED"
+
+    assert metric_value("timeflow_voice_sessions", occupancy) == waiting_before
+    assert metric_value("timeflow_voice_session_ends_total", hangup) == hangup_before
 
 
 def test_schedule_snapshot_route_uses_the_shared_authenticated_account() -> None:

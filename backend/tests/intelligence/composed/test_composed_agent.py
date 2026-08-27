@@ -1434,34 +1434,54 @@ def test_continuous_speech_started_before_tts_is_ignored() -> None:
     asyncio.run(scenario())
 
 
-def test_continuous_turn_failure_cancels_pump_and_propagates() -> None:
-    """A failing agent event propagates and cancels the still-running ASR pump."""
+def test_continuous_turn_failure_keeps_listening_for_later_finals() -> None:
+    """A failed utterance must not cancel the ASR pump or drop later finals."""
 
-    class RaisingSink(RecordingSink):
+    class FlakySink(RecordingSink):
+        def __init__(self) -> None:
+            super().__init__()
+            self._failed = False
+
         async def deliver_reply_text(self, value: Any, stream: Any) -> None:
-            raise RuntimeError("sink failed")
+            if not self._failed:
+                self._failed = True
+                raise RuntimeError("sink failed")
+            await super().deliver_reply_text(value, stream)
 
-    class HangingAsr:
+    class TwoFinalsAsr:
         def stream(self, audio: AsyncIterable[bytes]) -> AsyncIterator[Any]:
             async def events() -> AsyncIterator[Any]:
                 async for _ in audio:
                     pass
-                yield TranscriptCompleted("你好")
-                await asyncio.Event().wait()
+                yield TranscriptCompleted("第一句")
+                yield TranscriptCompleted("第二句")
 
             return events()
 
     async def scenario() -> None:
+        sink = FlakySink()
         agent = ComposedVoiceAgent(
-            HangingAsr(),
+            TwoFinalsAsr(),
             lambda account_id, observer, client_location: Agent(
-                FakeLlm([[TextDelta("好。"), completed()]]), ToolRegistry([])
+                FakeLlm(
+                    [
+                        [TextDelta("失败。"), completed()],
+                        [TextDelta("成功。"), completed()],
+                    ]
+                ),
+                ToolRegistry([]),
             ),
             FakeTts(),
-            RaisingSink(),
+            sink,
         )
 
-        with pytest.raises(RuntimeError, match="sink failed"):
-            await agent.handle_audio(chunks(), Stream(voice_mode="continuous"))
+        await agent.handle_audio(chunks(), Stream(voice_mode="continuous"))
+
+        transcripts = [value.text for kind, value in sink.calls if kind == "transcript"]
+        assert transcripts == ["第一句", "第二句"]
+        done_replies = [
+            value.speech_text for kind, value in sink.calls if kind == "reply" and value.done
+        ]
+        assert done_replies == ["成功。"]
 
     asyncio.run(scenario())

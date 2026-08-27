@@ -22,6 +22,7 @@ from timeflow.intelligence.ports import (
 from timeflow.intelligence.ports import Transcript as HeardSpeech
 from timeflow.intelligence.realtime.ports import RealtimeSession, RealtimeSessionFactory
 from timeflow.intelligence.realtime.schedule_tools import ToolBox
+from timeflow.intelligence.telemetry import NOOP_TELEMETRY, VoiceTelemetry
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,7 @@ class RealtimeAgent:
         message_id_factory: Callable[[], str] | None = None,
         question_id_factory: Callable[[], str] | None = None,
         clock: Callable[[], float] | None = None,
+        telemetry: VoiceTelemetry | None = None,
     ) -> None:
         """Store the session source, the sink, the tools, and the id and clock seams."""
         self._sessions = sessions
@@ -133,6 +135,7 @@ class RealtimeAgent:
         # Monotonic, not wall clock: a live session must not be thrown away for being
         # hours old because the host's clock was corrected.
         self._clock = clock or time.monotonic
+        self._telemetry = telemetry if telemetry is not None else NOOP_TELEMETRY
         self._held: dict[tuple[str, str], _Held] = {}
         self._locks: dict[tuple[str, str], asyncio.Lock] = {}
 
@@ -161,16 +164,20 @@ class RealtimeAgent:
                 reply_id_factory=self._reply_id_factory,
                 message_id_factory=self._message_id_factory,
                 question_id_factory=self._question_id_factory,
+                telemetry=self._telemetry,
                 token_sink=lambda n: setattr(held, "tokens_spent", held.tokens_spent + n),
                 stopwatch=self._clock,
             )
-            # Feeding starts before listening, matching the real causal order: the model
-            # cannot transcribe audio it has not been sent, so a transcript's reported
-            # duration is counted against the audio that actually produced it. Nothing is
-            # missed by reading a moment later -- frames that arrive first are buffered.
             forwarding = asyncio.create_task(self._forward_audio(chunks, held.session, turn))
             pumping = asyncio.create_task(held.session.pump(turn))
             reusable = False
+            turn_span = self._telemetry.start_turn(
+                agent_mode="realtime",
+                voice_mode=stream.voice_mode,
+                account_id=stream.account_id,
+            )
+            status = "failed"
+            started = self._clock()
             try:
                 # Both sides are watched, because either can end the turn. In continuous
                 # mode the microphone stays open until the user hangs up, so a pump that
@@ -193,6 +200,10 @@ class RealtimeAgent:
                         # session gets reused those frames would bleed into the next turn.
                         await held.session.cancel_response()
                 reusable = turn.failure is None
+                status = "failed" if turn.failure else "completed"
+            except asyncio.CancelledError:
+                status = "cancelled"
+                raise
             finally:
                 # Cancelled on every exit, not just the caller's: an orphaned pump sits in
                 # recv(), and an orphaned forwarder sits on the client's stream.
@@ -202,6 +213,8 @@ class RealtimeAgent:
                     with contextlib.suppress(BaseException):
                         await task
                 await turn.close()
+                turn_span.record_stage("turn_total", (self._clock() - started) * 1000)
+                turn_span.finish(status=status)
                 # Kept only after a turn it survived. A failure, an exception, or a client
                 # that hung up mid-turn leaves state nobody has reasoned about, and
                 # reusing it carries that into the next turn.
@@ -331,6 +344,7 @@ class _Turn:
         reply_id_factory: Callable[[], str],
         message_id_factory: Callable[[], str],
         question_id_factory: Callable[[], str],
+        telemetry: VoiceTelemetry,
         token_sink: Callable[[int], None],
         stopwatch: Callable[[], float],
     ) -> None:
@@ -343,6 +357,7 @@ class _Turn:
         self._reply_id_factory = reply_id_factory
         self._message_id_factory = message_id_factory
         self._question_id_factory = question_id_factory
+        self._telemetry = telemetry
         self._token_sink = token_sink
         self._stopwatch = stopwatch
         # None between replies; assigned on first use so each reply gets a fresh id.
@@ -367,6 +382,10 @@ class _Turn:
         """
         self._input_bytes += chunk_bytes
 
+    async def user_started_speaking(self) -> None:
+        """Occupy ASR while the vendor is hearing the user, including barge-ins."""
+        self._telemetry.set_session_stage(self._stream.session_id, "asr")
+
     async def heard(self, text: str) -> None:
         """Push what the user was heard to say."""
         if not text:
@@ -381,6 +400,7 @@ class _Turn:
             ),
             self._stream,
         )
+        self._telemetry.set_session_stage(self._stream.session_id, "llm")
         self._input_bytes = 0
 
     async def spoke(self, text: str) -> None:
@@ -413,8 +433,15 @@ class _Turn:
             )
             return
 
+        occupy_tool = name not in {"end_conversation", "request_user_input"}
+        if occupy_tool:
+            self._telemetry.set_session_stage(self._stream.session_id, "tool")
         tool_started = self._stopwatch()
-        result = await self._tools.run(name, arguments)
+        try:
+            result = await self._tools.run(name, arguments)
+        finally:
+            if occupy_tool:
+                self._telemetry.set_session_stage(self._stream.session_id, "llm")
         tool_ms = round((self._stopwatch() - tool_started) * 1000, 1)
         logger.info(
             "realtime tool executed: tool=%s ms=%s",
