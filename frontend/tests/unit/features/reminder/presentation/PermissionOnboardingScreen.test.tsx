@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
 
 import type {
   DeviceCapabilityPort,
@@ -7,6 +8,13 @@ import type {
   DevicePermission,
 } from '../../../../../src/features/reminder/application/interfaces';
 import { PermissionOnboardingScreen } from '../../../../../src/features/reminder/presentation/PermissionOnboardingScreen';
+
+let mockBottomInset = 0;
+let mockTopInset = 0;
+
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ bottom: mockBottomInset, left: 0, right: 0, top: mockTopInset }),
+}));
 
 function grantedPermissions(): Record<DevicePermission, boolean> {
   return {
@@ -91,6 +99,56 @@ describe('PermissionOnboardingScreen', () => {
 
   afterEach(() => {
     jest.useRealTimers();
+    mockBottomInset = 0;
+    mockTopInset = 0;
+  });
+
+  it('keeps the list between the display cutout and gesture navigation areas', async () => {
+    mockTopInset = 24;
+    mockBottomInset = 20;
+    const device = createDevice(deniedPermissions());
+
+    render(
+      <PermissionOnboardingScreen
+        device={device}
+        onContinue={jest.fn()}
+        onPermissionsUpdated={jest.fn()}
+      />,
+    );
+    await waitFor(() => expect(device.getStatus).toHaveBeenCalled());
+
+    expect(
+      StyleSheet.flatten(screen.getByTestId('permission-onboarding-screen').props.style),
+    ).toMatchObject({ paddingTop: 24 });
+    expect(
+      StyleSheet.flatten(screen.getByTestId('permission-list-scroll').props.style),
+    ).toMatchObject({ flex: 1 });
+    expect(StyleSheet.flatten(screen.getByTestId('permission-footer').props.style)).toMatchObject({
+      paddingBottom: 36,
+    });
+  });
+
+  it('lets permission copy shrink without compressing its action', async () => {
+    const device = createDevice(deniedPermissions());
+
+    render(
+      <PermissionOnboardingScreen
+        device={device}
+        onContinue={jest.fn()}
+        onPermissionsUpdated={jest.fn()}
+      />,
+    );
+    await waitFor(() => expect(device.getStatus).toHaveBeenCalled());
+
+    expect(
+      StyleSheet.flatten(screen.getByTestId('permission-copy-location_background').props.style),
+    ).toMatchObject({ flex: 1, minWidth: 0 });
+    expect(
+      StyleSheet.flatten(screen.getByTestId('permission-action-location_background').props.style),
+    ).toMatchObject({ flexShrink: 0, minWidth: 84 });
+    expect(StyleSheet.flatten(screen.getByText('后台定位（始终允许）').props.style)).toMatchObject({
+      flexShrink: 1,
+    });
   });
 
   it('shows every permission row with its current status', async () => {
