@@ -975,6 +975,46 @@ describe('AssistantConversationService', () => {
     expect(service.getState()).toMatchObject({ phase: 'recording' });
   });
 
+  it('abandons the currently-playing audio when dismissReply() is called mid-speech', async () => {
+    // dismissReply() 点掉气泡时如果语音还在播，也要走跟新一轮开始时一样的
+    // 放弃流程：立即停播、把这条 audio_id 记进 abandonedAudioIds，不然它
+    // 迟到的 tts.end 会落进正常分支，把点掉气泡之后的状态又碰一遍。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    await completeStreamStart(fake, service.startTurn());
+    fake.emitMessage({
+      audio_id: 'audio_1',
+      conversation_id: 'conv_001',
+      payload: {
+        format: 'pcm',
+        purpose: 'command_result',
+        sample_rate_hz: 24000,
+        speech_text: '',
+      },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getState()).toMatchObject({ phase: 'speaking' });
+
+    await service.dismissReply();
+    expect(deps.playback.stop).toHaveBeenCalledTimes(1);
+
+    // 点掉之后开始新一轮。
+    await completeStreamStart(fake, service.startTurn());
+    expect(service.getState()).toMatchObject({ phase: 'recording' });
+
+    // 被放弃的那条音频迟到的 tts.end 到达：不能把 phase 掰回 idle。
+    fake.emitMessage({
+      audio_id: 'audio_1',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.end',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getState()).toMatchObject({ phase: 'recording' });
+  });
+
   it("drops a stale dialogue.question from a previous turn so it cannot hijack the new turn's phase", async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
