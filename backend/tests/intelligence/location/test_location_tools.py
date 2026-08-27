@@ -246,3 +246,24 @@ def test_lazy_tool_caches_a_successful_prepare() -> None:
         assert port.reverse_calls == 2
 
     asyncio.run(scenario())
+
+
+def test_lazy_tool_rejects_a_vague_reference_before_prepare() -> None:
+    """「家」这类模糊指代必须在 prepare() 之前短路，绝不能触发反向地理编码。"""
+
+    async def scenario() -> None:
+        port = FlakyReversePort(tuple(_candidate(index) for index in range(1, 2)))
+        # prepare() 第一次必然失败：若模糊指代没提前短路，这里会返回 provider_unavailable
+        # 而不是稳定的 ambiguous_reference，并且已经打了一次 provider。
+        service = LocationSearchService(port)
+        tool = build_lazy_location_search_tool(
+            service, ClientLocation(Coordinate(31.22846, 121.47822, "wgs84"))
+        )
+
+        result = json.loads(await tool.execute({"query": "家"}))
+
+        assert result["status"] == "ambiguous_reference"
+        assert result["candidates"] == []
+        assert port.reverse_calls == 0  # prepare() 根本没被调用
+
+    asyncio.run(scenario())

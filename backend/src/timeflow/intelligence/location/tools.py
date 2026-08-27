@@ -33,14 +33,10 @@ class LocationSearchTool:
 
     async def execute(self, arguments: Mapping[str, object]) -> str:
         """Validate the one Agent argument and return stable provider-neutral JSON."""
+        if (reject := _reject_invalid_or_vague_query(arguments)) is not None:
+            return reject
         try:
-            query = _query(arguments)
-        except LocationInputError:
-            return _json({"status": "invalid_input", "candidates": []})
-        if is_personal_place_reference(query):
-            return AMBIGUOUS_REFERENCE_RESULT
-        try:
-            candidates = await self.service.search(self.context, query)
+            candidates = await self.service.search(self.context, _query(arguments))
         except (LocationConfigurationError, LocationConnectionError, LocationProtocolError):
             return _json({"status": "provider_unavailable", "candidates": []})
         return _json(
@@ -140,6 +136,22 @@ AMBIGUOUS_REFERENCE_RESULT = _json(
 )
 
 
+def _reject_invalid_or_vague_query(arguments: Mapping[str, object]) -> str | None:
+    """Return the short-circuit JSON for an invalid or vague query, else None.
+
+    模糊指代必须在任何 provider 调用之前短路——包括懒加载路径的 prepare()/反向地理
+    编码——这样模型对「家」「公司」永远看到稳定的 ambiguous_reference，而不是随
+    provider 健康状态在 provider_unavailable 之间漂移。
+    """
+    try:
+        query = _query(arguments)
+    except LocationInputError:
+        return _json({"status": "invalid_input", "candidates": []})
+    if is_personal_place_reference(query):
+        return AMBIGUOUS_REFERENCE_RESULT
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class _UnavailableLocationSearchTool:
     """Stand in for LocationSearchTool when no location context could be prepared."""
@@ -172,6 +184,8 @@ class _LazyLocationSearchTool:
     context: LocationSearchContext | None = None
 
     async def execute(self, arguments: Mapping[str, object]) -> str:
+        if (reject := _reject_invalid_or_vague_query(arguments)) is not None:
+            return reject
         if self.context is None:
             try:
                 self.context = await self.service.prepare(self.client_location)
