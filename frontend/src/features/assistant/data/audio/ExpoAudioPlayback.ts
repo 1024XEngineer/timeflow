@@ -3,6 +3,22 @@ import { EncodingTypes, ExpoPlayAudioStream } from '@irvingouj/expo-audio-stream
 import type { AssistantAudioPlaybackPort } from '../../application/interfaces/AssistantAudioPlaybackPort';
 
 import { arrayBufferToBase64 } from './base64';
+import { splitPcm } from './split-pcm';
+
+/** pcm_s16le 单声道：每样本 2 字节。 */
+const BYTES_PER_SAMPLE = 2;
+
+/**
+ * 每个原生写入块的时长：把一句 ~400ms 的帧切成约这么长的小块再喂给播放器。
+ * 块长存在一个「甜点区」，两头都会卡顿：
+ *  - 太大：原生播放循环写完一块会空等这块时长的 50%，这个 50% 一旦超过 AudioTrack
+ *    的流式缓冲（minBufferSize*2，几十 ms），缓冲就在句尾被抽干，留出静音空隙。
+ *  - 太小：每块固定的 base64/桥接/解码/协程开销不变，块越碎开销占比越大，JS 每块
+ *    还要赶一次交付 deadline，抖动被放大成偶发欠载（40ms 实测比不切更卡）。
+ * 100ms（24000Hz 下 4800 字节/块）实测是两边的安全交集：50% 延迟 50ms 远小于缓冲，
+ * 每句 ~4 块，开销可忽略。
+ */
+const SPLIT_MS = 100;
 
 /**
  * TTS 回复的流式播放真实实现：voice.tts.start 开一条流、陆续 pushChunk、
@@ -10,12 +26,22 @@ import { arrayBufferToBase64 } from './base64';
  *
  * 用的是 `@irvingouj/expo-audio-stream`，播放侧 API 跟原始 `@mykin-ai/expo-
  * audio-stream` 一致（这个 fork 只改了采集侧的编译 bug 和录音/流式接口划分）。
+ *
+ * 切分：vendor 吐的是句级大帧（~400ms），原生播放器每写完一帧空等 50% 帧时长，
+ * 会把小缓冲抽干、在句间留出静音空隙。这里先把大帧切成 ~100ms 小块再喂，让 50%
+ * 延迟缩短到 ~50ms、缓冲不再抽干；同时块也不至于碎到让每块桥接开销压过音频本身。
  */
 export class ExpoAudioPlayback implements AssistantAudioPlaybackPort {
   private streamId: string | null = null;
+  private splitBytes = 0;
 
   async startStream(format: { sampleRateHz: number; encoding: 'pcm_s16le' }): Promise<void> {
     this.streamId = `assistant-tts-${Date.now()}`;
+    // 每块字节数 = 采样率 × 每样本字节数 × 目标时长（秒）。
+    this.splitBytes = Math.max(
+      1,
+      Math.round(format.sampleRateHz * BYTES_PER_SAMPLE * (SPLIT_MS / 1000)),
+    );
     await ExpoPlayAudioStream.setSoundConfig({
       // 服务端 TTS 是 24000Hz，而包里 SoundConfig.sampleRate 的 TS 类型只列了
       // 16000|44100|48000。这个类型比原生窄：Android 侧是
@@ -27,14 +53,16 @@ export class ExpoAudioPlayback implements AssistantAudioPlaybackPort {
   }
 
   async pushChunk(chunk: ArrayBuffer): Promise<void> {
-    if (this.streamId === null) {
+    if (this.streamId === null || this.splitBytes <= 0) {
       throw new Error('pushChunk called before startStream');
     }
-    await ExpoPlayAudioStream.playAudio(
-      arrayBufferToBase64(chunk),
-      this.streamId,
-      EncodingTypes.PCM_S16LE,
-    );
+    for (const piece of splitPcm(chunk, this.splitBytes)) {
+      await ExpoPlayAudioStream.playAudio(
+        arrayBufferToBase64(piece),
+        this.streamId,
+        EncodingTypes.PCM_S16LE,
+      );
+    }
   }
 
   async endStream(): Promise<void> {
