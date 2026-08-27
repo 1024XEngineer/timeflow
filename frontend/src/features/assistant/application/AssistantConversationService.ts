@@ -415,10 +415,12 @@ export class AssistantConversationService implements AssistantApplicationPort {
       .catch(() => {});
   }
 
-  /** 立即清空原生播放器，并把后续新操作排在 stop 完成之后。 */
+  /** 立即清空原生播放器，并把后续新操作排在 stop 完成之后。stop 串在 playbackChain
+   * 末尾而非直接替换：正在执行的 pushChunk 内部会逐块 playAudio，直接 stop 会让
+   * stop 与在途写入竞争、stop 之后又继续写剩余小块；串行后 stop 等当前操作跑完。 */
   private async stopPlaybackImmediately(): Promise<void> {
     this.playbackGeneration += 1;
-    const stop = this.deps.playback.stop().catch(() => {});
+    const stop = this.playbackChain.then(() => this.deps.playback.stop()).catch(() => {});
     this.playbackChain = stop;
     await stop;
   }

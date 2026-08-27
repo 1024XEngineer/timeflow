@@ -537,6 +537,103 @@ describe('AssistantConversationService', () => {
     expect(overlapped).toBe(false);
   });
 
+  it('ends the playback stream on voice.tts.end', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    const turn = service.startTurn();
+    await completeStreamStart(fake, turn);
+
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      payload: { format: 'pcm_s16le', purpose: 'reply', sample_rate_hz: 24000, speech_text: '' },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(deps.playback.startStream).toHaveBeenCalledTimes(1);
+
+    fake.emitMessage({ type: 'voice.tts.end' } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(deps.playback.endStream).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips queued playback writes after dismissal bumps the generation', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    let resolveFirst!: () => void;
+    const pushOrder: string[] = [];
+    let pushCallCount = 0;
+    deps.playback.pushChunk = jest.fn(async () => {
+      pushCallCount += 1;
+      pushOrder.push(`push-${pushCallCount}-start`);
+      if (pushCallCount === 1) {
+        await new Promise<void>((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+      pushOrder.push(`push-${pushCallCount}-end`);
+    });
+
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+    const turn = service.startTurn();
+    await completeStreamStart(fake, turn);
+
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      payload: { format: 'pcm_s16le', purpose: 'reply', sample_rate_hz: 24000, speech_text: '' },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    // 第一块卡住、第二块排队；此时 dismiss 提升代次，第二块应被跳过。
+    fake.emitAudioFrame(new ArrayBuffer(4));
+    fake.emitAudioFrame(new ArrayBuffer(4));
+    await flushAsync();
+    expect(pushOrder).toEqual(['push-1-start']);
+
+    const dismiss = service.dismissReply();
+    resolveFirst();
+    await dismiss;
+    await flushAsync();
+
+    expect(pushOrder).toEqual(['push-1-start', 'push-1-end']);
+    expect(deps.playback.pushChunk).toHaveBeenCalledTimes(1);
+    expect(deps.playback.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('swallows a rejected pushChunk and keeps the chain usable', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    deps.playback.pushChunk = jest.fn(async () => {
+      throw new Error('native write failed');
+    });
+
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+    const turn = service.startTurn();
+    await completeStreamStart(fake, turn);
+
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      payload: { format: 'pcm_s16le', purpose: 'reply', sample_rate_hz: 24000, speech_text: '' },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    fake.emitAudioFrame(new ArrayBuffer(4));
+    await flushAsync();
+    expect(deps.playback.pushChunk).toHaveBeenCalledTimes(1);
+
+    // 拒绝被吞掉，链不崩，后续 endStream 仍能排队执行。
+    fake.emitMessage({ type: 'voice.tts.end' } as AssistantServerMessage);
+    await flushAsync();
+    expect(deps.playback.endStream).toHaveBeenCalledTimes(1);
+  });
+
   it('patches an asynchronous category update without requiring a revision change', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
