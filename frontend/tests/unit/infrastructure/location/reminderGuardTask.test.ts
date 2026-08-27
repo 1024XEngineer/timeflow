@@ -245,3 +245,48 @@ describe('guard task executor routing', () => {
     expect(listener).not.toHaveBeenCalled();
   });
 });
+
+describe('guard task telemetry', () => {
+  afterEach(() => {
+    jest.resetModules();
+    setAppState('active');
+  });
+
+  it('records headless native and JS fallback deliveries without schedule ids', () => {
+    const { module } = loadModule();
+    const deliveries: unknown[] = [];
+    module.setGuardTaskTelemetry({
+      setDeviceContext() {},
+      recordReminderDelivery(event) {
+        deliveries.push(event);
+      },
+      recordReminderPermissionBlocked() {},
+      recordReminderLifecycle() {},
+      recordReminderNativeBackground() {},
+      recordUnexpectedError() {},
+    });
+    setAppState('background');
+
+    module.recordGuardDelivery(true, 'location', 'high');
+    module.recordGuardDelivery(false, 'time', 'low');
+
+    expect(deliveries).toEqual([
+      expect.objectContaining({
+        app_state: 'background',
+        channel: 'native_full_screen',
+        outcome: 'native_ok',
+        schedule_type: 'location',
+        strength: 'high',
+        trigger_source: 'headless_guard',
+      }),
+      expect.objectContaining({
+        channel: 'system_notification',
+        outcome: 'js_channel',
+        schedule_type: 'time',
+        strength: 'low',
+        trigger_source: 'headless_guard',
+      }),
+    ]);
+    expect(JSON.stringify(deliveries)).not.toContain('schedule_id');
+  });
+});

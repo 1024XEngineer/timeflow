@@ -572,6 +572,14 @@ describe('TimeflowAlarmBridge and NativeAlarmScheduler', () => {
     expect(native.ackNativeFireAttempts).toHaveBeenCalled();
   });
 
+  it('nativePeekFireAttempts and nativeAckFireAttempts swallow native rejection', async () => {
+    native.peekNativeFireAttempts.mockRejectedValue(new Error('peek failed'));
+    await expect(nativePeekFireAttempts()).resolves.toEqual([]);
+
+    native.ackNativeFireAttempts.mockRejectedValue(new Error('ack failed'));
+    await expect(nativeAckFireAttempts()).resolves.toBeUndefined();
+  });
+
   it('nativeAckAlarmDispositions is a no-op with an empty list and swallows rejection', async () => {
     await nativeAckAlarmDispositions([]);
     expect(native.ackNativeDispositions).not.toHaveBeenCalled();

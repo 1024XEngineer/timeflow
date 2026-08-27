@@ -615,7 +615,8 @@ async function presentOrNotify(
   }
 }
 
-function recordGuardDelivery(
+/** 供单测直接覆盖 headless 送达埋点；生产路径由 presentOrNotify 调用。 */
+export function recordGuardDelivery(
   presented: boolean,
   scheduleType: 'time' | 'location',
   strength: ReminderStrength,

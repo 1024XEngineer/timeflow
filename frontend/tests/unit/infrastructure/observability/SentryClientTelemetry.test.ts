@@ -126,6 +126,63 @@ describe('SentryClientTelemetry', () => {
     );
   });
 
+  it('treats overlay_failed as a warning even when the outcome is native_ok', () => {
+    telemetry.recordReminderDelivery(
+      delivery({
+        channel: 'native_full_screen',
+        overlay_failed: true,
+        outcome: 'native_ok',
+        trigger_source: 'native_alarm',
+      }),
+    );
+    expect(mockedScope.setLevel).toHaveBeenCalledWith('warning');
+  });
+
+  it('records native_ok without overlay failure as info', () => {
+    telemetry.recordReminderDelivery(
+      delivery({
+        channel: 'native_full_screen',
+        outcome: 'native_ok',
+        trigger_source: 'native_alarm',
+        used_fallback_audio: false,
+      }),
+    );
+    expect(mockedScope.setLevel).toHaveBeenCalledWith('info');
+  });
+
+  it('ignores an empty permission gap list', () => {
+    telemetry.recordReminderPermissionBlocked({ manufacturer: 'vivo', missing: [] });
+    expect(Sentry.captureMessage).not.toHaveBeenCalled();
+  });
+
+  it('records a clean foreground resume as info', () => {
+    telemetry.recordReminderLifecycle({
+      background_duration_bucket: 'on_time',
+      kind: 'foreground_resume',
+      manufacturer: 'vivo',
+      overdue_unarmed: 'none',
+    });
+    expect(mockedScope.setLevel).toHaveBeenCalledWith('info');
+  });
+
+  it('records fallback_notification as a warning', () => {
+    telemetry.recordReminderNativeBackground({
+      manufacturer: 'huawei',
+      result: 'fallback_notification',
+    });
+    expect(mockedScope.setLevel).toHaveBeenCalledWith('warning');
+  });
+
+  it('records unexpected delivery errors without a schedule id', () => {
+    telemetry.recordUnexpectedError('reminder_delivery');
+    expect(Sentry.captureMessage).toHaveBeenCalledWith('timeflow.reminder.delivery');
+    expect(mockedScope.setLevel).toHaveBeenCalledWith('error');
+    expect(Object.fromEntries(mockedScope.setTag.mock.calls)).toEqual({
+      error_kind: 'exception',
+      source: 'reminder_delivery',
+    });
+  });
+
   it('does not attach a title or schedule id when recording a permission gap', () => {
     telemetry.recordReminderPermissionBlocked({
       manufacturer: 'oppo',

@@ -2137,6 +2137,199 @@ describe('LocalReminderApplication', () => {
       expect(ackNativeFireAttempts).toHaveBeenCalledTimes(1);
       expect(JSON.stringify(telemetry.nativeBackground)).not.toContain('s1');
     });
+
+    it('ignores unknown native background results and still acks the buffer', async () => {
+      const telemetry = new RecordingTelemetry();
+      const ackNativeFireAttempts = jest.fn(async () => {});
+      const { alarms } = createFakeAlarms({
+        peekNativeFireAttempts: jest.fn(async () => [
+          { result: 'not-a-result' as 'service_denied', at: '2026-08-18T09:50:00.000Z' },
+        ]),
+        ackNativeFireAttempts,
+      });
+      const deps = createDeps({ alarms, telemetry });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+
+      expect(telemetry.nativeBackground).toEqual([]);
+      expect(ackNativeFireAttempts).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports overdue unarmed time schedules when returning to the foreground', async () => {
+      const telemetry = new RecordingTelemetry();
+      const lifecycle = createLifecycle('active');
+      const { alarms } = createFakeAlarms({
+        rebuild: jest.fn(async (requests: readonly AlarmScheduleRequest[]) =>
+          requests.map((request) => ({
+            alarm_id: '',
+            schedule_id: request.schedule_id,
+            scheduled: false,
+          })),
+        ),
+        schedule: jest.fn(async (request: AlarmScheduleRequest) => ({
+          alarm_id: '',
+          schedule_id: request.schedule_id,
+          scheduled: false,
+        })),
+      });
+      const deps = createDeps({
+        alarms,
+        lifecycle,
+        schedules: new FakeScheduleReader([fixtureSchedule({ id: 's1' })]),
+        telemetry,
+      });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      await flushAsync();
+
+      expect(telemetry.lifecycle).toEqual([
+        expect.objectContaining({
+          kind: 'foreground_resume',
+          overdue_unarmed: 'one',
+        }),
+      ]);
+
+      telemetry.lifecycle.length = 0;
+      lifecycle.emit('background');
+      lifecycle.emit('active');
+      await flushAsync();
+
+      expect(telemetry.lifecycle).toEqual([
+        expect.objectContaining({
+          kind: 'foreground_resume',
+          overdue_unarmed: 'one',
+        }),
+      ]);
+    });
+
+    it('records unexpected delivery errors from the time tick without a schedule id', async () => {
+      const telemetry = new RecordingTelemetry();
+      const { alarms } = createFakeAlarms({
+        rebuild: jest.fn(async (requests: readonly AlarmScheduleRequest[]) =>
+          requests.map((request) => ({
+            alarm_id: '',
+            schedule_id: request.schedule_id,
+            scheduled: false,
+          })),
+        ),
+        schedule: jest.fn(async (request: AlarmScheduleRequest) => ({
+          alarm_id: '',
+          schedule_id: request.schedule_id,
+          scheduled: false,
+        })),
+      });
+      const deps = createDeps({
+        alarms,
+        schedules: new FakeScheduleReader([fixtureSchedule({ id: 's1' })]),
+        telemetry,
+      });
+      deps.vibration.vibrate = jest.fn(async () => {
+        throw new Error('vibrate failed');
+      });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      telemetry.errors.length = 0;
+
+      await app.handleTime({ observed_at: '2026-08-18T10:00:00.000Z' });
+      await flushAsync();
+
+      expect(telemetry.errors).toEqual(['reminder_delivery']);
+      expect(JSON.stringify(telemetry.errors)).not.toContain('s1');
+    });
+
+    it('records stuck_pending catch-up through the JS channel', async () => {
+      const telemetry = new RecordingTelemetry();
+      const schedule = fixtureSchedule({
+        id: 's1',
+        runtime: {
+          ...emptyRuntime(),
+          reminder_disposition_state: 'pending',
+          disposition_updated_at: '2026-08-18T10:00:00.000Z',
+        },
+      });
+      const { alarms } = createFakeAlarms({
+        rebuild: jest.fn(async (requests: readonly AlarmScheduleRequest[]) =>
+          requests.map((request) => ({
+            alarm_id: '',
+            schedule_id: request.schedule_id,
+            scheduled: false,
+          })),
+        ),
+        schedule: jest.fn(async (request: AlarmScheduleRequest) => ({
+          alarm_id: '',
+          schedule_id: request.schedule_id,
+          scheduled: false,
+        })),
+      });
+      const deps = createDeps({
+        alarms,
+        schedules: new FakeScheduleReader([schedule]),
+        telemetry,
+      });
+      await deps.state.write('s1', schedule.runtime);
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      telemetry.deliveries.length = 0;
+
+      await app.handleTime({ observed_at: '2026-08-18T10:02:30.000Z' });
+      await flushAsync();
+
+      expect(telemetry.deliveries).toEqual([
+        expect.objectContaining({
+          outcome: 'js_channel',
+          trigger_source: 'stuck_pending',
+        }),
+      ]);
+    });
+
+    it('falls back to other manufacturer tags when device status cannot be read', async () => {
+      const telemetry = new RecordingTelemetry();
+      const listenerRef: { current: ((event: AlarmNativeEvent) => void) | null } = {
+        current: null,
+      };
+      const { alarms } = createFakeAlarms({
+        subscribe: jest.fn((listener: (event: AlarmNativeEvent) => void) => {
+          listenerRef.current = listener;
+          return () => {
+            listenerRef.current = null;
+          };
+        }),
+      });
+      const deps = createDeps({
+        alarms,
+        device: {
+          getStatus: jest.fn(async () => {
+            throw new Error('device down');
+          }),
+          onAppActive: jest.fn(() => () => {}),
+          openOemSettings: jest.fn(async () => true),
+          openSettings: jest.fn(async () => true),
+          requestPermission: jest.fn(async () => true),
+        },
+        schedules: new FakeScheduleReader([fixtureSchedule({ id: 's1' })]),
+        telemetry,
+      });
+      const app = new LocalReminderApplication(deps);
+      await app.start();
+      telemetry.deliveries.length = 0;
+
+      listenerRef.current?.({
+        type: 'fired',
+        schedule_id: 's1',
+        alarm_id: 'alarm-1',
+        title: '喝水提醒',
+        at: '2026-08-18T10:00:00.000Z',
+      });
+      await flushAsync();
+
+      expect(telemetry.deliveries).toEqual([
+        expect.objectContaining({
+          manufacturer: 'other',
+          outcome: 'native_ok',
+          overlay_failed: false,
+        }),
+      ]);
+    });
   });
 });
 

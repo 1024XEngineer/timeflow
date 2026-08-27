@@ -6,7 +6,7 @@ export const mockedScope = {
 };
 
 export const init = jest.fn();
-export const wrap = <T>(component: T): T => component;
+export const wrap = jest.fn((component: unknown) => component);
 export const setTag = jest.fn();
 export const captureMessage = jest.fn();
 export const captureException = jest.fn();
