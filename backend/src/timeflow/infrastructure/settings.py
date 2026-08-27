@@ -96,7 +96,7 @@ class Settings:
 
         openai_timeout_seconds = float(environ.get("TIMEFLOW_OPENAI_TIMEOUT_SECONDS", "30.0"))
         schedule_category_timeout_seconds = float(
-            environ.get("TIMEFLOW_SCHEDULE_CATEGORY_TIMEOUT_SECONDS", "5.0")
+            environ.get("TIMEFLOW_SCHEDULE_CATEGORY_TIMEOUT_SECONDS", "10.0")
         )
         agent_max_tool_rounds = int(environ.get("TIMEFLOW_AGENT_MAX_TOOL_ROUNDS", "4"))
         tencent_map_timeout_seconds = float(
