@@ -249,9 +249,9 @@ describe('AssistantContinuousConversationService', () => {
     await flushAsync();
 
     expect(service.getMessages()).toEqual([
-      { id: 'user-1', role: 'user', text: '明天几点开会' },
-      { id: 'reply_1', role: 'assistant', text: '明天下午三点' },
-      { id: 'user-3', role: 'user', text: '谁参加' },
+      { id: 'req_1:user', role: 'user', text: '明天几点开会' },
+      { id: 'req_1:assistant', role: 'assistant', text: '明天下午三点' },
+      { id: 'req_2:user', role: 'user', text: '谁参加' },
     ]);
   });
 
@@ -314,6 +314,13 @@ describe('AssistantContinuousConversationService', () => {
       { id: 'req_1', replyText: '明天下午三点', transcript: '明天几点开会' },
       { id: 'req_2', replyText: null, transcript: '谁参加' },
     ]);
+    // 气泡列表必须跟着轮次走：req_1 的回复虽然迟到，仍排在其所属用户句下面，
+    // 而不是被追加到 req_2 的用户句后面（追加顺序的 messages 会排错）。
+    expect(service.getMessages()).toEqual([
+      { id: 'req_1:user', role: 'user', text: '明天几点开会' },
+      { id: 'req_1:assistant', role: 'assistant', text: '明天下午三点' },
+      { id: 'req_2:user', role: 'user', text: '谁参加' },
+    ]);
   });
 
   it.each([
@@ -347,12 +354,295 @@ describe('AssistantContinuousConversationService', () => {
       await flushAsync();
 
       expect(service.getMessages()).toEqual([
-        { id: 'user-1', role: 'user', text: '帮我订会议室' },
-        { id: 'q_1', role: 'assistant', text: speechText },
+        { id: 'req_1:user', role: 'user', text: '帮我订会议室' },
+        { id: 'req_1:assistant', role: 'assistant', text: speechText },
       ]);
       expect(service.getState()).toMatchObject({ phase: 'asking' });
     },
   );
+
+  it('renders a clarifying question and its streamed reply as a single assistant bubble', async () => {
+    // 真实后端在追问轮会先发 voice.dialogue.question，再发同文字的流式
+    // voice.dialogue.reply 片段（直到 done）。改前会生成 question_id 和
+    // reply_id 两个气泡、同一句回答重复出现；现在必须合并成同一轮的一个气泡，
+    // 且流式期间带 pending 波形、done 后摘掉。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_1',
+      payload: { duration_ms: 800, language: 'zh', transcript: '帮我订会议室' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_1',
+      payload: {
+        candidates: [],
+        question_id: 'q_1',
+        question_kind: 'missing_field',
+        speech_text: '你是想订哪一天的会议室？',
+      },
+      type: 'voice.dialogue.question',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getMessages()).toEqual([
+      { id: 'req_1:user', role: 'user', text: '帮我订会议室' },
+      { id: 'req_1:assistant', role: 'assistant', text: '你是想订哪一天的会议室？' },
+    ]);
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_1',
+      payload: { done: false, reply_id: 'reply_1', speech_text: '你是想订哪一' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getMessages()).toEqual([
+      { id: 'req_1:user', role: 'user', text: '帮我订会议室' },
+      {
+        id: 'req_1:assistant',
+        pending: true,
+        role: 'assistant',
+        text: '你是想订哪一',
+      },
+    ]);
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_1',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '你是想订哪一天的会议室？' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getMessages()).toEqual([
+      { id: 'req_1:user', role: 'user', text: '帮我订会议室' },
+      { id: 'req_1:assistant', role: 'assistant', text: '你是想订哪一天的会议室？' },
+    ]);
+  });
+
+  it('keeps the streaming waveform on the interrupted turn until its reply is done', async () => {
+    // 用户没等上一轮回复播完就开口（barge-in）：下一轮用户句先落地，上一轮
+    // 的气泡仍按轮次排在其用户句下面，pending 波形保留到该轮 done=true 才摘。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_1',
+      payload: { duration_ms: 800, language: 'zh', transcript: '明天几点开会' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_1',
+      payload: { done: false, reply_id: 'reply_1', speech_text: '明天下午三' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_2',
+      payload: { duration_ms: 500, language: 'zh', transcript: '算了换个话题' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getMessages()).toEqual([
+      { id: 'req_1:user', role: 'user', text: '明天几点开会' },
+      { id: 'req_1:assistant', pending: true, role: 'assistant', text: '明天下午三' },
+      { id: 'req_2:user', role: 'user', text: '算了换个话题' },
+    ]);
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: 'req_1',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '明天下午三点' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getMessages()).toEqual([
+      { id: 'req_1:user', role: 'user', text: '明天几点开会' },
+      { id: 'req_1:assistant', role: 'assistant', text: '明天下午三点' },
+      { id: 'req_2:user', role: 'user', text: '算了换个话题' },
+    ]);
+  });
+
+  it('does not let a later reply overwrite the previous completed turn', async () => {
+    // 改前实测的覆盖 bug：上一轮回复已完成（done=true）之后、下一轮转写还没到，
+    // 后一条回复先到达时会被写进"最后一条轮次"，把上一条已完成的回复覆盖成
+    // 跟后一条一样的内容。现在必须开一个占位轮挂住新回复，等它的转写到了再
+    // 合并进同一轮。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 800, language: 'zh', transcript: '明天几点开会' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: false, reply_id: 'reply_1', speech_text: '明天下午三' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '明天下午三点' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getMessages()).toEqual([
+      { id: 'turn-0:user', role: 'user', text: '明天几点开会' },
+      { id: 'turn-0:assistant', role: 'assistant', text: '明天下午三点' },
+    ]);
+
+    // 第二轮回复先于第二轮转写到达（转写晚到或被 VAD 跳过）：上一条回复不能被覆盖。
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: false, reply_id: 'reply_2', speech_text: '张' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getMessages()).toEqual([
+      { id: 'turn-0:user', role: 'user', text: '明天几点开会' },
+      { id: 'turn-0:assistant', role: 'assistant', text: '明天下午三点' },
+      { id: 'turn-1:assistant', pending: true, role: 'assistant', text: '张' },
+    ]);
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_2', speech_text: '张三' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    // 转写迟到：合并进占位轮，最终每条回复都挂在它自己的用户句下面。
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 500, language: 'zh', transcript: '谁参加' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getMessages()).toEqual([
+      { id: 'turn-0:user', role: 'user', text: '明天几点开会' },
+      { id: 'turn-0:assistant', role: 'assistant', text: '明天下午三点' },
+      { id: 'turn-1:user', role: 'user', text: '谁参加' },
+      { id: 'turn-1:assistant', role: 'assistant', text: '张三' },
+    ]);
+  });
+
+  it('clears the streaming waveform when a barge-in arrives as tts.canceled without done', async () => {
+    // composed 代理打断回复时只发 voice.tts.canceled、不会再补 voice.dialogue.reply
+    // 的 done=true（realtime 代理会补）。改前 pending 只认 done=true，被打断那条
+    // 气泡的波形会一直跳——回归：tts.canceled 也要摘掉波形。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 800, language: 'zh', transcript: '明天几点开会' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: false, reply_id: 'reply_1', speech_text: '明天下午三' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getMessages()).toEqual([
+      { id: 'turn-0:user', role: 'user', text: '明天几点开会' },
+      { id: 'turn-0:assistant', pending: true, role: 'assistant', text: '明天下午三' },
+    ]);
+
+    // 用户开口打断：只收到 tts.canceled，没有 done=true。
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.canceled',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getMessages()).toEqual([
+      { id: 'turn-0:user', role: 'user', text: '明天几点开会' },
+      { id: 'turn-0:assistant', role: 'assistant', text: '明天下午三' },
+    ]);
+    expect(service.getState()).toEqual({ conversationId: 'conv_001', phase: 'interrupted' });
+  });
+
+  it('does not let a reply after a barge-in overwrite the interrupted turn', async () => {
+    // 被打断的轮次不会再收到 done=true（tts.canceled 顶替它），如果不把
+    // lastTurnReplyDone 标记成已收尾，下一轮抢跑的回复会被写进这条被打断的
+    // 轮次，把它的部分回复整段覆盖成下一轮的答案。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 800, language: 'zh', transcript: '明天几点开会' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: false, reply_id: 'reply_1', speech_text: '明天下午三' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    // 打断：只收到 tts.canceled，没有 done=true。
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.canceled',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    // 打断后用户立刻说新一句，新一句的回复先到，转写还没到——跟"回复抢跑"
+    // 那个已修的 bug 一样的时序，只是发生在被打断的轮次后面。
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: false, reply_id: 'reply_2', speech_text: '张' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getMessages()).toEqual([
+      { id: 'turn-0:user', role: 'user', text: '明天几点开会' },
+      { id: 'turn-0:assistant', role: 'assistant', text: '明天下午三' },
+      { id: 'turn-1:assistant', pending: true, role: 'assistant', text: '张' },
+    ]);
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_2', speech_text: '张三' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 500, language: 'zh', transcript: '谁参加' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getMessages()).toEqual([
+      { id: 'turn-0:user', role: 'user', text: '明天几点开会' },
+      { id: 'turn-0:assistant', role: 'assistant', text: '明天下午三' },
+      { id: 'turn-1:user', role: 'user', text: '谁参加' },
+      { id: 'turn-1:assistant', role: 'assistant', text: '张三' },
+    ]);
+  });
 
   it('records an assistant bubble even when a reply arrives before any transcript', async () => {
     const fake = createFakeConnection();
