@@ -3,6 +3,7 @@ name: timeflow
 services:
   db:
     image: postgres:16.4-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-timeapp}
       POSTGRES_USER: ${POSTGRES_USER:-timeapp}
@@ -12,14 +13,19 @@ services:
     volumes:
       - timeflow-postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U timeapp -d timeapp"]
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 5s
       timeout: 5s
       retries: 10
 
   api:
+    image: ghcr.io/1024xengineer/timeflow-backend:${TIMEFLOW_API_IMAGE_TAG:-latest}
     build:
       context: ./backend
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
     environment:
       TIMEFLOW_ENVIRONMENT: ${TIMEFLOW_ENVIRONMENT:-development}
       TIMEFLOW_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-timeapp}:${POSTGRES_PASSWORD:-timeapp}@db:5432/${POSTGRES_DB:-timeapp}

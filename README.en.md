@@ -29,6 +29,7 @@ Say it, and it is scheduled. When the time comes, it keeps the promise.
 - [Quality gates](#quality-gates)
 - [HTTP and WebSocket](#http-and-websocket)
 - [Environment variables](#environment-variables)
+- [Cloud deploy and observability](#cloud-deploy-and-observability)
 - [CI and Android preview](#ci-and-android-preview)
 - [Related links](#related-links)
 
@@ -80,7 +81,9 @@ TimeFlow/
 │   │   ├── intelligence/     # conversation orchestration
 │   │   └── infrastructure/   # settings, JWT, vendor adapters
 │   └── alembic/              # database migrations
-├── docker-compose.yml        # PostgreSQL + API
+├── docker-compose.yml        # PostgreSQL + API (build locally or pull GHCR)
+├── docker-compose.observability.yml  # Grafana / Prometheus / Tempo
+├── observability/            # scrape/trace configs and cloud deploy notes
 ├── .env.example              # root env vars for Compose
 ├── README.md
 └── README.en.md
@@ -287,7 +290,7 @@ There are three templates, depending on how you run things:
 
 | File | When |
 | --- | --- |
-| [`.env.example`](.env.example) | `docker compose`: database, API port, JWT, CORS |
+| [`.env.example`](.env.example) | `docker compose`: database, API, JWT, CORS, observability |
 | [`backend/.env.example`](backend/.env.example) | Host `uvicorn`: database URL, JWT, voice, maps, tracing |
 | [`frontend/.env.example`](frontend/.env.example) | Android client: API / WebSocket URLs, device ID |
 
@@ -297,18 +300,38 @@ Root `.env` values Compose reads:
 | --- | --- |
 | `TIMEFLOW_JWT_SECRET` | Required, at least 32 UTF-8 bytes |
 | `POSTGRES_DB` / `USER` / `PASSWORD` / `PORT` | Defaults `timeapp` / `5432` |
+| `POSTGRES_HOST` / `API_HOST` | Bind address, default `0.0.0.0`; use `127.0.0.1` on a public VM |
 | `API_PORT` | Default `8000` |
 | `TIMEFLOW_ENVIRONMENT` | Default `development` |
 | `TIMEFLOW_CORS_ALLOWED_ORIGINS` | Default `http://localhost:8081,http://127.0.0.1:8081` (Expo Metro) |
+| `TIMEFLOW_API_IMAGE_TAG` | GHCR image tag, default `latest` |
+| `GRAFANA_ADMIN_PASSWORD` | Required when the observability overlay is used |
+| `GRAFANA_ROOT_URL` | Public Grafana URL; include a trailing `/` for a `/grafana/` subpath |
+| `GF_SERVER_SERVE_FROM_SUB_PATH` | `true` when Grafana shares the API host under `/grafana/` |
+| `SENTRY_AUTH_TOKEN` | Grafana → sentry.io; not the app DSN |
+| `TIMEFLOW_OTEL_EXPORTER_OTLP_ENDPOINT` | Empty disables traces; the overlay defaults to `http://tempo:4318` |
+
+## Cloud deploy and observability
+
+CI on `main` publishes `ghcr.io/1024xengineer/timeflow-backend:latest`. Grafana, Prometheus, and Tempo stay official images; their config lives under [`observability/`](observability/README.md).
+
+A cloud host can run from Compose + `.env` + `observability/` and the GHCR API image. Do not pass `--build`. Nginx for Grafana on the same hostname at `/grafana/` is in [`observability/nginx.example.conf`](observability/nginx.example.conf).
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
+```
+
+If Docker Hub is unreachable, or the server has no source tree, follow [observability/README.md](observability/README.md).
 
 ## CI and Android preview
 
-- Pushes to `main` and non-draft PRs run [ci.yml](.github/workflows/ci.yml): backend lint/types/tests, migrations, frontend checks, and an Android export.
+- Pushes to `main` and non-draft PRs run [ci.yml](.github/workflows/ci.yml): backend lint/types/tests, migrations, frontend checks, and an Android export. Merges to `main` also push the backend image to GHCR.
 - For a browser-clickable APK of a PR, comment `/android-preview` (write access required) or run **Android Preview** from Actions. Regular pushes do not build an APK.
 
 ## Related links
 
 - Live preview: [Appetize](https://appetize.io/app/b_tk7kw3vv4rhigcusy2uxvxof4e?device=pixel7&osVersion=13.0&toolbar=true)
 - Backend setup and checks: [backend/README.md](backend/README.md)
+- Observability on a cloud host: [observability/README.md](observability/README.md)
 - Work tracking: [Issues](https://github.com/1024XEngineer/timeflow/issues)
 - Chinese README: [README.md](README.md)

@@ -1,13 +1,28 @@
 # 同一台机器跑 API + Grafana / Prometheus / Tempo。
-# 启动：docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build
 #
-# Grafana 默认只绑 127.0.0.1:3000，前面加 Nginx。不要把 9090 / 3200 / 4318 暴露到公网。
+# 本机有源码：docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build
+# 云上只用 GHCR 镜像（不要 --build）：
+#   docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
+#
+# Grafana 默认只绑 127.0.0.1:3000。不要把 9090 / 3200 / 4318 暴露到公网。
+# 国内机器拉 Docker Hub 超时见 observability/README.md。
 
 services:
   api:
     environment:
       TIMEFLOW_OTEL_SERVICE_NAME: ${TIMEFLOW_OTEL_SERVICE_NAME:-timeflow-backend}
       TIMEFLOW_OTEL_EXPORTER_OTLP_ENDPOINT: ${TIMEFLOW_OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4318}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          ".venv/bin/python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health')",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     depends_on:
       tempo:
         condition: service_started
@@ -50,6 +65,7 @@ services:
       GF_USERS_DEFAULT_THEME: dark
       GF_SERVER_HTTP_ADDR: 0.0.0.0
       GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://127.0.0.1:3000}
+      GF_SERVER_SERVE_FROM_SUB_PATH: ${GF_SERVER_SERVE_FROM_SUB_PATH:-false}
       GF_INSTALL_PLUGINS: ${GF_INSTALL_PLUGINS:-grafana-sentry-datasource}
       GF_PATHS_PROVISIONING: /etc/grafana/provisioning
       SENTRY_AUTH_TOKEN: ${SENTRY_AUTH_TOKEN:-}
