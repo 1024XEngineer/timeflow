@@ -14,6 +14,9 @@ import {
   type GuardTaskSample,
 } from '../../../infrastructure/location/reminderGuardTask';
 
+/** 真机上 hasStarted/stopLocationUpdates 偶发不返回；登出不能卡在这里。 */
+const LOCATION_STOP_TIMEOUT_MS = 2_000;
+
 /**
  * 原生注册其实有三种状态，而 hasStartedLocationUpdatesAsync() 只能回答把后两种
  * 合并之后的那个布尔值（"注册着吗"）：
@@ -46,6 +49,8 @@ export class ReminderGuardCoordinator {
   private unsubscribeSchedules: (() => void) | null = null;
   private unsubscribeGuardTask: (() => void) | null = null;
   private started = false;
+  /** 每次 start/stop 都加一，用来作废已经过了 started 检查、还卡在 await 上的 reconcile。 */
+  private generation = 0;
   private running = false;
   private currentIntervalMs: number | null = null;
   private lastSample: GeoPoint | null = null;
@@ -56,6 +61,7 @@ export class ReminderGuardCoordinator {
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
+    this.generation += 1;
     this.unsubscribeGuardTask = subscribeGuardTaskEvents((sample) => {
       void this.handleSample(sample);
     });
@@ -67,6 +73,7 @@ export class ReminderGuardCoordinator {
 
   async stop(): Promise<void> {
     this.started = false;
+    this.generation += 1;
     this.unsubscribeGuardTask?.();
     this.unsubscribeGuardTask = null;
     this.unsubscribeSchedules?.();
@@ -87,15 +94,24 @@ export class ReminderGuardCoordinator {
     return run;
   }
 
+  private isCurrentGeneration(generation: number): boolean {
+    return this.started && this.generation === generation;
+  }
+
   private async reconcileInternal(): Promise<void> {
-    if (!this.started) return;
+    const generation = this.generation;
+    if (!this.isCurrentGeneration(generation)) return;
     const schedules = await this.dependencies.schedules.listReminderSchedules();
+    // stop() 会先推进 generation 再超时等 native stop。这次 reconcile 可能已经
+    // 过了上面的检查、卡在 list 上；回来后不能再停/启定位。
+    if (!this.isCurrentGeneration(generation)) return;
     const active = schedules.filter(
       (schedule) =>
         schedule.status === 'active' && schedule.runtime.reminder_disposition_state !== 'confirmed',
     );
 
     if (active.length === 0) {
+      if (!this.isCurrentGeneration(generation)) return;
       await this.stopLocationUpdates();
       return;
     }
@@ -106,12 +122,13 @@ export class ReminderGuardCoordinator {
       .filter((center): center is GeoPoint => center != null);
 
     const intervalMs = resolveNextPollIntervalMs(this.lastSample, locationTargets);
-    await this.ensureLocationUpdates(intervalMs, active);
+    await this.ensureLocationUpdates(intervalMs, active, generation);
   }
 
   private async ensureLocationUpdates(
     intervalMs: number,
     active: readonly LocalReminderSchedule[],
+    generation: number,
   ): Promise<void> {
     // 已经在跑就不从这条路径碰它——"间隔变化超过阈值就重新注册"这条逻辑，
     // 会在日程列表一变（比如插入第二条日程）时，对着一个可能正在执行/待执行的
@@ -131,6 +148,7 @@ export class ReminderGuardCoordinator {
     // 只看它的话，一次没带 foregroundService 的重注册就会让协调器永远早退——
     // 而且那份降级注册会被 expo-task-manager 持久化，force-stop 和冷启动都清不掉。
     const state = await this.resolveRegistrationState();
+    if (!this.isCurrentGeneration(generation)) return;
     if (state === 'foreground') {
       this.running = true;
       return;
@@ -156,6 +174,7 @@ export class ReminderGuardCoordinator {
         console.warn('[guard] failed to clear the degraded registration', error);
         return;
       }
+      if (!this.isCurrentGeneration(generation)) return;
       this.running = false;
     }
 
@@ -180,6 +199,7 @@ export class ReminderGuardCoordinator {
       console.warn('[guard] ensureLocationUpdates skipped: foreground permission not granted');
       return;
     }
+    if (!this.isCurrentGeneration(generation)) return;
 
     try {
       await Location.startLocationUpdatesAsync(GUARD_TASK_NAME, {
@@ -191,6 +211,13 @@ export class ReminderGuardCoordinator {
           notificationBody: GUARD_NOTIFICATION_BODY,
         },
       });
+      if (!this.started) {
+        // start 请求发出去时已经登出：this.running 可能仍是 false，普通 stop
+        // 会早退，必须强制拆掉刚建上的注册。native stop 卡住也只等超时。
+        await this.stopLocationUpdates(true);
+        return;
+      }
+      if (!this.isCurrentGeneration(generation)) return;
       this.running = true;
       this.currentIntervalMs = intervalMs;
     } catch (error) {
@@ -227,13 +254,18 @@ export class ReminderGuardCoordinator {
     }
   }
 
-  private async stopLocationUpdates(): Promise<void> {
-    if (!this.running) return;
+  private async stopLocationUpdates(force = false): Promise<void> {
+    if (!this.running && !force) return;
     try {
-      const hasStarted = await Location.hasStartedLocationUpdatesAsync(GUARD_TASK_NAME);
-      if (hasStarted) {
-        await Location.stopLocationUpdatesAsync(GUARD_TASK_NAME);
-      }
+      await raceWithTimeout(
+        (async () => {
+          const hasStarted = await Location.hasStartedLocationUpdatesAsync(GUARD_TASK_NAME);
+          if (hasStarted) {
+            await Location.stopLocationUpdatesAsync(GUARD_TASK_NAME);
+          }
+        })(),
+        LOCATION_STOP_TIMEOUT_MS,
+      );
     } catch (error) {
       console.warn('[guard] stopLocationUpdatesAsync failed', error);
     } finally {
@@ -241,4 +273,20 @@ export class ReminderGuardCoordinator {
       this.currentIntervalMs = null;
     }
   }
+}
+
+function raceWithTimeout(operation: Promise<void>, timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    operation.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }

@@ -47,6 +47,12 @@ _INPUT_BYTES_PER_MS = 32
 SESSION_MAX_TURNS = 40
 SESSION_MAX_AGE_SECONDS = 240.0
 
+# No real usage data yet -- Step 1's logging is what will calibrate this. Set
+# deliberately high so it acts as a safety net against a session that racks up
+# unusual context (e.g. large tool results) faster than turns or time would
+# catch, without forcing extra reconnects before real numbers justify a lower bar.
+SESSION_MAX_TOKENS = 200_000
+
 
 def new_audio_id() -> str:
     """Return a fresh identifier for one spoken reply."""
@@ -95,6 +101,7 @@ class _Held:
     opened_at: float
     voice_mode: str
     turns: int = 0
+    tokens_spent: int = 0
 
 
 class RealtimeAgent:
@@ -158,6 +165,8 @@ class RealtimeAgent:
                 message_id_factory=self._message_id_factory,
                 question_id_factory=self._question_id_factory,
                 telemetry=self._telemetry,
+                token_sink=lambda n: setattr(held, "tokens_spent", held.tokens_spent + n),
+                stopwatch=self._clock,
             )
             forwarding = asyncio.create_task(self._forward_audio(chunks, held.session, turn))
             pumping = asyncio.create_task(held.session.pump(turn))
@@ -253,7 +262,12 @@ class RealtimeAgent:
         except Exception:
             logger.exception("could not open a realtime session")
             return None
-        fresh = _Held(session=session, tools=tools, opened_at=self._clock(), voice_mode=voice_mode)
+        fresh = _Held(
+            session=session,
+            tools=tools,
+            opened_at=self._clock(),
+            voice_mode=voice_mode,
+        )
         self._held[key] = fresh
         return fresh
 
@@ -276,8 +290,10 @@ class RealtimeAgent:
             await self._discard(key)
 
     def _spent(self, held: _Held) -> bool:
-        """Report whether a session has used up either of its budgets."""
+        """Report whether a session has used up any of its three budgets."""
         if held.turns >= SESSION_MAX_TURNS:
+            return True
+        if held.tokens_spent >= SESSION_MAX_TOKENS:
             return True
         return self._clock() - held.opened_at >= SESSION_MAX_AGE_SECONDS
 
@@ -329,6 +345,8 @@ class _Turn:
         message_id_factory: Callable[[], str],
         question_id_factory: Callable[[], str],
         telemetry: VoiceTelemetry,
+        token_sink: Callable[[int], None],
+        stopwatch: Callable[[], float],
     ) -> None:
         """Start a stream that has heard nothing and said nothing yet."""
         self._result_sink = result_sink
@@ -340,6 +358,8 @@ class _Turn:
         self._message_id_factory = message_id_factory
         self._question_id_factory = question_id_factory
         self._telemetry = telemetry
+        self._token_sink = token_sink
+        self._stopwatch = stopwatch
         # None between replies; assigned on first use so each reply gets a fresh id.
         self._audio_id: str | None = None
         # Survives the reset below so a late barge-in can still name the audio the
@@ -416,11 +436,23 @@ class _Turn:
         occupy_tool = name not in {"end_conversation", "request_user_input"}
         if occupy_tool:
             self._telemetry.set_session_stage(self._stream.session_id, "tool")
+        tool_started = self._stopwatch()
         try:
             result = await self._tools.run(name, arguments)
         finally:
             if occupy_tool:
                 self._telemetry.set_session_stage(self._stream.session_id, "llm")
+        tool_ms = round((self._stopwatch() - tool_started) * 1000, 1)
+        logger.info(
+            "realtime tool executed: tool=%s ms=%s",
+            name,
+            tool_ms,
+            extra={
+                "account_id": self._stream.account_id,
+                "conversation_id": self._stream.conversation_id,
+                "call_id": call_id,
+            },
+        )
         if result.outcome is not None:
             outcome = result.outcome
             await self._result_sink.deliver_result(
@@ -480,6 +512,38 @@ class _Turn:
         # Push-to-talk needs no such message: its stream ends on its own either way.
         if self._stream.voice_mode != "push_to_talk":
             self._ends_conversation = True
+
+    async def usage_reported(self, usage: dict[str, Any]) -> None:
+        """Log the tokens one vendor response cost, so real usage can be observed.
+
+        Interpolated into the message rather than passed via extra=, same reason as
+        failed() above: this project's log format string never renders extra fields,
+        so the numbers themselves would silently vanish if left out of the message.
+        """
+        logger.info(
+            "realtime response usage: account_id=%s conversation_id=%s total=%s input=%s "
+            "output=%s input_text=%s input_audio=%s output_text=%s output_audio=%s "
+            "vad_ms=%s first_audio_ms=%s response_ms=%s",
+            self._stream.account_id,
+            self._stream.conversation_id,
+            usage.get("total_tokens"),
+            usage.get("input_tokens"),
+            usage.get("output_tokens"),
+            usage.get("input_text_tokens"),
+            usage.get("input_audio_tokens"),
+            usage.get("output_text_tokens"),
+            usage.get("output_audio_tokens"),
+            usage.get("latency_vad_ms"),
+            usage.get("latency_first_audio_ms"),
+            usage.get("latency_response_ms"),
+            extra={
+                "account_id": self._stream.account_id,
+                "conversation_id": self._stream.conversation_id,
+            },
+        )
+        total = usage.get("total_tokens")
+        if isinstance(total, int):
+            self._token_sink(total)
 
     async def close(self) -> None:
         """Settle whatever reply is in flight; a no-op if the last one already was."""

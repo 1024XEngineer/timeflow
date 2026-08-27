@@ -48,6 +48,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEZONE = "Asia/Shanghai"
 
+# A voice query rarely needs more than a handful spoken back; anything past this
+# is dead context the model pays for every turn without ever reading it aloud.
+MAX_SCHEDULES_FOR_MODEL = 20
+
 # Tool names from the conversation contract; names reach the client, so keep them.
 SCHEDULE_CREATE = "schedule_create"
 SCHEDULE_QUERY = "schedule_query"
@@ -112,12 +116,31 @@ _EDITABLE_PROPERTIES: dict[str, Any] = {
     "reminder_strength": _REMINDER_STRENGTH_SCHEMA,
 }
 
+# Trimmed of the repetition instructions.py also used to carry (the end_conversation
+# trigger phrases were duplicated in both places) and of examples the JSON parameter
+# schema below already conveys. Measured against the verbose original: the parameter
+# schema itself (properties/enum/required) is the bulk of this payload's size, so
+# trimming description text only moves the needle a little -- not worth a second A/B
+# variant the way instructions.py's prompt body is.
+_DESCRIPTIONS: dict[str, str] = {
+    SCHEDULE_CREATE: "创建日程，信息齐全后调用。",
+    SCHEDULE_QUERY: "查询日程，用于列表/匹配/更新删除前定位。",
+    SCHEDULE_UPDATE: "改一条已确认日程。",
+    SCHEDULE_DELETE: "删一条已确认日程，周期日程需给 scope。",
+    REQUEST_USER_INPUT: "信息不足或需用户选择时用；调用后念出 speech_text 原话，一次问一件事。",
+    END_CONVERSATION: (
+        "用户明确表示想结束这次语音对话、退出免提模式、不想再继续时调用，"
+        "例如说「结束对话」「先这样」「不用了」「退出语音模式」「停止监听」等。"
+        "说完告别语再调用，客户端自动挂断。"
+    ),
+}
+
 TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
     {
         "type": "function",
         "function": {
             "name": SCHEDULE_CREATE,
-            "description": "创建时间或地点日程，所有必要信息确认后调用。",
+            "description": _DESCRIPTIONS[SCHEDULE_CREATE],
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -140,7 +163,7 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
         "type": "function",
         "function": {
             "name": SCHEDULE_QUERY,
-            "description": "查询日程，用于列表、匹配、消歧、更新或删除前查找。",
+            "description": _DESCRIPTIONS[SCHEDULE_QUERY],
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -160,7 +183,7 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
         "type": "function",
         "function": {
             "name": SCHEDULE_UPDATE,
-            "description": "修改已确认的一条日程。",
+            "description": _DESCRIPTIONS[SCHEDULE_UPDATE],
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -182,7 +205,7 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
         "type": "function",
         "function": {
             "name": SCHEDULE_DELETE,
-            "description": "删除已确认的一条日程；周期日程需要指定 scope。",
+            "description": _DESCRIPTIONS[SCHEDULE_DELETE],
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -211,11 +234,7 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
         "type": "function",
         "function": {
             "name": REQUEST_USER_INPUT,
-            "description": (
-                "信息不足时向用户提问，而不是自己猜。"
-                "缺少日期、时间、地点等必要信息，或者用户的说法匹配到多条日程时使用。"
-                "调用之后要把 speech_text 原话说出来，让用户听到问题。一次只问一件事。"
-            ),
+            "description": _DESCRIPTIONS[REQUEST_USER_INPUT],
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -249,11 +268,7 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
         "type": "function",
         "function": {
             "name": END_CONVERSATION,
-            "description": (
-                "用户明确表示想结束这次语音对话、退出免提模式、不想再继续时调用，"
-                "例如说「结束对话」「先这样」「不用了」「退出语音模式」「停止监听」等。"
-                "想说句告别的话可以说，说完再调用；调用之后客户端会自己挂断，不用再多说。"
-            ),
+            "description": _DESCRIPTIONS[END_CONVERSATION],
             "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
         },
     },
@@ -385,12 +400,15 @@ class ToolBox:
         result = await asyncio.to_thread(
             partial(self._service.find_schedules, account_id=self._account_id, query=query)
         )
-        schedules_with_local_time = [_for_model(s, self._timezone) for s in result.schedules]
+        total = len(result.schedules)
+        shown = result.schedules[:MAX_SCHEDULES_FOR_MODEL]
+        schedules_with_local_time = [_for_model(s, self._timezone) for s in shown]
+        payload: dict[str, Any] = {"count": total, "schedules": schedules_with_local_time}
+        if total > MAX_SCHEDULES_FOR_MODEL:
+            payload["truncated"] = True
+            payload["shown"] = len(shown)
         return ToolResult(
-            output=json.dumps(
-                {"count": len(result.schedules), "schedules": schedules_with_local_time},
-                ensure_ascii=False,
-            ),
+            output=json.dumps(payload, ensure_ascii=False),
             outcome={
                 "operation": "list_schedules",
                 "status": "applied",

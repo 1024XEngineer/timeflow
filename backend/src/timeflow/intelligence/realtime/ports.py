@@ -43,6 +43,10 @@ class TurnObserver(Protocol):
         """The session cannot continue."""
         ...
 
+    async def usage_reported(self, usage: dict[str, Any]) -> None:
+        """One response finished; report the tokens the vendor says it cost."""
+        ...
+
 
 class RealtimeSession(Protocol):
     """One open conversation with a realtime speech model."""

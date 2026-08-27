@@ -30,6 +30,9 @@ export interface AuthInvalidationCoordinatorOptions {
   readonly socket?: AuthSocketClosePort;
 }
 
+/** 账号内存清理（提醒引擎 / 定位 stop）卡住时，不能挡住会话失效和登录页。 */
+export const ACCOUNT_STATE_CLEANUP_TIMEOUT_MS = 2_000;
+
 /** Token 只向基础设施提供；多个失效来源复用同一清理工作。 */
 export class AuthInvalidationCoordinator {
   private invalidation: Promise<void> | undefined;
@@ -71,11 +74,24 @@ export class AuthInvalidationCoordinator {
     if (socket) {
       await this.runStage('websocket', () => socket.close());
     }
+    // 先清会话再拆账号内存。首页登出 await 的就是这一条 Promise：提醒/定位
+    // native stop 在真机上可能永远不回来，排在会话前面就会一直转圈、进不了登录页。
+    // HTTP 401 也会 await 同一条 Promise；如果它还卡在 reminder.stop 等这条
+    // 请求自己，就会死锁。
+    await this.runStage('session-store', () => this.options.controller.invalidate(reason));
     const accountStateCleaners = this.options.accountStateCleaners;
     if (accountStateCleaners) {
-      await this.runStage('account-state', () => accountStateCleaners.clearAll());
+      const cleanup = Promise.resolve(accountStateCleaners.clearAll()).then(
+        () => undefined,
+        () => {
+          recordAuthCleanupFailure(
+            this.options.diagnostics ?? NOOP_AUTH_DIAGNOSTICS,
+            'account-state',
+          );
+        },
+      );
+      await raceWithTimeout(cleanup, ACCOUNT_STATE_CLEANUP_TIMEOUT_MS);
     }
-    await this.runStage('session-store', () => this.options.controller.invalidate(reason));
   }
 
   private async runStage(
@@ -94,4 +110,20 @@ export class AuthInvalidationCoordinator {
       this.invalidation = undefined;
     }
   }
+}
+
+function raceWithTimeout(operation: Promise<void>, timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    operation.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+    );
+  });
 }

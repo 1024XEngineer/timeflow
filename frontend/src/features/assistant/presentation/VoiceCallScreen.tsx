@@ -57,9 +57,6 @@ export function VoiceCallScreen({
 }: VoiceCallScreenProps) {
   const insets = useSafeAreaInsets();
   const {
-    fitsViewport,
-    hasUnseenLatest,
-    jumpToLatest,
     onContentSizeChange,
     onLayout,
     onMomentumScrollBegin,
@@ -67,9 +64,10 @@ export function VoiceCallScreen({
     onScroll,
     onScrollBeginDrag,
     onScrollEndDrag,
+    onTurnsLayout,
+    topSpacer,
     transcriptRef,
   } = usePinnedTranscriptScroll();
-  const latestText = messages[messages.length - 1]?.text;
   const [scale] = useState(() => new Animated.Value(1));
 
   useEffect(() => {
@@ -116,24 +114,34 @@ export function VoiceCallScreen({
         <CollapseChevron color={colors.onPrimary} />
       </Pressable>
 
-      <View style={styles.transcriptWrap}>
-        <ScrollView
-          ref={transcriptRef}
-          contentContainerStyle={[
-            styles.transcriptContent,
-            !fitsViewport && styles.transcriptContentOverflow,
-          ]}
-          onContentSizeChange={onContentSizeChange}
-          onLayout={onLayout}
-          onMomentumScrollBegin={onMomentumScrollBegin}
-          onMomentumScrollEnd={onMomentumScrollEnd}
-          onScroll={onScroll}
-          onScrollBeginDrag={onScrollBeginDrag}
-          onScrollEndDrag={onScrollEndDrag}
-          scrollEventThrottle={16}
-          showsVerticalScrollIndicator={false}
-          style={styles.transcript}
-          testID="voice-call-transcript"
+      <ScrollView
+        ref={transcriptRef}
+        contentContainerStyle={styles.transcriptContent}
+        onContentSizeChange={onContentSizeChange}
+        onLayout={onLayout}
+        onMomentumScrollBegin={onMomentumScrollBegin}
+        onMomentumScrollEnd={onMomentumScrollEnd}
+        onScroll={onScroll}
+        onScrollBeginDrag={onScrollBeginDrag}
+        onScrollEndDrag={onScrollEndDrag}
+        scrollEventThrottle={16}
+        showsVerticalScrollIndicator={false}
+        style={styles.transcript}
+        testID="voice-call-transcript"
+      >
+        {/*
+          短对白靠顶部空白顶到声纹球上方，而不是 contentContainer 的 flex-end。
+          对白一超出视口，Yoga 的 flex-end 会把子节点从上到下排反，看起来就像
+          助手在上、用户在下。
+        */}
+        <View
+          style={[styles.transcriptSpacer, { height: topSpacer }]}
+          testID="voice-call-transcript-spacer"
+        />
+        <View
+          onLayout={onTurnsLayout}
+          style={styles.transcriptTurns}
+          testID="voice-call-transcript-turns"
         >
           {messages.map((message, index) => (
             <View
@@ -178,24 +186,8 @@ export function VoiceCallScreen({
               </View>
             </View>
           ))}
-        </ScrollView>
-        {hasUnseenLatest ? (
-          <Pressable
-            accessibilityLabel="查看最新"
-            accessibilityRole="button"
-            onPress={jumpToLatest}
-            style={({ pressed }) => [styles.latestChip, pressed && styles.buttonPressed]}
-            testID="voice-call-latest"
-          >
-            <Text style={styles.latestChipEyebrow}>查看最新</Text>
-            {latestText ? (
-              <Text numberOfLines={1} style={styles.latestChipText}>
-                {latestText}
-              </Text>
-            ) : null}
-          </Pressable>
-        ) : null}
-      </View>
+        </View>
+      </ScrollView>
 
       <View
         style={[styles.dock, { paddingBottom: Math.max(spacing.lg, insets.bottom + spacing.sm) }]}
@@ -523,47 +515,21 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
     textAlign: 'center',
   },
-  transcriptWrap: {
+  transcript: {
     flex: 1,
     marginTop: 56,
   },
-  transcript: {
-    flex: 1,
-  },
-  latestChip: {
-    alignSelf: 'center',
-    backgroundColor: 'rgba(234,247,200,0.94)',
-    borderRadius: 999,
-    bottom: spacing.md,
-    maxWidth: '86%',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    position: 'absolute',
-    zIndex: 2,
-  },
-  latestChipEyebrow: {
-    color: colors.text,
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.4,
-  },
-  latestChipText: {
-    color: colors.text,
-    fontSize: 13,
-    lineHeight: 18,
-    marginTop: 2,
-  },
   transcriptContent: {
     flexGrow: 1,
-    gap: spacing.md,
-    justifyContent: 'flex-end',
-    paddingBottom: spacing.md,
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
   },
-  transcriptContentOverflow: {
-    flexGrow: 0,
-    justifyContent: 'flex-start',
+  transcriptSpacer: {
+    flexShrink: 0,
+  },
+  transcriptTurns: {
+    gap: spacing.md,
+    paddingBottom: spacing.md,
+    paddingTop: spacing.sm,
   },
   turn: {
     gap: 6,

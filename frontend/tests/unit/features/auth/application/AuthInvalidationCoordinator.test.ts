@@ -1,6 +1,9 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 
-import { AuthInvalidationCoordinator } from '../../../../../src/features/auth/application/AuthInvalidationCoordinator';
+import {
+  ACCOUNT_STATE_CLEANUP_TIMEOUT_MS,
+  AuthInvalidationCoordinator,
+} from '../../../../../src/features/auth/application/AuthInvalidationCoordinator';
 import type { AuthDiagnosticEvent } from '../../../../../src/features/auth/application/AuthDiagnostics';
 
 describe('AuthInvalidationCoordinator', () => {
@@ -87,7 +90,48 @@ describe('AuthInvalidationCoordinator', () => {
 
     await coordinator.invalidate('revoked');
 
-    expect(order).toEqual(['socket', 'account', 'controller']);
+    expect(order).toEqual(['socket', 'controller', 'account']);
+  });
+
+  it('clears the session even when account cleanup never settles', async () => {
+    jest.useFakeTimers();
+    try {
+      let sessionCleared = false;
+      const coordinator = new AuthInvalidationCoordinator({
+        accountStateCleaners: {
+          clearAll: () => new Promise(() => undefined),
+        },
+        controller: {
+          getAccessToken: () => 'opaque-token',
+          getState: () => ({
+            session: {
+              accountId: 'acc_001',
+              accessToken: 'opaque-token',
+              expiresAt: 200_000,
+              username: 'timeflow_user',
+            },
+            status: 'authenticated' as const,
+          }),
+          invalidate: async () => {
+            sessionCleared = true;
+          },
+        },
+        now: () => 100_000,
+        socket: { close: () => undefined },
+      });
+
+      const done = coordinator.invalidate('revoked');
+      await flushMicrotasks();
+      expect(sessionCleared).toBe(true);
+      expect(coordinator.isInvalidating()).toBe(true);
+
+      jest.advanceTimersByTime(ACCOUNT_STATE_CLEANUP_TIMEOUT_MS);
+      await flushMicrotasks();
+      await done;
+      expect(coordinator.isInvalidating()).toBe(false);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('records fixed diagnostics and continues when cleanup stages fail', async () => {
@@ -120,11 +164,11 @@ describe('AuthInvalidationCoordinator', () => {
 
     await expect(coordinator.invalidate('revoked')).resolves.toBeUndefined();
 
-    expect(order).toEqual(['socket', 'account', 'controller']);
+    expect(order).toEqual(['socket', 'controller', 'account']);
     expect(events).toEqual([
       { component: 'websocket', event: 'auth.cleanup.failed' },
-      { component: 'account-state', event: 'auth.cleanup.failed' },
       { component: 'session-store', event: 'auth.cleanup.failed' },
+      { component: 'account-state', event: 'auth.cleanup.failed' },
     ]);
     expect(events.every((event) => Object.keys(event).length === 2)).toBe(true);
   });
@@ -136,4 +180,10 @@ function createDeferred<T>() {
     resolve = complete;
   });
   return { promise, resolve };
+}
+
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 8; i += 1) {
+    await Promise.resolve();
+  }
 }
