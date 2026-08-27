@@ -386,18 +386,21 @@ def test_asking_something_else_does_not_carry_over_a_stale_delete_authorization(
     assert result.outcome is None
 
 
-def test_a_delete_consumes_its_authorization_so_a_second_delete_needs_its_own_ask() -> None:
+def test_one_confirmation_authorizes_a_whole_batch_of_deletes() -> None:
+    # A delete does not consume the authorization: "delete all three" only gets one
+    # confirmation from the model, then schedule_delete once per schedule -- if the
+    # first one cleared it, every delete after the first in a batch would be wrongly
+    # refused as unconfirmed.
     box = ToolBox("acc_test", RecordingService())
     run(
         "request_user_input",
-        {"question_kind": "confirmation", "speech_text": "确定要删除这条日程吗？"},
+        {"question_kind": "confirmation", "speech_text": "确定要把这三条日程都删除吗？"},
         box,
     )
-    first = run("schedule_delete", _DELETE_ARGUMENTS, box)
-    assert json.loads(first.output)["status"] == "applied"
 
-    second = run("schedule_delete", _DELETE_ARGUMENTS, box)
-    assert json.loads(second.output)["status"] == "failed"
+    for _ in range(3):
+        result = run("schedule_delete", _DELETE_ARGUMENTS, box)
+        assert json.loads(result.output)["status"] == "applied"
 
 
 @pytest.mark.parametrize(

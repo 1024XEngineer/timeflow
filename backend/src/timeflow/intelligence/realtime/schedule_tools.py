@@ -319,8 +319,10 @@ class ToolBox:
         self._location_context: LocationSearchContext | None = None
         self._telemetry = telemetry if telemetry is not None else NOOP_TELEMETRY
         # Set by _ask() when the question it just asked was recurrence_scope or
-        # confirmation; consumed the moment a delete actually runs. The composed agent
-        # gates schedule_delete the same way (see conversation/agent.py's
+        # confirmation; not consumed by a delete, so one confirmation still covers a
+        # batch of deletes the model makes in the same breath ("delete all three") --
+        # only asking a different-kind question moves it off the delete flow. The
+        # composed agent gates schedule_delete the same way (see conversation/agent.py's
         # _delete_authorized) by inspecting the user's own answer text -- realtime has
         # no equivalent seam (the vendor session decides on its own when to call the
         # tool again), so this only proves a qualifying question was asked at some
@@ -379,7 +381,6 @@ class ToolBox:
             if name == SCHEDULE_UPDATE:
                 return await self._update(arguments)
             if name == SCHEDULE_DELETE:
-                self._delete_authorization = None
                 return await self._delete(arguments)
         except ToolInputError as exc:
             return _refusal(str(exc))
