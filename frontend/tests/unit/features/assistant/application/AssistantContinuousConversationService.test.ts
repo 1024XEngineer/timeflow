@@ -314,6 +314,98 @@ describe('AssistantContinuousConversationService', () => {
     ]);
   });
 
+  it('pairs each reply with its own utterance when the backend names the turn', async () => {
+    // 到达顺序在这个时序下必然猜错：两轮的回复都在任何一条转写之前完成，按"填最后
+    // 一轮"会把问题A配到回复B上，回复A丢掉提问、问题B丢掉回复（实测三条全错位）。
+    // realtime 后端现在把 vendor 的输入 item id 带在两边，配对不再靠猜。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_A', speech_text: '回复A', turn_id: 'item_1' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_B', speech_text: '回复B', turn_id: 'item_2' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 1, language: 'zh', transcript: '问题A', turn_id: 'item_1' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 1, language: 'zh', transcript: '问题B', turn_id: 'item_2' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getTurns()).toEqual([
+      { id: 'item_1', replyText: '回复A', transcript: '问题A' },
+      { id: 'item_2', replyText: '回复B', transcript: '问题B' },
+    ]);
+  });
+
+  it('files a clarifying question under the utterance it asks about', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 1, language: 'zh', transcript: '明天看电影', turn_id: 'item_1' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: {
+        candidates: [],
+        question_id: 'q_1',
+        question_kind: 'missing_field',
+        speech_text: '电影几点开始？',
+        turn_id: 'item_1',
+      },
+      type: 'voice.dialogue.question',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getTurns()).toEqual([
+      { id: 'item_1', replyText: '电影几点开始？', transcript: '明天看电影' },
+    ]);
+  });
+
+  it('still falls back to arrival order when the backend names no turn', async () => {
+    // composed 后端拿不到 vendor 的 item id，字段是 null，老那套按到达顺序的归属
+    // 必须继续有效——不能因为加了 id 就把没有 id 的那条路走坏。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 1, language: 'zh', transcript: '明天看电影' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_A', speech_text: '好的' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getMessages()).toEqual([
+      { id: 'turn-0:user', role: 'user', text: '明天看电影' },
+      { id: 'turn-0:assistant', role: 'assistant', text: '好的' },
+    ]);
+  });
+
   it('keeps a streaming assistant reply pending until it is done', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });

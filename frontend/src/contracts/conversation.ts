@@ -59,7 +59,14 @@ export interface VoiceAsrCompletedMessage {
   type: 'voice.asr.completed';
   request_id?: string;
   conversation_id: string;
-  payload: { transcript: string; language: string; duration_ms: number };
+  /** turn_id：这句话对应的那段用户语音的 id，用来跟回答它的 reply 精确配对。
+   * 只有 realtime 后端拿得到（来自 vendor 的 item_id），composed 后端为 null。 */
+  payload: {
+    transcript: string;
+    language: string;
+    duration_ms: number;
+    turn_id?: string | null;
+  };
 }
 
 /** 日程快照的形状由后端 `ScheduleSnapshot` 决定；前端只透传给本地落库，不在此处强约束字段。 */
@@ -100,6 +107,7 @@ export interface VoiceDialogueQuestionMessage {
     speech_text: string;
     required_response?: string;
     candidates: Record<string, unknown>[];
+    turn_id?: string | null;
   };
 }
 
@@ -107,7 +115,7 @@ export interface VoiceDialogueReplyMessage {
   type: 'voice.dialogue.reply';
   request_id?: string;
   conversation_id: string;
-  payload: { reply_id: string; speech_text: string; done: boolean };
+  payload: { reply_id: string; speech_text: string; done: boolean; turn_id?: string | null };
 }
 
 export interface VoiceTtsStartMessage {

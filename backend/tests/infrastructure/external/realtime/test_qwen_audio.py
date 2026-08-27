@@ -62,26 +62,34 @@ class RecordingObserver:
     def __init__(self) -> None:
         """Start with nothing observed."""
         self.calls: list[tuple[str, Any]] = []
+        # Recorded apart from calls so the existing assertions on wording stay readable;
+        # only the tests about pairing an utterance with its reply look at these.
+        self.turn_ids: list[tuple[str, str | None]] = []
 
-    async def heard(self, text: str) -> None:
+    async def heard(self, text: str, turn_id: str | None = None) -> None:
         """Record the user's transcript."""
         self.calls.append(("heard", text))
+        self.turn_ids.append(("heard", turn_id))
 
     async def user_started_speaking(self) -> None:
         """Record that the vendor detected user speech."""
         self.calls.append(("user_started_speaking", None))
 
-    async def spoke(self, text: str) -> None:
+    async def spoke(self, text: str, turn_id: str | None = None) -> None:
         """Record the assistant's own words."""
         self.calls.append(("spoke", text))
+        self.turn_ids.append(("spoke", turn_id))
 
     async def audio(self, data: bytes) -> None:
         """Record one decoded audio chunk."""
         self.calls.append(("audio", data))
 
-    async def tool_requested(self, call_id: str, name: str, arguments: dict[str, Any]) -> None:
+    async def tool_requested(
+        self, call_id: str, name: str, arguments: dict[str, Any], turn_id: str | None = None
+    ) -> None:
         """Record a tool call request."""
         self.calls.append(("tool", (call_id, name, arguments)))
+        self.turn_ids.append(("tool", turn_id))
 
     async def turn_completed(self) -> None:
         """Record that one reply on a continuous stream finished normally."""
@@ -1381,6 +1389,104 @@ def test_a_reused_session_does_not_inherit_the_previous_reply_s_playback_estimat
         assert second.kinds() == ["user_started_speaking", "failed"]
 
     asyncio.run(scenario())
+
+
+def test_a_reply_and_its_late_transcript_report_the_same_utterance_id() -> None:
+    """Captured from a real call: the vendor stamps the user's audio with an item id and
+    puts it on the transcript, which routinely lands after the reply it belongs to has
+    already started streaming. Reporting that id on both sides is what lets the client
+    pair them without guessing from arrival order.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("input_audio_buffer.speech_started", item_id="item_user_1"),
+            _event("input_audio_buffer.committed", item_id="item_user_1"),
+            _event("response.created"),
+            _event("response.audio_transcript.delta", delta="明天"),
+            # The real ordering: the transcript arrives mid-reply, not before it.
+            _event(
+                "conversation.item.input_audio_transcription.completed",
+                item_id="item_user_1",
+                transcript="明天我要看电影。",
+            ),
+            _event("response.audio_transcript.done", transcript="明天看电影，具体几点去？"),
+            _event("response.done"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+
+        assert observer.turn_ids == [
+            ("spoke", "item_user_1"),
+            ("heard", "item_user_1"),
+            ("spoke", "item_user_1"),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_a_late_transcript_reports_its_own_utterance_not_the_one_now_running() -> None:
+    """A transcript carries its own item_id, so one that arrives after the user has
+    already started the next utterance still names the turn it actually transcribes.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("input_audio_buffer.speech_started", item_id="item_user_1"),
+            _event("input_audio_buffer.committed", item_id="item_user_1"),
+            _event("response.created"),
+            _event("response.audio_transcript.done", transcript="第一条回复"),
+            _event("response.done"),
+            # The next utterance is already under way when turn 1's transcript lands.
+            _event("input_audio_buffer.speech_started", item_id="item_user_2"),
+            _event(
+                "conversation.item.input_audio_transcription.completed",
+                item_id="item_user_1",
+                transcript="第一句话",
+            ),
+            _event("error", error={"message": "stream ended"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+
+        assert observer.turn_ids == [("spoke", "item_user_1"), ("heard", "item_user_1")]
+        assert observer.calls[-2] == ("heard", "第一句话")
+
+    asyncio.run(scenario())
+
+
+def test_a_tool_call_names_the_utterance_it_is_answering() -> None:
+    """A tool call happens before this reply has said anything, so the id has to come
+    from the session rather than from whatever the previous reply left behind -- a
+    question raised by the tool would otherwise be filed under the previous turn.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("input_audio_buffer.speech_started", item_id="item_user_1"),
+            _event("input_audio_buffer.committed", item_id="item_user_1"),
+            _event("response.created"),
+            _event("response.audio_transcript.done", transcript="第一条回复"),
+            _event("response.done"),
+            _event("input_audio_buffer.speech_started", item_id="item_user_2"),
+            _event("input_audio_buffer.committed", item_id="item_user_2"),
+            _event("response.created"),
+            _event(
+                "response.function_call_arguments.done",
+                call_id="call_1",
+                name="schedule_create",
+                arguments="{}",
+            ),
+            _event("error", error={"message": "stream ended"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+
+        assert ("tool", "item_user_2") in observer.turn_ids
 
 
 def test_continuous_pump_reports_tool_calls_and_a_bad_one_ends_the_stream() -> None:

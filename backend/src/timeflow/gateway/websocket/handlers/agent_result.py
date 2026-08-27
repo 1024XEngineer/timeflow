@@ -76,6 +76,7 @@ class WebSocketResultSink:
                 transcript=transcript.text,
                 language=transcript.language,
                 duration_ms=transcript.duration_ms,
+                turn_id=transcript.turn_id,
             ),
         )
         await self._send(stream.session_id, message.type, message.model_dump())
@@ -90,6 +91,7 @@ class WebSocketResultSink:
                 reply_id=reply.reply_id,
                 speech_text=reply.speech_text,
                 done=reply.done,
+                turn_id=reply.turn_id,
             ),
         )
         await self._send(stream.session_id, message.type, message.model_dump())
@@ -123,6 +125,7 @@ class WebSocketResultSink:
                 speech_text=question.speech_text,
                 required_response=question.required_response,
                 candidates=list(question.candidates),
+                turn_id=question.turn_id,
             ),
         )
         await self._send(stream.session_id, message.type, message.model_dump())

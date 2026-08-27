@@ -74,12 +74,16 @@ export class AssistantContinuousConversationService implements AssistantApplicat
   private soundLevel: number | null = null;
   /** 本次开麦以来的问答历史，追加不覆盖；startTurn() 清空，跟 replyText 各管各的
    * ——replyText 是当前这一轮的气泡内容，turns 是完整历史。气泡列表由 turns 推导
-   * （每轮一条用户句 + 一条助手句）。连续模式一次 voice.stream.start 不带
-   * request_id，服务端回显的 request_id 恒为空，所以轮次只能按到达顺序排：
-   * 每个 voice.asr.completed 追加一轮，随后的 reply/question 写进当前这轮。
-   * 后端（realtime 在 speech_started 打断、composed 在 VAD 打断）都保证上一轮
-   * 回复在下一轮转写前落地，顺序天然正确；turns 推导的意义在于让"追问"和它
-   * 的流式回复落在同一轮同一个气泡里，而不是用 request_id 做跨轮关联。 */
+   * （每轮一条用户句 + 一条助手句）。
+   *
+   * 轮次归属优先看消息带的 turn_id：realtime 后端把 vendor 给这段用户语音的
+   * item_id 同时贴在转写和回答它的 reply/question 上，两半谁先到都能按同一个 id
+   * 找回同一轮。这很重要——实测 vendor 的转写经常晚于它对应的回复到达，甚至晚于
+   * response.done。
+   *
+   * 没有 turn_id 时（composed 后端拿不到 vendor 的 id）退回按到达顺序归属：每个
+   * voice.asr.completed 追加一轮，随后的 reply/question 写进当前这轮。这套只在
+   * "一轮的两半挨着到"时成立，两轮的回复都赶在任何一条转写之前完成就会配错人。 */
   private turns: ConversationTurnRecord[] = [];
   /** 当前是否正在流式输出一条回复（voice.dialogue.reply done=false 起、
    * done=true 止）。连续模式同一时刻最多只有一条回复在流，所以一个布尔就够；
@@ -456,24 +460,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         this.armIdleTimer();
         const transcript = message.payload.transcript.trim();
         if (transcript.length > 0) {
-          const last = this.turns[this.turns.length - 1];
-          if (last !== undefined && last.transcript === '' && last.replyText !== null) {
-            // 上一条回复先于它的转写到达，开过占位轮：现在把转写补进同一轮。
-            this.turns = this.turns.map((turn, i) =>
-              i === this.turns.length - 1 ? { ...turn, transcript } : turn,
-            );
-          } else {
-            this.turns = [
-              ...this.turns,
-              {
-                id: message.request_id ?? `turn-${this.turns.length}`,
-                replyText: null,
-                transcript,
-              },
-            ];
-            // 新一轮等着它自己的回复。
-            this.lastTurnReplyDone = false;
-          }
+          this.writeTurnTranscript(message.payload.turn_id ?? null, message.request_id, transcript);
         }
         this.notifyListeners();
         return;
@@ -500,7 +487,13 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         // 追问本身就是这轮回复的文字：后续 voice.dialogue.reply 的流式文字还会
         // 继续写进同一轮。这里不再单独生成一个 question_id 气泡——否则同一句
         // 追问会以两个气泡重复出现（改前实测）。
-        this.writeTurnReply(message.request_id, null, message.payload.speech_text, false);
+        this.writeTurnReply(
+          message.payload.turn_id ?? null,
+          message.request_id,
+          null,
+          message.payload.speech_text,
+          false,
+        );
         this.setState({
           conversationId: message.conversation_id,
           phase: 'asking',
@@ -511,6 +504,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         this.replyText = message.payload.speech_text;
         this.replyStreaming = !message.payload.done;
         this.writeTurnReply(
+          message.payload.turn_id ?? null,
           message.request_id,
           message.payload.reply_id,
           message.payload.speech_text,
@@ -731,6 +725,39 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     return this.connection;
   }
 
+  /** 把一句转写写进它所属的轮次。
+   * 后端给了 turn_id 就按 id 认（realtime：vendor 给这段用户语音的 item_id，回答它
+   * 的 reply 带的是同一个），一句转写无论多晚到达都能找回自己那一轮。
+   * 没有 turn_id（composed 后端）时退回原来那套按到达顺序的归属。 */
+  private writeTurnTranscript(
+    turnId: string | null,
+    requestId: string | undefined,
+    transcript: string,
+  ): void {
+    if (turnId !== null) {
+      this.turns = upsertTurn(this.turns, turnId, (turn) => ({ ...turn, transcript }), {
+        id: turnId,
+        replyText: null,
+        transcript,
+      });
+      return;
+    }
+    const last = this.turns[this.turns.length - 1];
+    if (last !== undefined && last.transcript === '' && last.replyText !== null) {
+      // 上一条回复先于它的转写到达，开过占位轮：现在把转写补进同一轮。
+      this.turns = this.turns.map((turn, i) =>
+        i === this.turns.length - 1 ? { ...turn, transcript } : turn,
+      );
+      return;
+    }
+    this.turns = [
+      ...this.turns,
+      { id: requestId ?? `turn-${this.turns.length}`, replyText: null, transcript },
+    ];
+    // 新一轮等着它自己的回复。
+    this.lastTurnReplyDone = false;
+  }
+
   /** 把一条助手消息（回复/追问）写进它所属的轮次。连续模式没有 per-turn
    * request_id，回复只能按到达顺序归属到"当前轮"（最后一条）：
    * - 正常：最后一条轮次的回复还没完成，直接写进去（done 驱动波形）。
@@ -750,11 +777,22 @@ export class AssistantContinuousConversationService implements AssistantApplicat
    * request_id，就能按它认轮次。voice.dialogue.question 没有 reply_id，传 null
    * 即可，占位轮逻辑照常。 */
   private writeTurnReply(
+    turnId: string | null,
     requestId: string | undefined,
     replyId: string | null,
     replyText: string,
     done: boolean,
   ): void {
+    if (turnId !== null) {
+      this.turns = upsertTurn(this.turns, turnId, (turn) => ({ ...turn, replyText }), {
+        id: turnId,
+        replyText,
+        transcript: '',
+      });
+      this.lastTurnReplyDone = done;
+      this.lastReplyId = replyId;
+      return;
+    }
     if (requestId !== undefined) {
       const found = this.turns.findIndex((turn) => turn.id === requestId);
       if (found >= 0) {
@@ -801,4 +839,20 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       listener(this.state);
     }
   }
+}
+
+/** 按 id 找到那一轮就地更新，找不到就用 fallback 追加一条新的。
+ * turn_id 到齐之前，一轮的两半（转写和回复）谁先到都可能——先到的那半建轮次，
+ * 后到的那半按同一个 id 找回来填进去，跟到达顺序无关。 */
+function upsertTurn(
+  turns: readonly ConversationTurnRecord[],
+  turnId: string,
+  update: (turn: ConversationTurnRecord) => ConversationTurnRecord,
+  fallback: ConversationTurnRecord,
+): ConversationTurnRecord[] {
+  const found = turns.findIndex((turn) => turn.id === turnId);
+  if (found >= 0) {
+    return turns.map((turn, index) => (index === found ? update(turn) : turn));
+  }
+  return [...turns, fallback];
 }

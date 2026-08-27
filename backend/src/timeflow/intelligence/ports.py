@@ -66,6 +66,11 @@ class Transcript:
     text: str
     language: str
     duration_ms: int
+    # Which stretch of user speech this transcribes, when the producer can say. Carried
+    # so the client can pair it with the reply that answers it instead of guessing from
+    # arrival order -- the realtime vendor routinely sends a transcript after the reply
+    # it belongs to has already started. None from producers with no such id.
+    turn_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +80,8 @@ class ReplyText:
     reply_id: str
     speech_text: str
     done: bool = False
+    # Which stretch of user speech this answers; see Transcript.turn_id.
+    turn_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +93,8 @@ class DialogueQuestion:
     speech_text: str
     required_response: str | None = None
     candidates: tuple[dict[str, Any], ...] = ()
+    # Which stretch of user speech this asks about; see Transcript.turn_id.
+    turn_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

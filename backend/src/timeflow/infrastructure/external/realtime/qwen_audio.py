@@ -59,24 +59,26 @@ class Transport(Protocol):
 class Observer(Protocol):
     """Where this adapter reports what the model says; restated, never imported."""
 
-    async def heard(self, text: str) -> None:
-        """The model reported what the user said."""
+    async def heard(self, text: str, turn_id: str | None = None) -> None:
+        """The model reported what the user said, and which input item it transcribes."""
         ...
 
     async def user_started_speaking(self) -> None:
         """The vendor detected user speech, including a barge-in."""
         ...
 
-    async def spoke(self, text: str) -> None:
-        """The model reported the words it is saying."""
+    async def spoke(self, text: str, turn_id: str | None = None) -> None:
+        """The model reported the words it is saying, and which input item they answer."""
         ...
 
     async def audio(self, data: bytes) -> None:
         """One chunk of the model's own speech, decoded to raw bytes."""
         ...
 
-    async def tool_requested(self, call_id: str, name: str, arguments: dict[str, Any]) -> None:
-        """The model asked for a tool to run."""
+    async def tool_requested(
+        self, call_id: str, name: str, arguments: dict[str, Any], turn_id: str | None = None
+    ) -> None:
+        """The model asked for a tool to run, as part of answering one utterance."""
         ...
 
     async def turn_completed(self) -> None:
@@ -217,6 +219,13 @@ class QwenAudioSession:
         # arrive in between: a one-event allowance is spent on that response.done and
         # never reaches the error it was meant for.
         self._cancel_pending = False
+        # The vendor's own id for the stretch of user speech the current reply answers.
+        # It rides on speech_started and input_audio_buffer.committed, and the vendor
+        # stamps the matching transcript with it too -- which is what makes pairing a
+        # reply with the words that prompted it exact instead of positional. The
+        # transcript routinely arrives after the reply it belongs to has already
+        # started, so arrival order cannot do this job.
+        self._input_item_id: str | None = None
 
     async def configure(self, instructions: str, tools: list[dict[str, Any]]) -> None:
         """Set the session up before any audio; turn_detection only takes effect here."""
@@ -455,6 +464,7 @@ class QwenAudioSession:
             kind = event.get("type")
 
             if kind == "input_audio_buffer.speech_started":
+                self._input_item_id = _item_id(event) or self._input_item_id
                 self._speech_started_at = self._clock()
                 self._expecting_response = True
                 # A real barge-in even once generation has finished: the phone can still
@@ -485,16 +495,23 @@ class QwenAudioSession:
                 self._reply_bytes = 0
                 self._response_started_at = self._clock()
                 self._first_audio_at = None
+            elif kind == "input_audio_buffer.committed":
+                # Sent immediately before the response.created that answers it, so this
+                # is the closest reading of "which utterance the next reply is for".
+                self._input_item_id = _item_id(event) or self._input_item_id
             elif kind == "conversation.item.input_audio_transcription.completed":
-                await observer.heard(str(event.get("transcript", "")))
+                # Its own item_id, not the tracked one: a transcript that arrives late
+                # still says which utterance it belongs to, even if the user has since
+                # started another.
+                await observer.heard(str(event.get("transcript", "")), _item_id(event))
             elif kind == "response.audio_transcript.delta" and not suppressed:
                 spoken += str(event.get("delta", ""))
-                await observer.spoke(spoken)
+                await observer.spoke(spoken, self._input_item_id)
             elif kind == "response.audio_transcript.done" and not suppressed:
                 final = str(event.get("transcript", ""))
                 if final and final != spoken:
                     spoken = final
-                    await observer.spoke(spoken)
+                    await observer.spoke(spoken, self._input_item_id)
             elif kind == "response.audio.delta" and not suppressed:
                 decoded = _decode_audio(event.get("delta"))
                 if decoded:
@@ -507,7 +524,10 @@ class QwenAudioSession:
                 if requested is None:
                     await observer.failed("realtime session sent an unusable tool call")
                     return
-                await observer.tool_requested(**requested)
+                # Named here rather than left to spoke(): a tool call happens before any
+                # wording exists for this reply, so a question it raises would otherwise
+                # be stamped with the previous turn's id -- worse than carrying none.
+                await observer.tool_requested(**requested, turn_id=self._input_item_id)
             elif kind == "response.done":
                 usage = _parse_usage(event)
                 if usage is not None:
@@ -619,6 +639,12 @@ def _tool_request(event: dict[str, Any]) -> dict[str, Any] | None:
         if isinstance(parsed, dict):
             arguments = parsed
     return {"call_id": call_id, "name": name, "arguments": arguments}
+
+
+def _item_id(event: dict[str, Any]) -> str | None:
+    """Lift the vendor's conversation item id out of an event, when it carries one."""
+    item_id = event.get("item_id")
+    return item_id if isinstance(item_id, str) and item_id else None
 
 
 def _error_message(event: dict[str, Any]) -> str:

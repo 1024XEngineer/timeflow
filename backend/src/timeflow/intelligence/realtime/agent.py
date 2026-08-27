@@ -376,6 +376,10 @@ class _Turn:
         # phone is playing -- the model finishes generating well before playback ends.
         self._last_audio_id: str | None = None
         self._reply_id: str | None = None
+        # The vendor's id for the utterance the current reply answers, set by spoke().
+        # Not reset between replies: a question asked from a tool call happens before
+        # any wording has been spoken for that reply, and must still name its turn.
+        self._turn_id: str | None = None
         self._spoken = ""
         self._purpose = REPLY_PURPOSE
         self._input_bytes = 0
@@ -399,7 +403,7 @@ class _Turn:
         """Occupy ASR while the vendor is hearing the user, including barge-ins."""
         self._telemetry.set_session_stage(self._stream.session_id, "asr")
 
-    async def heard(self, text: str) -> None:
+    async def heard(self, text: str, turn_id: str | None = None) -> None:
         """Push what the user was heard to say."""
         if not text:
             logger.info("realtime model returned an empty transcript")
@@ -417,14 +421,19 @@ class _Turn:
                 text=text,
                 language=ASSUMED_LANGUAGE,
                 duration_ms=self._input_bytes // _INPUT_BYTES_PER_MS,
+                turn_id=turn_id,
             ),
             self._stream,
         )
         self._telemetry.set_session_stage(self._stream.session_id, "llm")
         self._input_bytes = 0
 
-    async def spoke(self, text: str) -> None:
+    async def spoke(self, text: str, turn_id: str | None = None) -> None:
         """Push the reply's wording so far, and keep it for the audio's opening message."""
+        # Kept for the closing done=true this reply gets in _finish_reply, and for any
+        # question it asks along the way: both have to name the same utterance the
+        # streaming updates did, or the client cannot tell they are one turn.
+        self._turn_id = turn_id
         if self._reply_id is None:
             self._reply_id = self._reply_id_factory()
             logger.info(
@@ -436,7 +445,7 @@ class _Turn:
             )
         self._spoken = text
         await self._result_sink.deliver_reply_text(
-            ReplyText(reply_id=self._reply_id, speech_text=text), self._stream
+            ReplyText(reply_id=self._reply_id, speech_text=text, turn_id=turn_id), self._stream
         )
 
     async def audio(self, data: bytes) -> None:
@@ -447,13 +456,19 @@ class _Turn:
             self._speaking = asyncio.create_task(self._speak())
         await self._audio.put(data)
 
-    async def tool_requested(self, call_id: str, name: str, arguments: dict[str, Any]) -> None:
+    async def tool_requested(
+        self, call_id: str, name: str, arguments: dict[str, Any], turn_id: str | None = None
+    ) -> None:
         """Run the tool, tell the client what came of it, and let the model continue.
 
         The client needs the data to display and the model needs it to say anything true
         about it, so both are answered from the one call.
         """
         self._tool_called = True
+        # Before _ask() below can need it: a question raised here is the first thing this
+        # turn says, so nothing else has named the turn yet.
+        if turn_id is not None:
+            self._turn_id = turn_id
         if self._tools is None:
             logger.warning(
                 "realtime model asked for a tool while none are registered",
@@ -525,6 +540,7 @@ class _Turn:
                 speech_text=str(question["speech_text"]),
                 required_response=question["required_response"],
                 candidates=question["candidates"],
+                turn_id=self._turn_id,
             ),
             self._stream,
         )
@@ -594,7 +610,12 @@ class _Turn:
         if self._spoken:
             assert self._reply_id is not None
             await self._result_sink.deliver_reply_text(
-                ReplyText(reply_id=self._reply_id, speech_text=self._spoken, done=True),
+                ReplyText(
+                    reply_id=self._reply_id,
+                    speech_text=self._spoken,
+                    done=True,
+                    turn_id=self._turn_id,
+                ),
                 self._stream,
             )
             # The model sometimes says goodbye without remembering to call

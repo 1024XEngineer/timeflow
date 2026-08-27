@@ -15,6 +15,8 @@ class VoiceDialogueReplyPayload(BaseModel):
     reply_id: str
     speech_text: str
     done: bool = False
+    # Which stretch of user speech this answers; see VoiceAsrCompletedPayload.turn_id.
+    turn_id: str | None = None
 
 
 class VoiceDialogueReply(BaseModel):
@@ -34,6 +36,8 @@ class VoiceDialogueQuestionPayload(BaseModel):
     speech_text: str
     required_response: str | None = None
     candidates: list[dict[str, Any]] = []
+    # Which stretch of user speech this asks about; see VoiceAsrCompletedPayload.turn_id.
+    turn_id: str | None = None
 
 
 class VoiceDialogueQuestion(BaseModel):
