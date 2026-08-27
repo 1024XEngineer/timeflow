@@ -1053,6 +1053,36 @@ describe('AssistantConversationService', () => {
     expect(deps.playback.stop).toHaveBeenCalledTimes(1);
   });
 
+  it('shows a clarifying question as the reply bubble, even though TTS plays it independently', async () => {
+    // 用户报告：问"有什么"能看到气泡，问"删除某一个"（触发确认类追问）
+    // 听得见语音但看不见气泡，也点不了。voice.dialogue.question 之前只写
+    // state.speechText，气泡 UI（AssistantVoiceOverlay）只读 replyText——
+    // 两个完全独立的字段，追问从来没被接进气泡显示逻辑。这跟打断/连续按
+    // 没有关系，是这条消息类型本身漏了这一步。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    await completeStreamStart(fake, service.startTurn());
+    const turnId = fake.sent.filter((message) => message.type === 'voice.stream.start')[0]
+      .request_id;
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: turnId,
+      payload: {
+        candidates: [],
+        question_id: 'q_1',
+        question_kind: 'confirmation',
+        speech_text: '确认要删除这条日程吗？',
+      },
+      type: 'voice.dialogue.question',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getReplyText()).toBe('确认要删除这条日程吗？');
+    expect(service.getState()).toMatchObject({ phase: 'asking' });
+  });
+
   it("drops a stale dialogue.question from a previous turn so it cannot hijack the new turn's phase", async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });

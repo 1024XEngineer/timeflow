@@ -365,6 +365,10 @@ export class AssistantConversationService implements AssistantApplicationPort {
         if (!this.isCurrentTurn(message.request_id)) {
           return;
         }
+        // 追问也要写进 replyText：气泡 UI 只读这个字段，state.speechText 只是
+        // phase 内部携带的文案，不接气泡——之前只写 speechText，语音照常播
+        // （走 voice.tts.start，跟这个无关），但追问永远不会显示成气泡。
+        this.replyText = message.payload.speech_text;
         this.setState({
           conversationId: message.conversation_id,
           phase: 'asking',
