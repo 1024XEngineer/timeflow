@@ -255,6 +255,65 @@ describe('AssistantContinuousConversationService', () => {
     ]);
   });
 
+  it('does not leave a second copy of a reply that started before its transcript', async () => {
+    // 后端日志实测：vendor 的 transcription.completed 是在回复开始之后才发的，有时
+    // 甚至晚于 response.done。也就是说"回复先于转写到达"根本不是异常分支，而是每
+    // 通电话第一轮的常态。回复的头几个分片落进 turns 为空时的兜底列表、剩下的分片
+    // 落进转写开的那一轮，同一句话就变成两个气泡——而且兜底列表永远渲染在最后、
+    // 整通电话都不会消失（用户描述的"有一条一直存在"）。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: false, reply_id: 'reply_1', speech_text: '电影' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 500, language: 'zh', transcript: '明天我将会去看电影。' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '电影几点开始?' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getMessages()).toEqual([
+      { id: 'turn-0:user', role: 'user', text: '明天我将会去看电影。' },
+      { id: 'turn-0:assistant', role: 'assistant', text: '电影几点开始?' },
+    ]);
+  });
+
+  it('lets a whole reply that beat its transcript still collect that transcript', async () => {
+    // 同一件事的另一半时序：整条回复（含 done=true）都在转写之前到达。回复开的占位
+    // 轮必须能被随后到达的转写补上，而不是各自成为一条孤立的消息。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '电影几点开始?' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 500, language: 'zh', transcript: '明天我将会去看电影。' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getTurns()).toEqual([
+      { id: 'turn-0', replyText: '电影几点开始?', transcript: '明天我将会去看电影。' },
+    ]);
+  });
+
   it('keeps a streaming assistant reply pending until it is done', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
@@ -268,7 +327,7 @@ describe('AssistantContinuousConversationService', () => {
     } as AssistantServerMessage);
     await flushAsync();
     expect(service.getMessages()).toEqual([
-      { id: 'reply_1', pending: true, role: 'assistant', text: '明天' },
+      { id: 'turn-0:assistant', pending: true, role: 'assistant', text: '明天' },
     ]);
 
     fake.emitMessage({
@@ -278,7 +337,7 @@ describe('AssistantContinuousConversationService', () => {
     } as AssistantServerMessage);
     await flushAsync();
     expect(service.getMessages()).toEqual([
-      { id: 'reply_1', role: 'assistant', text: '明天下午三点' },
+      { id: 'turn-0:assistant', role: 'assistant', text: '明天下午三点' },
     ]);
   });
 
@@ -699,7 +758,9 @@ describe('AssistantContinuousConversationService', () => {
     await flushAsync();
 
     expect(service.getReplyText()).toBe('好的');
-    expect(service.getMessages()).toEqual([{ id: 'reply_1', role: 'assistant', text: '好的' }]);
+    expect(service.getMessages()).toEqual([
+      { id: 'turn-0:assistant', role: 'assistant', text: '好的' },
+    ]);
   });
 
   it('ignores a reply that arrives before any transcript with blank speech text', async () => {
@@ -718,10 +779,10 @@ describe('AssistantContinuousConversationService', () => {
     expect(service.getMessages()).toEqual([]);
   });
 
-  it('records a clarifying question as an orphan bubble when it arrives before any transcript', async () => {
-    // voice.dialogue.question 跟 voice.dialogue.reply 一样，正常流程不会先于
-    // 任何 transcript 到达，但要是真的发生了，得挂到零散气泡列表兜底，而不是
-    // 丢掉。同一个 question_id 再来一次要原地更新，不能变成两条气泡。
+  it('opens a turn for a clarifying question that arrives before any transcript', async () => {
+    // voice.dialogue.question 跟 voice.dialogue.reply 一样会先于转写到达，得开一个
+    // 占位轮挂上去，等转写到了补进同一轮，而不是丢掉。同一个 question_id 再来一次
+    // 要原地更新，不能变成两条气泡。
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
     const service = createService(deps);
@@ -740,7 +801,7 @@ describe('AssistantContinuousConversationService', () => {
     await flushAsync();
 
     expect(service.getMessages()).toEqual([
-      { id: 'q_1', role: 'assistant', text: '你是想订哪一天的会议室？' },
+      { id: 'turn-0:assistant', role: 'assistant', text: '你是想订哪一天的会议室？' },
     ]);
 
     fake.emitMessage({
@@ -756,7 +817,11 @@ describe('AssistantContinuousConversationService', () => {
     await flushAsync();
 
     expect(service.getMessages()).toEqual([
-      { id: 'q_1', role: 'assistant', text: '你是想订哪一天的会议室，上午还是下午？' },
+      {
+        id: 'turn-0:assistant',
+        role: 'assistant',
+        text: '你是想订哪一天的会议室，上午还是下午？',
+      },
     ]);
   });
 

@@ -81,9 +81,6 @@ export class AssistantContinuousConversationService implements AssistantApplicat
    * 回复在下一轮转写前落地，顺序天然正确；turns 推导的意义在于让"追问"和它
    * 的流式回复落在同一轮同一个气泡里，而不是用 request_id 做跨轮关联。 */
   private turns: ConversationTurnRecord[] = [];
-  /** 回复/追问先于任何 transcript 到达（正常流程不会发生）时挂在这里的零散助手句，
-   * getMessages() 里接在 turns 推导结果后面，避免乱序把内容丢掉。 */
-  private orphanMessages: VoiceChatMessage[] = [];
   /** 当前是否正在流式输出一条回复（voice.dialogue.reply done=false 起、
    * done=true 止）。连续模式同一时刻最多只有一条回复在流，所以一个布尔就够；
    * 展示层据此给最后一条助手气泡加波形。composed 代理打断回复时只发
@@ -183,11 +180,12 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       if (turn.transcript.length > 0) {
         messages.push({ id: `${turn.id}:user`, role: 'user', text: turn.transcript });
       }
-      if (turn.replyText !== null && turn.replyText.length > 0) {
+      // trim 后判空：流式回复的第一条分片可能只有空白（vendor 先起了 response、
+      // 字还没吐出来），渲染出来就是一个空气泡。
+      if (turn.replyText !== null && turn.replyText.trim().length > 0) {
         messages.push({ id: `${turn.id}:assistant`, role: 'assistant', text: turn.replyText });
       }
     }
-    messages.push(...this.orphanMessages);
     if (this.replyStreaming) {
       for (let index = messages.length - 1; index >= 0; index -= 1) {
         if (messages[index].role === 'assistant') {
@@ -213,7 +211,6 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       this.replyText = null;
       this.soundLevel = null;
       this.turns = [];
-      this.orphanMessages = [];
       this.replyStreaming = false;
       this.lastTurnReplyDone = false;
       this.lastReplyId = null;
@@ -503,11 +500,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         // 追问本身就是这轮回复的文字：后续 voice.dialogue.reply 的流式文字还会
         // 继续写进同一轮。这里不再单独生成一个 question_id 气泡——否则同一句
         // 追问会以两个气泡重复出现（改前实测）。
-        if (this.turns.length === 0) {
-          this.upsertOrphanQuestion(message.payload.question_id, message.payload.speech_text);
-        } else {
-          this.writeTurnReply(message.request_id, null, message.payload.speech_text, false);
-        }
+        this.writeTurnReply(message.request_id, null, message.payload.speech_text, false);
         this.setState({
           conversationId: message.conversation_id,
           phase: 'asking',
@@ -517,18 +510,12 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       case 'voice.dialogue.reply': {
         this.replyText = message.payload.speech_text;
         this.replyStreaming = !message.payload.done;
-        if (this.turns.length === 0) {
-          // 回复先于任何 transcript 到达（正常流程不会发生）：没有轮次可写，
-          // 挂到零散气泡列表兜底。
-          this.upsertOrphanReply(message.payload.reply_id, message.payload.speech_text);
-        } else {
-          this.writeTurnReply(
-            message.request_id,
-            message.payload.reply_id,
-            message.payload.speech_text,
-            message.payload.done,
-          );
-        }
+        this.writeTurnReply(
+          message.request_id,
+          message.payload.reply_id,
+          message.payload.speech_text,
+          message.payload.done,
+        );
         this.notifyListeners();
         return;
       }
@@ -747,24 +734,27 @@ export class AssistantContinuousConversationService implements AssistantApplicat
   /** 把一条助手消息（回复/追问）写进它所属的轮次。连续模式没有 per-turn
    * request_id，回复只能按到达顺序归属到"当前轮"（最后一条）：
    * - 正常：最后一条轮次的回复还没完成，直接写进去（done 驱动波形）。
-   * - 上一轮已回复完成、又来一条新回复：说明它属于"还没到的新一轮"（转写
-   *   晚到或被 VAD 跳过）。必须开一个占位轮挂上去，等它的 asr 到了再补
-   *   转写——否则会覆盖上一条已完成的回复（改前实测：上一条回复被后一条
-   *   覆盖成一样的内容）。除非新消息的 reply_id 跟刚收尾那条完全一样：那
-   *   说明这不是新一轮，是同一条回复的迟到/重复投递，直接丢弃，不开占位
-   *   轮——到达顺序是唯一依据时挡不住这种情况，reply_id 相等能挡住。
+   * - 一条轮次都还没有，或者上一轮已回复完成又来了新回复：这条属于"转写还没到
+   *   的一轮"，开一个占位轮挂上去，等它的 asr 到了再由 voice.asr.completed 补
+   *   进同一轮。不开占位轮的话，前者会让这句话没有落脚点，后者会覆盖上一条已
+   *   完成的回复（改前实测：上一条回复被后一条覆盖成一样的内容）。除非新消息的
+   *   reply_id 跟刚收尾那条完全一样：那说明这不是新一轮，是同一条回复的迟到/
+   *   重复投递，直接丢弃——到达顺序是唯一依据时挡不住这种情况，reply_id 相等
+   *   能挡住。
+   * "一条轮次都还没有"不是异常分支，是每通电话第一轮的常态：后端日志实测 vendor
+   * 的 transcription.completed 就是在回复开始之后才发的，有时甚至晚于
+   * response.done。这里原来是把这种回复挂进一个单独的零散列表，那个列表永远渲染
+   * 在最后、也永远不会被随后到达的转写认领，于是同一句话既出现在它该在的轮次里、
+   * 又有一条挂在对话最底下整通电话不消失（实测复现）。
    * request_id 分支只为向前兼容：万一后端将来给连续模式的每条消息带上独立
-   * request_id，就能按它认轮次。voice.dialogue.question 没有 reply_id，传
-   * null 即可，不影响它原有的占位轮逻辑。 */
+   * request_id，就能按它认轮次。voice.dialogue.question 没有 reply_id，传 null
+   * 即可，占位轮逻辑照常。 */
   private writeTurnReply(
     requestId: string | undefined,
     replyId: string | null,
     replyText: string,
     done: boolean,
   ): void {
-    if (this.turns.length === 0) {
-      return;
-    }
     if (requestId !== undefined) {
       const found = this.turns.findIndex((turn) => turn.id === requestId);
       if (found >= 0) {
@@ -774,7 +764,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         return;
       }
     }
-    if (this.lastTurnReplyDone) {
+    if (this.turns.length === 0 || this.lastTurnReplyDone) {
       if (replyId !== null && replyId === this.lastReplyId) {
         return;
       }
@@ -787,41 +777,6 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     this.turns = this.turns.map((turn, i) => (i === index ? { ...turn, replyText } : turn));
     this.lastTurnReplyDone = done;
     this.lastReplyId = replyId;
-  }
-
-  /** 零散助手句（回复先于任何转写到达时的兜底）：同 id 覆盖；波形由
-   * getMessages() 里的 replyStreaming 统一决定，这里不再单独带 pending。 */
-  private upsertOrphanReply(id: string, speechText: string): void {
-    const text = speechText.trim();
-    if (text.length === 0) {
-      return;
-    }
-    const next: VoiceChatMessage = { id, role: 'assistant', text };
-    const existing = this.orphanMessages.findIndex((message) => message.id === id);
-    if (existing >= 0) {
-      this.orphanMessages = this.orphanMessages.map((message, index) =>
-        index === existing ? next : message,
-      );
-      return;
-    }
-    this.orphanMessages = [...this.orphanMessages, next];
-  }
-
-  /** 追问先于任何转写到达时的兜底：有轮次可写时一律走 writeTurnReply，
-   * 这里只在 turns 为空时把内容挂到零散列表。 */
-  private upsertOrphanQuestion(questionId: string, speechText: string): void {
-    if (this.turns.length > 0 || speechText.trim().length === 0) {
-      return;
-    }
-    const text = speechText.trim();
-    const existing = this.orphanMessages.findIndex((message) => message.id === questionId);
-    if (existing >= 0) {
-      this.orphanMessages = this.orphanMessages.map((message, index) =>
-        index === existing ? { ...message, text } : message,
-      );
-      return;
-    }
-    this.orphanMessages = [...this.orphanMessages, { id: questionId, role: 'assistant', text }];
   }
 
   private armIdleTimer(): void {
