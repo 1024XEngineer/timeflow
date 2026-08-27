@@ -407,6 +407,13 @@ class _Turn:
         """Push the reply's wording so far, and keep it for the audio's opening message."""
         if self._reply_id is None:
             self._reply_id = self._reply_id_factory()
+            logger.info(
+                "realtime turn started a new spoken reply: reply_id=%s account_id=%s "
+                "conversation_id=%s",
+                self._reply_id,
+                self._stream.account_id,
+                self._stream.conversation_id,
+            )
         self._spoken = text
         await self._result_sink.deliver_reply_text(
             ReplyText(reply_id=self._reply_id, speech_text=text), self._stream

@@ -195,6 +195,13 @@ class QwenAudioSession:
         self._speech_started_at: float | None = None
         self._response_started_at: float | None = None
         self._first_audio_at: float | None = None
+        # Diagnostic only (see response.created below): counts every response.create we
+        # send against every response.created the vendor reports back, to catch the
+        # vendor starting a response we never asked for -- e.g. one it generates on its
+        # own once a tool result lands, on top of the response.create send_tool_result's
+        # respond=True already queued.
+        self._responses_sent = 0
+        self._responses_created = 0
 
     async def configure(self, instructions: str, tools: list[dict[str, Any]]) -> None:
         """Set the session up before any audio; turn_detection only takes effect here."""
@@ -237,6 +244,7 @@ class QwenAudioSession:
         await self._send({"type": "input_audio_buffer.commit"})
         await self._send({"type": "response.create"})
         self._open_responses += 1
+        self._responses_sent += 1
 
     async def send_tool_result(self, call_id: str, output: str, *, respond: bool = True) -> None:
         """Write a tool's output back and mark whether it should be followed by a reply.
@@ -341,6 +349,14 @@ class QwenAudioSession:
             if kind == "conversation.item.input_audio_transcription.completed":
                 await observer.heard(str(event.get("transcript", "")))
             elif kind == "response.created":
+                self._responses_created += 1
+                if self._responses_created > self._responses_sent:
+                    logger.warning(
+                        "realtime vendor started a response we never requested "
+                        "(push_to_talk): sent=%s created=%s",
+                        self._responses_sent,
+                        self._responses_created,
+                    )
                 self._response_started_at = self._clock()
             elif kind == "response.audio_transcript.delta":
                 spoken += str(event.get("delta", ""))
@@ -380,8 +396,10 @@ class QwenAudioSession:
                 self._followup_requested = False
                 self._followup_suppressed = False
                 if wants_followup:
+                    logger.info("realtime sending follow-up response.create after a tool result")
                     await self._send({"type": "response.create"})
                     self._open_responses += 1
+                    self._responses_sent += 1
                     continue
                 if self._open_responses <= 0:
                     return
@@ -417,6 +435,14 @@ class QwenAudioSession:
                     await self.cancel_response()
                     await observer.interrupted()
             elif kind == "response.created":
+                self._responses_created += 1
+                if self._responses_created > self._responses_sent:
+                    logger.warning(
+                        "realtime vendor started a response we never requested "
+                        "(continuous): sent=%s created=%s",
+                        self._responses_sent,
+                        self._responses_created,
+                    )
                 self._responding = True
                 suppressed = False
                 spoken = ""
@@ -470,8 +496,10 @@ class QwenAudioSession:
                 self._followup_requested = False
                 self._followup_suppressed = False
                 if wants_followup:
+                    logger.info("realtime sending follow-up response.create after a tool result")
                     await self._send({"type": "response.create"})
                     self._open_responses += 1
+                    self._responses_sent += 1
                     continue
                 self._responding = False
                 # The bytes just sent still take this long to actually play out on the
