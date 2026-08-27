@@ -47,7 +47,7 @@ class Settings:
     openai_api_key: str = ""
     openai_model: str = "qwen-flash"
     openai_timeout_seconds: float = 30.0
-    schedule_category_timeout_seconds: float = 5.0
+    schedule_category_timeout_seconds: float = 10.0
     agent_max_tool_rounds: int = 4
     aliyun_tts_ws_url: str = ""
     aliyun_tts_api_key: str = ""
@@ -74,6 +74,9 @@ class Settings:
     aliyun_audio_max_history_turns_push_to_talk: int = 5
     # "1" = the end-to-end realtime model; "2" = the LLM+ASR+TTS conversation pipeline.
     voice_agent_mode: str = "1"
+    otel_service_name: str = "timeflow-backend"
+    otel_exporter_otlp_endpoint: str = ""
+    otel_traces_enabled: bool = False
 
     @classmethod
     def from_environment(cls, env_file: Path | str = ".env") -> "Settings":
@@ -93,7 +96,7 @@ class Settings:
 
         openai_timeout_seconds = float(environ.get("TIMEFLOW_OPENAI_TIMEOUT_SECONDS", "30.0"))
         schedule_category_timeout_seconds = float(
-            environ.get("TIMEFLOW_SCHEDULE_CATEGORY_TIMEOUT_SECONDS", "5.0")
+            environ.get("TIMEFLOW_SCHEDULE_CATEGORY_TIMEOUT_SECONDS", "10.0")
         )
         agent_max_tool_rounds = int(environ.get("TIMEFLOW_AGENT_MAX_TOOL_ROUNDS", "4"))
         tencent_map_timeout_seconds = float(
@@ -124,6 +127,15 @@ class Settings:
         aliyun_audio_max_history_turns_push_to_talk = int(
             environ.get("TIMEFLOW_ALIYUN_AUDIO_MAX_HISTORY_TURNS_PUSH_TO_TALK", "5")
         )
+        otel_exporter_otlp_endpoint = (
+            environ.get("TIMEFLOW_OTEL_EXPORTER_OTLP_ENDPOINT")
+            or environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+        ).strip()
+        explicit_traces = environ.get("TIMEFLOW_OTEL_TRACES_ENABLED")
+        if explicit_traces is None:
+            otel_traces_enabled = bool(otel_exporter_otlp_endpoint)
+        else:
+            otel_traces_enabled = explicit_traces.strip().lower() in {"1", "true", "yes"}
 
         if not -1.0 <= aliyun_asr_vad_threshold <= 1.0:
             raise ValueError("TIMEFLOW_ALIYUN_ASR_VAD_THRESHOLD must be between -1 and 1")
@@ -237,6 +249,10 @@ class Settings:
                 aliyun_audio_max_history_turns_push_to_talk
             ),
             voice_agent_mode=voice_agent_mode,
+            otel_service_name=environ.get("TIMEFLOW_OTEL_SERVICE_NAME", "timeflow-backend").strip()
+            or "timeflow-backend",
+            otel_exporter_otlp_endpoint=otel_exporter_otlp_endpoint,
+            otel_traces_enabled=otel_traces_enabled,
         )
 
     def aliyun_audio_is_configured(self) -> bool:

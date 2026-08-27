@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type {
   DeviceCapabilityPort,
@@ -109,6 +110,7 @@ export function PermissionOnboardingScreen({
   readonly onContinue: () => void;
   readonly onPermissionsUpdated: () => void;
 }) {
+  const insets = useSafeAreaInsets();
   const [status, setStatus] = useState<DeviceCapabilityStatus | null>(null);
   const [busyPermission, setBusyPermission] = useState<DevicePermission | null>(null);
   const [busyOemKind, setBusyOemKind] = useState<'autostart' | 'backgroundPopup' | null>(null);
@@ -179,8 +181,12 @@ export function PermissionOnboardingScreen({
   });
 
   return (
-    <View style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.content}>
+    <View style={[styles.screen, { paddingTop: insets.top }]} testID="permission-onboarding-screen">
+      <ScrollView
+        contentContainerStyle={styles.content}
+        style={styles.scroll}
+        testID="permission-list-scroll"
+      >
         <Text style={styles.title}>需要这些权限</Text>
         <Text style={styles.subtitle}>
           点击每一项单独开启；通知是必需的，其余可以先跳过，用到对应功能时会再提醒你。
@@ -198,7 +204,7 @@ export function PermissionOnboardingScreen({
               style={[styles.row, highlighted ? styles.rowHighlighted : null]}
               testID={`permission-row-${row.permission}`}
             >
-              <View style={styles.rowText}>
+              <View style={styles.rowText} testID={`permission-copy-${row.permission}`}>
                 <View style={styles.rowTitleLine}>
                   <Text style={styles.rowTitle}>{row.title}</Text>
                   {row.required ? <Text style={styles.requiredBadge}>必需</Text> : null}
@@ -272,7 +278,10 @@ export function PermissionOnboardingScreen({
           </>
         ) : null}
       </ScrollView>
-      <View style={styles.footer}>
+      <View
+        style={[styles.footer, { paddingBottom: Math.max(spacing.lg, insets.bottom + spacing.md) }]}
+        testID="permission-footer"
+      >
         {!notificationsGranted ? (
           <Text style={styles.footerHint}>需要先开启通知权限才能进入</Text>
         ) : null}
@@ -298,6 +307,7 @@ const styles = StyleSheet.create({
   actionButton: {
     backgroundColor: colors.text,
     borderRadius: 8,
+    flexShrink: 0,
     minWidth: 84,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
@@ -389,9 +399,11 @@ const styles = StyleSheet.create({
   rowText: {
     flex: 1,
     gap: spacing.xs,
+    minWidth: 0,
   },
   rowTitle: {
     color: colors.text,
+    flexShrink: 1,
     fontSize: 15,
     fontWeight: '700',
   },
@@ -412,6 +424,9 @@ const styles = StyleSheet.create({
   },
   screen: {
     backgroundColor: colors.background,
+    flex: 1,
+  },
+  scroll: {
     flex: 1,
   },
   subtitle: {

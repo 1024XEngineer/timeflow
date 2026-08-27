@@ -111,10 +111,20 @@ describe('VoiceCallScreen', () => {
   });
 
   it('puts a live waveform inside the orb while listening or speaking', () => {
-    renderScreen({ status: 'listening' });
+    // listening 但实际有声（麦克风电平抬起来）时显示声纹条。
+    renderScreen({ soundLevel: -20, status: 'listening' });
     expect(screen.getByTestId('voice-call-orb-wave')).toBeTruthy();
-    renderScreen({ status: 'speaking', title: '正在回复' });
+    renderScreen({ soundLevel: -30, status: 'speaking', title: '正在回复' });
     expect(screen.getAllByTestId('voice-call-orb-wave').length).toBeGreaterThan(0);
+  });
+
+  it('hides the orb waveform in silence so dots do not keep bouncing after an answer', () => {
+    // 连续模式麦克风常开：回答结束、环境安静时声纹条必须消失，只留呼吸缩放，
+    // 否则看起来像回答结束后还有一串点点点一直跳。
+    renderScreen({ status: 'listening' });
+    expect(screen.queryByTestId('voice-call-orb-wave')).toBeNull();
+    renderScreen({ soundLevel: -60, status: 'listening' });
+    expect(screen.queryByTestId('voice-call-orb-wave')).toBeNull();
   });
 
   it('raises the center bars when the microphone is loud', () => {

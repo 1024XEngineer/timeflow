@@ -1,0 +1,370 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {
+        "type": "grafana-sentry-datasource",
+        "uid": "sentry"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 2,
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-sentry-datasource",
+            "uid": "sentry"
+          },
+          "environments": [],
+          "eventsStatsGroups": [
+            "manufacturer"
+          ],
+          "eventsStatsLimit": 10,
+          "eventsStatsQuery": "message:\"timeflow.reminder.delivery\"",
+          "eventsStatsYAxis": [
+            "count()"
+          ],
+          "projectIds": [
+            "4511970683846656"
+          ],
+          "queryType": "eventsStats",
+          "refId": "A"
+        }
+      ],
+      "title": "提醒投递（按品牌）",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-sentry-datasource",
+        "uid": "sentry"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 3,
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-sentry-datasource",
+            "uid": "sentry"
+          },
+          "environments": [],
+          "eventsStatsGroups": [
+            "outcome"
+          ],
+          "eventsStatsLimit": 10,
+          "eventsStatsQuery": "message:\"timeflow.reminder.delivery\"",
+          "eventsStatsYAxis": [
+            "count()"
+          ],
+          "projectIds": [
+            "4511970683846656"
+          ],
+          "queryType": "eventsStats",
+          "refId": "A"
+        }
+      ],
+      "title": "提醒投递（按结果）",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-sentry-datasource",
+        "uid": "sentry"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 9
+      },
+      "id": 4,
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-sentry-datasource",
+            "uid": "sentry"
+          },
+          "environments": [],
+          "eventsStatsGroups": [
+            "manufacturer"
+          ],
+          "eventsStatsLimit": 10,
+          "eventsStatsQuery": "message:\"timeflow.reminder.delivery\" outcome:native_declined",
+          "eventsStatsYAxis": [
+            "count()"
+          ],
+          "projectIds": [
+            "4511970683846656"
+          ],
+          "queryType": "eventsStats",
+          "refId": "A"
+        }
+      ],
+      "title": "native 被拒（按品牌）",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-sentry-datasource",
+        "uid": "sentry"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 9
+      },
+      "id": 5,
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-sentry-datasource",
+            "uid": "sentry"
+          },
+          "environments": [],
+          "eventsStatsGroups": [
+            "manufacturer"
+          ],
+          "eventsStatsLimit": 10,
+          "eventsStatsQuery": "message:\"timeflow.reminder.delivery\" outcome:js_channel",
+          "eventsStatsYAxis": [
+            "count()"
+          ],
+          "projectIds": [
+            "4511970683846656"
+          ],
+          "queryType": "eventsStats",
+          "refId": "A"
+        }
+      ],
+      "title": "降到 JS 通道（按品牌）",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-sentry-datasource",
+        "uid": "sentry"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "lineWidth": 1,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 9
+      },
+      "id": 6,
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-sentry-datasource",
+            "uid": "sentry"
+          },
+          "environments": [],
+          "eventsStatsGroups": [
+            "manufacturer"
+          ],
+          "eventsStatsLimit": 10,
+          "eventsStatsQuery": "message:\"timeflow.reminder.permission_blocked\"",
+          "eventsStatsYAxis": [
+            "count()"
+          ],
+          "projectIds": [
+            "4511970683846656"
+          ],
+          "queryType": "eventsStats",
+          "refId": "A"
+        }
+      ],
+      "title": "权限被挡（按品牌）",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-sentry-datasource",
+        "uid": "sentry"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 17
+      },
+      "id": 7,
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-sentry-datasource",
+            "uid": "sentry"
+          },
+          "environments": [],
+          "issuesLimit": 50,
+          "issuesQuery": "timeflow.reminder",
+          "issuesSort": "freq",
+          "projectIds": [
+            "4511970683846656"
+          ],
+          "queryType": "issues",
+          "refId": "A"
+        }
+      ],
+      "title": "提醒相关 Issue",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-sentry-datasource",
+        "uid": "sentry"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      },
+      "id": 8,
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-sentry-datasource",
+            "uid": "sentry"
+          },
+          "environments": [],
+          "eventsFields": [
+            "id",
+            "timestamp",
+            "title",
+            "level",
+            "tags[manufacturer]",
+            "tags[outcome]",
+            "tags[channel]",
+            "tags[deferred_until_foreground]"
+          ],
+          "eventsLimit": 100,
+          "eventsQuery": "message:\"timeflow.reminder.delivery\" OR message:\"timeflow.reminder.permission_blocked\"",
+          "eventsSort": "last_seen()",
+          "eventsSortDirection": "desc",
+          "projectIds": [
+            "4511970683846656"
+          ],
+          "queryType": "events",
+          "refId": "A"
+        }
+      ],
+      "title": "最近客户端事件",
+      "type": "table"
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "tags": [
+    "timeflow",
+    "sentry"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Timeflow 客户端",
+  "uid": "timeflow-client-sentry",
+  "weekStart": ""
+}

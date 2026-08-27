@@ -5,6 +5,8 @@ import contextlib
 from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
+from timeflow.gateway.observability.websocket import set_online_sessions
+
 
 class Sendable(Protocol):
     """The subset of a WebSocket this registry writes to."""
@@ -45,6 +47,7 @@ class ConnectionManager:
             pass
         if account_id is not None:
             self._session_accounts[session_id] = account_id
+        set_online_sessions(len(self._connections))
 
     def unregister(self, session_id: str, connection: Sendable) -> None:
         """Drop the session, but only if this exact connection still owns it.
@@ -57,6 +60,7 @@ class ConnectionManager:
             self._session_accounts.pop(session_id, None)
             self._locks.pop(session_id, None)
             self._audio_locks.pop(session_id, None)
+            set_online_sessions(len(self._connections))
 
     async def send_to_account(self, account_id: str, message: dict[str, Any]) -> int:
         """Send one message to every live session belonging to an account."""

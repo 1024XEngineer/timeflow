@@ -3,13 +3,26 @@
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
+from opentelemetry import context as otel_context
+from opentelemetry.trace import SpanKind, Status, StatusCode, get_tracer, set_span_in_context
 
 from timeflow.gateway.auth_diagnostics import log_sanitized_exception
+from timeflow.gateway.observability.sessions import (
+    NOOP_SESSION_TRACKER,
+    VoiceSessionTracker,
+)
+from timeflow.gateway.observability.websocket import (
+    dec_ws_connections,
+    inc_ws_connections,
+    record_ws_disconnect,
+    record_ws_handshake,
+)
 from timeflow.gateway.websocket.connection_manager import ConnectionManager
 from timeflow.gateway.websocket.envelope import (
     ERROR_AUDIO_INVALID,
@@ -72,37 +85,90 @@ async def run_websocket_session(
     handshake_timeout_seconds: float,
     binary_handler: BinaryFrameHandler | None = None,
     disconnect_handler: DisconnectHandler | None = None,
+    agent_mode: str = "realtime",
+    sessions: VoiceSessionTracker | None = None,
 ) -> None:
     """Serve one WebSocket connection from accept to close."""
+    occupancy = sessions if sessions is not None else NOOP_SESSION_TRACKER
+    started = time.perf_counter()
     if not limiter.try_acquire():
+        record_ws_handshake("rejected_limiter", time.perf_counter() - started)
+        record_ws_disconnect("limiter")
         await websocket.close(code=1013)
         return
 
     session: SessionContext | None = None
+    accepted = False
+    disconnect_reason = "error"
+    span = get_tracer("timeflow.gateway").start_span(
+        "ws.session",
+        kind=SpanKind.SERVER,
+        attributes={"http.route": "/ws"},
+    )
+    token = otel_context.attach(set_span_in_context(span))
     try:
         await websocket.accept()
-        session = await _authenticate(websocket, handshake, handshake_timeout_seconds)
+        accepted = True
+        inc_ws_connections()
+        session, handshake_result = await _authenticate(
+            websocket, handshake, handshake_timeout_seconds
+        )
+        handshake_duration = time.perf_counter() - started
         if session is None:
+            record_ws_handshake(handshake_result, handshake_duration)
+            record_ws_disconnect(handshake_result)
+            span.set_attribute("timeflow.ws.handshake", handshake_result)
+            span.set_attribute("timeflow.ws.disconnect_reason", handshake_result)
+            if handshake_result != "disconnect":
+                span.set_status(Status(StatusCode.ERROR))
             return
+        record_ws_handshake("success", handshake_duration)
+        span.set_attribute("timeflow.ws.handshake", "success")
+        span.set_attribute("timeflow.voice_mode", session.voice_mode)
+    except Exception:
+        if accepted and session is None:
+            record_ws_handshake("internal", time.perf_counter() - started)
+            record_ws_disconnect("internal")
+            span.set_attribute("timeflow.ws.handshake", "internal")
+            span.set_status(Status(StatusCode.ERROR))
+        raise
     finally:
         limiter.release()
+        if session is None and accepted:
+            dec_ws_connections()
+        if session is None:
+            span.end()
+            otel_context.detach(token)
 
-    connections.register(session.session_id, websocket, session.account_id)
+    assert session is not None
+    occupancy.attach(session.session_id, voice_mode=session.voice_mode, agent_mode=agent_mode)
     try:
+        connections.register(session.session_id, websocket, session.account_id)
         await _serve_frames(websocket, session, router, connections, binary_handler)
+        disconnect_reason = "client"
     except WebSocketDisconnect:
-        pass
+        disconnect_reason = "client"
+    except Exception:
+        disconnect_reason = "error"
+        span.set_status(Status(StatusCode.ERROR))
+        raise
     finally:
         try:
             if disconnect_handler is not None:
                 await disconnect_handler(session)
         finally:
             connections.unregister(session.session_id, websocket)
+            occupancy.finish(session.session_id, server_error=disconnect_reason == "error")
+            record_ws_disconnect(disconnect_reason)
+            span.set_attribute("timeflow.ws.disconnect_reason", disconnect_reason)
+            span.end()
+            otel_context.detach(token)
+            dec_ws_connections()
 
 
 async def _authenticate(
     websocket: WebSocket, handshake: SessionHandshake, timeout_seconds: float
-) -> SessionContext | None:
+) -> tuple[SessionContext | None, str]:
     """在超时内接收首帧，并在握手失败时关闭连接。"""
     try:
         async with asyncio.timeout(timeout_seconds):
@@ -114,7 +180,7 @@ async def _authenticate(
                     )
                 )
                 await websocket.close(code=1008)
-                return None
+                return None, "malformed"
             # JWT 校验是同步端口，放入线程避免阻塞事件循环并让超时可取消等待。
             try:
                 result = await asyncio.to_thread(
@@ -140,19 +206,19 @@ async def _authenticate(
                     )
                 )
                 await websocket.close(code=1008)
-                return None
+                return None, "internal"
     except TimeoutError:
         # 客户端未按时发送首帧时直接关闭，不构造无法关联请求的响应。
         await websocket.close(code=1008)
-        return None
+        return None, "timeout"
     except WebSocketDisconnect:
-        return None
+        return None, "disconnect"
 
     await websocket.send_json(result.reply)
     if result.session is None:
         await websocket.close(code=1008)
-        return None
-    return result.session
+        return None, "auth_failed"
+    return result.session, "success"
 
 
 async def _serve_frames(

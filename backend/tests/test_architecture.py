@@ -25,6 +25,8 @@ FORBIDDEN_IMPORTS: dict[str, frozenset[str]] = {
             "pydantic",
             *VENDOR_MODEL_SDKS,
             *TRANSPORT_LIBRARIES,
+            "prometheus_client",
+            "opentelemetry",
             "timeflow.data",
             "timeflow.gateway",
             "timeflow.infrastructure",
@@ -74,6 +76,8 @@ FORBIDDEN_IMPORTS: dict[str, frozenset[str]] = {
             "timeflow.data",
             "timeflow.gateway",
             "timeflow.infrastructure",
+            "prometheus_client",
+            "opentelemetry",
         }
     ),
 }

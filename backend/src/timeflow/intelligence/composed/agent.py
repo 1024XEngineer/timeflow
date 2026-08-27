@@ -52,6 +52,7 @@ from timeflow.intelligence.speech.pipeline import (
     SpeechPipeline,
 )
 from timeflow.intelligence.speech.tts import TtsPort
+from timeflow.intelligence.telemetry import NOOP_TELEMETRY, TurnSpan, VoiceTelemetry
 
 from .delivery import ScheduleResultDelivery
 from .session import ComposedSession, ConversationState, TurnState
@@ -95,6 +96,8 @@ class _TurnTiming:
     llm_tool_call_ms: float | None = None
     tool_execution_ms: float | None = None
     llm_final_text_ms: float | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
     speech_input_at: float | None = None
     tts_first_audio_at: float | None = None
     tts_completed_at: float | None = None
@@ -184,6 +187,7 @@ class ComposedVoiceAgent:
         reply_id_factory: Callable[[], str] | None = None,
         question_id_factory: Callable[[], str] | None = None,
         message_id_factory: Callable[[], str] | None = None,
+        telemetry: VoiceTelemetry | None = None,
     ) -> None:
         self._asr = asr
         self._agent_factory = agent_factory
@@ -195,6 +199,7 @@ class ComposedVoiceAgent:
         self._reply_id_factory = reply_id_factory or (lambda: f"reply_{uuid4().hex}")
         self._question_id_factory = question_id_factory or (lambda: f"question_{uuid4().hex}")
         self._message_id_factory = message_id_factory or (lambda: f"msg_{uuid4().hex}")
+        self._telemetry = telemetry if telemetry is not None else NOOP_TELEMETRY
         self._sessions: dict[str, ComposedSession] = {}
         self._sessions_lock = asyncio.Lock()
 
@@ -241,6 +246,7 @@ class ComposedVoiceAgent:
             session.active_audio_stream = None
         if session.voice_mode == "continuous" and audio_id is not None and audio_stream is not None:
             await self._result_sink.deliver_canceled(AudioCanceled(audio_id), audio_stream)
+        self._telemetry.set_session_stage(session_id, "waiting_user")
         await self._cancel(turn)
 
     async def close_session(self, session_id: str) -> None:
@@ -294,8 +300,14 @@ class ComposedVoiceAgent:
             await self._run_continuous(session, generation, chunks, stream)
             return
         timing = _TurnTiming(self._monotonic())
+        turn_span = self._telemetry.start_turn(
+            agent_mode="composed",
+            voice_mode=stream.voice_mode,
+            account_id=stream.account_id,
+        )
         status = "failed"
         try:
+            self._telemetry.set_session_stage(stream.session_id, "asr")
             transcript, audio_bytes = await self._transcribe(chunks, timing)
             timing.audio_duration_ms = self._duration_ms(stream, audio_bytes)
             status = await self._act_on_transcript(session, generation, transcript, stream, timing)
@@ -308,7 +320,7 @@ class ComposedVoiceAgent:
                 extra={"session_id": stream.session_id, "stream_id": stream.stream_id},
             )
         finally:
-            self._log_timing(stream, status, timing)
+            self._log_timing(stream, status, timing, turn_span)
 
     async def _run_continuous(
         self,
@@ -356,6 +368,7 @@ class ComposedVoiceAgent:
                     elif isinstance(event, SpeechStarted):
                         if speech_started_at is None:
                             speech_started_at = self._monotonic()
+                        self._telemetry.set_session_stage(stream.session_id, "asr")
                         barge_in.set()
                     elif isinstance(event, SpeechStopped):
                         if speech_stopped_at is None:
@@ -375,6 +388,7 @@ class ComposedVoiceAgent:
                 event, speech_started_at, speech_stopped_at, asr_completed_at = item
                 text = event.text.strip()
                 if not text:
+                    self._telemetry.set_session_stage(stream.session_id, "waiting_user")
                     continue
                 timing = _TurnTiming(
                     speech_started_at if speech_started_at is not None else asr_completed_at
@@ -387,6 +401,11 @@ class ComposedVoiceAgent:
                 timing.asr_first_final_at = asr_completed_at
                 timing.asr_completed_at = asr_completed_at
                 barge_in.clear()
+                turn_span = self._telemetry.start_turn(
+                    agent_mode="composed",
+                    voice_mode=stream.voice_mode,
+                    account_id=stream.account_id,
+                )
                 turn_task = asyncio.create_task(
                     self._act_on_transcript(session, generation, text, stream, timing)
                 )
@@ -399,8 +418,8 @@ class ComposedVoiceAgent:
                 if turn_task in done:
                     barge_task.cancel()
                     await asyncio.gather(barge_task, return_exceptions=True)
-                    status = await turn_task
-                    self._log_timing(stream, status, timing)
+                    status = await self._finish_continuous_turn(turn_task, stream)
+                    self._log_timing(stream, status, timing, turn_span)
                 else:
                     async with session.lock:
                         audio_id = session.active_audio_id
@@ -411,12 +430,12 @@ class ComposedVoiceAgent:
                         )
                         turn_task.cancel()
                         await asyncio.gather(turn_task, return_exceptions=True)
-                        self._log_timing(stream, "interrupted", timing)
+                        self._log_timing(stream, "interrupted", timing, turn_span)
                     else:
                         barge_task.cancel()
                         await asyncio.gather(barge_task, return_exceptions=True)
-                        status = await turn_task
-                        self._log_timing(stream, status, timing)
+                        status = await self._finish_continuous_turn(turn_task, stream)
+                        self._log_timing(stream, status, timing, turn_span)
         finally:
             if not pump_task.done():
                 pump_task.cancel()
@@ -426,6 +445,26 @@ class ComposedVoiceAgent:
 
         if pump_error is not None:
             raise pump_error
+
+    async def _finish_continuous_turn(
+        self, turn_task: asyncio.Task[str], stream: AudioStreamInfo
+    ) -> str:
+        """Return a turn status without tearing down the still-open microphone stream.
+
+        LLM or delivery failures on one utterance must not retire the audio sink:
+        the client keeps sending PCM until voice.stream.end, and dropping the
+        active stream surfaces as "Audio frames require voice.stream.start first".
+        """
+        try:
+            return await turn_task
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "composed continuous turn failed",
+                extra={"session_id": stream.session_id, "stream_id": stream.stream_id},
+            )
+            return "failed"
 
     async def _act_on_transcript(
         self,
@@ -437,15 +476,18 @@ class ComposedVoiceAgent:
     ) -> str:
         """Deliver one finalized utterance, run its Agent turn, and speak the result."""
         if not transcript.strip():
+            self._telemetry.set_session_stage(stream.session_id, "waiting_user")
             return "empty_transcript"
         if not await self._is_current(session, generation):
             return "stale"
+        self._telemetry.set_session_stage(stream.session_id, "asr")
         await self._result_sink.deliver_transcript(
             Transcript(transcript, "zh", timing.audio_duration_ms or 0),
             stream,
         )
         if not await self._is_current(session, generation):
             return "stale"
+        self._telemetry.set_session_stage(stream.session_id, "llm")
         conversation = await self._conversation(
             session,
             generation,
@@ -455,7 +497,9 @@ class ComposedVoiceAgent:
         events = conversation.agent.run_turn(
             conversation.conversation,
             transcript,
-            turn_context=AgentTurnContext(self._clock(), session.timezone),
+            turn_context=AgentTurnContext(
+                self._clock(), session.timezone, session_id=stream.session_id
+            ),
         )
         await self._deliver_agent_events(session, generation, events, stream, timing)
         return "completed"
@@ -551,6 +595,9 @@ class ComposedVoiceAgent:
                         timing.llm_tool_call_ms = event.timing.llm_tool_call_ms
                         timing.tool_execution_ms = event.timing.tool_execution_ms
                         timing.llm_final_text_ms = event.timing.llm_final_text_ms
+                    if isinstance(event, AgentCompleted) and event.usage is not None:
+                        timing.prompt_tokens = event.usage.prompt_tokens
+                        timing.completion_tokens = event.usage.completion_tokens
                     if isinstance(event, AgentSessionEnd):
                         session_ends = True
                         continue
@@ -683,6 +730,13 @@ class ComposedVoiceAgent:
         speech = SpeechPipeline(self._tts).stream(timed_events())
         queue: asyncio.Queue[bytes | None] | None = None
         delivery: asyncio.Task[None] | None = None
+        # 诊断用：vendor 帧粒度与帧间间隙。用真实单调时钟而非 self._monotonic，避免
+        # 消耗测试注入的 StepClock、打乱 _TurnTiming 的确定性时序。
+        tts_sample_rate_hz = 0
+        chunk_count = 0
+        chunk_bytes = 0
+        max_gap_ms = 0
+        last_chunk_at: float | None = None
         try:
             async for event in speech:
                 if not await self._is_current(session, generation):
@@ -698,6 +752,7 @@ class ComposedVoiceAgent:
                         event.purpose,
                         event.speech_text,
                     )
+                    tts_sample_rate_hz = event.sample_rate_hz
                     async with session.lock:
                         if session.generation != generation:
                             return
@@ -711,11 +766,34 @@ class ComposedVoiceAgent:
                         raise ValueError("Speech audio chunk arrived before start")
                     if delivery is not None and delivery.done():
                         delivery.result()
+                    now = time.monotonic()
+                    if last_chunk_at is not None:
+                        gap_ms = round((now - last_chunk_at) * 1000)
+                        max_gap_ms = max(max_gap_ms, gap_ms)
+                    last_chunk_at = now
+                    chunk_count += 1
+                    chunk_bytes += len(event.data)
                     await queue.put(event.data)
                 elif isinstance(event, SpeechAudioCompleted):
                     if queue is None or delivery is None:
                         raise ValueError("Speech audio completed before start")
                     timing.tts_completed_at = self._monotonic()
+                    if chunk_count:
+                        # SpeechAudioStarted 先于任意 chunk，tts_sample_rate_hz 必非 0。
+                        audio_duration_ms = round(chunk_bytes / (tts_sample_rate_hz * 2 / 1000))
+                        logger.info(
+                            "composed tts frames=%d bytes=%d audio_ms=%d max_gap_ms=%d",
+                            chunk_count,
+                            chunk_bytes,
+                            audio_duration_ms,
+                            max_gap_ms,
+                            extra={
+                                "tts_frame_count": chunk_count,
+                                "tts_frame_bytes": chunk_bytes,
+                                "tts_audio_duration_ms": audio_duration_ms,
+                                "tts_max_gap_ms": max_gap_ms,
+                            },
+                        )
                     await queue.put(None)
                     await delivery
                     async with session.lock:
@@ -752,6 +830,7 @@ class ComposedVoiceAgent:
         stream: AudioStreamInfo,
         status: str,
         timing: _TurnTiming,
+        turn_span: TurnSpan | None = None,
     ) -> None:
         fields = timing.fields(self._monotonic())
         rendered = " ".join(
@@ -766,6 +845,28 @@ class ComposedVoiceAgent:
             rendered,
             extra={"timing_status": status, **fields},
         )
+        if turn_span is None:
+            return
+        for name, value in fields.items():
+            if isinstance(value, (int, float)):
+                turn_span.record_stage(name, float(value))
+        if timing.prompt_tokens is not None and timing.completion_tokens is not None:
+            turn_span.record_llm_usage(
+                prompt_tokens=timing.prompt_tokens,
+                completion_tokens=timing.completion_tokens,
+            )
+        if (
+            timing.llm_tool_call_ms is not None
+            and timing.tool_execution_ms is not None
+            and timing.llm_final_text_ms is not None
+        ):
+            self._telemetry.record_agent_timing(
+                agent_mode="composed",
+                llm_tool_call_ms=timing.llm_tool_call_ms,
+                tool_execution_ms=timing.tool_execution_ms,
+                llm_final_text_ms=timing.llm_final_text_ms,
+            )
+        turn_span.finish(status=status)
 
     @staticmethod
     async def _cancel(turn: TurnState | None) -> None:

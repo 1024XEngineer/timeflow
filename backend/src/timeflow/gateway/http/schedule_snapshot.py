@@ -1,6 +1,7 @@
 """受保护的账号日程全量快照 HTTP 适配器。"""
 
 import logging
+import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Security
@@ -27,6 +28,7 @@ from timeflow.gateway.http.dependencies import (
     AuthenticatedAccount,
     AuthenticatedAccountDependency,
 )
+from timeflow.gateway.observability.http import record_schedule_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -203,11 +205,14 @@ def create_schedule_snapshot_router(
     def get_schedule_snapshot(
         account: Annotated[AuthenticatedAccount, Depends(authenticate_snapshot_account)],
     ) -> JSONResponse:
+        started = time.perf_counter()
         try:
             snapshot = reader.get_account_snapshot(account_id=account.account_id)
             response = _build_response(account.account_id, snapshot)
+            record_schedule_snapshot("success", time.perf_counter() - started, server_error=False)
             return JSONResponse(status_code=200, content=response.model_dump(mode="json"))
         except Exception as error:
+            record_schedule_snapshot("error", time.perf_counter() - started, server_error=True)
             return _internal_error_response(error)
 
     return router

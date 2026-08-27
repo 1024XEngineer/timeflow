@@ -24,6 +24,7 @@ from timeflow.intelligence.conversation.llm import (
     ToolResultMessage,
 )
 from timeflow.intelligence.conversation.tools import ToolRegistry
+from timeflow.intelligence.telemetry import NOOP_TELEMETRY, VoiceTelemetry, tool_result_status
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ SYSTEM_PROMPT = """你是 TimeFlow 时间管理助手，只负责用简短自然
 信息补全：缺信息、要确认、要反问、要让用户选，都调 request_user_input，不要只用文字说；每轮只问一个最关键缺失项，优先问时间或地点。schedule_type（时间/地点）和 schedule_kind（单次/重复）是内部字段，绝不问或提及：提到地点就是地点型、没提就是时间型、没说重复就是单次。speech_text 只放当前这一个问题。
 
 日程操作：
-- 创建：title 写成简洁名词短语（去掉「我/帮我/提醒我/记一下」等开头，不含时间地点），如「明天下午三点开会」→「开会」。用户提到地点（包括「附近地铁站」这类泛泛说法）就调 location_search 找候选，别直接问「是哪个」；搜到多条让用户选、一条直接用、没搜到如实说没找到。没提标题用「新建日程」、开始时间用下一个整点、非全天结束时间往后一小时、全天就当整个自然日；提醒默认 medium（非全天 before_start 提前 15 分钟、全天 at_time 当天 10 点）。
+- 创建：title 写成简洁名词短语（去掉「我/帮我/提醒我/记一下」等开头，不含时间地点），如「明天下午三点开会」→「开会」。用户给了精确地名（如「张江路地铁站」「静安寺」）才调 location_search 找候选，别直接问「是哪个」；搜到多条且候选明显对不上用户表达才让用户选，精确地名直接用最匹配的第一条创建，没搜到如实说没找到。用户说的是「家」「公司」「单位」「学校」「附近」「这里」「那边」这类模糊指代/相对地点时，location_search 搜到的不是他真实的家或公司，绝不直接调 location_search、绝不直接创建，先 request_user_input 自然地问具体位置（「家」→「你家的地址是？」、「公司」→「你公司在哪个位置？」），拿到精确地名再 location_search，别生硬复述「具体是哪个家」这类说法。「到 X 提醒我／到了 X 提醒我」是到达地点提醒：按 location 日程 + arrive_location 提醒直接创建，不需要时间、绝不追问时间，先 location_search 拿坐标再 schedule_create；但 X 是「家」「公司」等模糊指代时，同样先追问具体地点再创建。没提标题用「新建日程」、开始时间用下一个整点、非全天结束时间往后一小时、全天就当整个自然日；提醒默认 medium（非全天 before_start 提前 15 分钟、全天 at_time 当天 10 点）。
 - 查询：用户想了解日程时直接 schedule_query，结果如实汇报——先说几条、再逐条说时间/标题/地点；查不到就说没有。按用户实际说的维度筛选：问了具体时间（今天/明天/本周）才加时间范围；说出具体名称（如「周会」）才按标题查。「有哪些日程/日常/安排」这类列举问法就是查全部日程，这些泛指词不是标题，别拿来当 title 过滤。别用「我帮你查一下」这类空话。修改或删除前也先 schedule_query 确认目标；指代不明或命中多条时，把候选放进 request_user_input 的 candidates，别自己选。
 - 修改：只支持改整条或整个周期系列，不支持只改某一次；别把「改某一次」误执行为改整个系列。没提到的字段保持原值。「改成/改到 X 点」默认改开始时间 start_time（结束时间顺延一小时），用户说「结束时间/几点结束」才改 end_time。
 - 删除：删除前先 request_user_input（confirmation）说清要删的，确认后才 schedule_delete。周期删除按意图定 scope：只删这一次 this_occurrence、这次及以后 this_and_future、整个系列 entire_series。「某一次不参加/跳过/取消这一次」（如「下周一我不参加，其他照旧」）就是删除这一次（this_occurrence），不要改 recurrence_rule。
@@ -85,6 +86,7 @@ class AgentTurnContext:
 
     now: datetime
     timezone: str
+    session_id: str = ""
 
     def system_message(self) -> str:
         """Describe the same instant in UTC and the session's local timezone."""
@@ -212,6 +214,8 @@ class Agent:
         tools: ToolRegistry,
         max_tool_rounds: int = 4,
         monotonic: Callable[[], float] | None = None,
+        *,
+        telemetry: VoiceTelemetry | None = None,
     ) -> None:
         if max_tool_rounds <= 0:
             raise ValueError("max_tool_rounds must be positive")
@@ -219,6 +223,7 @@ class Agent:
         self._tools = tools
         self._max_tool_rounds = max_tool_rounds
         self._monotonic = monotonic or time.monotonic
+        self._telemetry = telemetry if telemetry is not None else NOOP_TELEMETRY
 
     def run_turn(
         self,
@@ -237,6 +242,7 @@ class Agent:
         turn_context: AgentTurnContext | None,
     ) -> AsyncIterator[AgentEvent]:
         self._prepare_turn(conversation, user_text, turn_context)
+        session_id = turn_context.session_id if turn_context is not None else ""
         tool_rounds = 0
         usages: list[LlmUsage] = []
         usage_complete = True
@@ -333,9 +339,11 @@ class Agent:
             tool_rounds += 1
 
             if tool_call.name == "request_user_input":
+                tool_span = self._telemetry.start_tool("request_user_input", agent_mode="composed")
                 try:
                     pending = _pending_question_from_arguments(tool_call.call_id, arguments)
                 except AgentRefusal as refusal:
+                    tool_span.finish(status="failed")
                     conversation.messages.extend(
                         [
                             assistant_message,
@@ -348,6 +356,7 @@ class Agent:
                     continue
                 conversation.messages.append(assistant_message)
                 conversation.pending_question = pending
+                tool_span.finish(status="ok")
                 yield AgentQuestion(
                     pending.question_kind,
                     pending.speech_text,
@@ -356,9 +365,12 @@ class Agent:
                 )
                 return
             if tool_call.name == "end_conversation":
+                tool_span = self._telemetry.start_tool("end_conversation", agent_mode="composed")
                 if arguments:
+                    tool_span.finish(status="error", error_kind="exception")
                     raise AgentToolError("end_conversation arguments must be empty")
                 conversation.messages.append(assistant_message)
+                tool_span.finish(status="ok")
                 if not streamed:
                     for text in text_parts:
                         yield AgentTextDelta(text)
@@ -384,18 +396,28 @@ class Agent:
                 )
                 continue
 
+            tool_span = self._telemetry.start_tool(tool_call.name, agent_mode="composed")
             try:
                 tool = self._tools.get(tool_call.name)
             except KeyError as exc:
+                tool_span.finish(status="error", error_kind="exception")
                 raise AgentToolError(f"Unknown Agent tool: {tool_call.name}") from exc
             exec_started = self._monotonic()
+            if session_id:
+                self._telemetry.set_session_stage(session_id, "tool")
             try:
                 result = await tool.execute(arguments)
             except Exception as exc:
+                tool_span.finish(status="error", error_kind="exception")
                 raise AgentToolError(f"Agent tool execution failed: {tool_call.name}") from exc
+            finally:
+                if session_id:
+                    self._telemetry.set_session_stage(session_id, "llm")
             tool_execution_ms += round((self._monotonic() - exec_started) * 1000, 1)
             if not isinstance(result, str):
+                tool_span.finish(status="error", error_kind="exception")
                 raise AgentToolError(f"Agent tool returned a non-string result: {tool_call.name}")
+            tool_span.finish(status=tool_result_status(result))
 
             conversation.messages.extend(
                 [

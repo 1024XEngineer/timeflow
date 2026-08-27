@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import time
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping
 from enum import Enum
 from typing import Protocol, TypeAlias
@@ -13,6 +14,8 @@ from uuid import uuid4
 
 from websockets.asyncio.client import connect
 
+from timeflow.infrastructure.observability.external import ExternalCall
+from timeflow.infrastructure.observability.metrics import ASR_CONNECT_DURATION, ASR_CONNECTIONS
 from timeflow.infrastructure.settings import Settings
 from timeflow.intelligence.conversation.asr import (
     AsrConnectionError,
@@ -199,6 +202,7 @@ class QwenRealtimeAsr(AsrPort):
         websocket: WebSocketConnection | None = None
         sender: asyncio.Task[None] | None = None
         receive_task: asyncio.Task[str | bytes] | None = None
+        call = ExternalCall("asr", "session")
 
         try:
             websocket = await self._connect()
@@ -245,6 +249,7 @@ class QwenRealtimeAsr(AsrPort):
                 if parsed is ControlEvent.SESSION_FINISHED:
                     session_finished = True
                 elif isinstance(parsed, TranscriptCompleted):
+                    call.mark_first_byte()
                     yield parsed
                     if sender.done():
                         # The audio source is exhausted (session.finish has been sent),
@@ -255,13 +260,23 @@ class QwenRealtimeAsr(AsrPort):
                 elif isinstance(parsed, (TranscriptPreview, SpeechStarted, SpeechStopped)):
                     yield parsed
 
-        except AsrError:
+        except AsrConnectionError as error:
+            call.fail("timeout" if isinstance(error.__cause__, TimeoutError) else "connection")
+            raise
+        except AsrProtocolError:
+            call.fail("protocol")
+            raise
+        except AsrTranscriptionError:
+            call.fail("transcription")
             raise
         except asyncio.CancelledError:
+            call.cancel()
             raise
         except TimeoutError as exc:
+            call.fail("timeout")
             raise AsrConnectionError("Timed out during ASR WebSocket setup") from exc
         except Exception as exc:
+            call.fail("connection")
             raise AsrConnectionError("ASR WebSocket connection failed") from exc
         finally:
             for task in (receive_task, sender):
@@ -272,8 +287,11 @@ class QwenRealtimeAsr(AsrPort):
                 await asyncio.gather(task, return_exceptions=True)
             if websocket is not None:
                 await websocket.close()
+            call.__exit__(None, None, None)
 
     async def _connect(self) -> WebSocketConnection:
+        started = time.perf_counter()
+        status = "ok"
         try:
             return await asyncio.wait_for(
                 self._connector(
@@ -287,11 +305,17 @@ class QwenRealtimeAsr(AsrPort):
                 timeout=self._settings.aliyun_asr_connect_timeout_seconds,
             )
         except TimeoutError as exc:
+            status = "error"
             raise AsrConnectionError("Timed out connecting to ASR provider") from exc
         except AsrError:
+            status = "error"
             raise
         except Exception as exc:
+            status = "error"
             raise AsrConnectionError("Failed to connect to ASR provider") from exc
+        finally:
+            ASR_CONNECTIONS.labels(status).inc()
+            ASR_CONNECT_DURATION.labels(status).observe(time.perf_counter() - started)
 
     def _validate_settings(self) -> None:
         if not self._settings.aliyun_asr_ws_url:

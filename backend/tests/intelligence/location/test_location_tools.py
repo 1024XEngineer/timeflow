@@ -128,6 +128,23 @@ def test_tool_returns_stable_invalid_input(arguments: dict[str, object]) -> None
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("query", ["家", "公司", "学校", "到家", "回公司", "附近", "老地方"])
+def test_tool_refuses_personal_place_references(query: str) -> None:
+    """「家」「公司」这类模糊指代不搜 provider，直接返回需要追问的信号。"""
+
+    async def scenario() -> None:
+        port = SearchPort(tuple(_candidate(index) for index in range(1, 3)))
+        tool = build_location_search_tool(LocationSearchService(port), _context())
+
+        result = json.loads(await tool.execute({"query": query}))
+
+        assert result["status"] == "ambiguous_reference"
+        assert result["candidates"] == []
+        assert port.queries == []  # 拦截在检索之前，provider 根本没被调用
+
+    asyncio.run(scenario())
+
+
 def test_tool_sanitizes_provider_failure() -> None:
     async def scenario() -> None:
         tool = build_location_search_tool(
@@ -227,5 +244,26 @@ def test_lazy_tool_caches_a_successful_prepare() -> None:
         assert json.loads(await tool.execute({"query": "静安"}))["status"] == "ok"
 
         assert port.reverse_calls == 2
+
+    asyncio.run(scenario())
+
+
+def test_lazy_tool_rejects_a_vague_reference_before_prepare() -> None:
+    """「家」这类模糊指代必须在 prepare() 之前短路，绝不能触发反向地理编码。"""
+
+    async def scenario() -> None:
+        port = FlakyReversePort(tuple(_candidate(index) for index in range(1, 2)))
+        # prepare() 第一次必然失败：若模糊指代没提前短路，这里会返回 provider_unavailable
+        # 而不是稳定的 ambiguous_reference，并且已经打了一次 provider。
+        service = LocationSearchService(port)
+        tool = build_lazy_location_search_tool(
+            service, ClientLocation(Coordinate(31.22846, 121.47822, "wgs84"))
+        )
+
+        result = json.loads(await tool.execute({"query": "家"}))
+
+        assert result["status"] == "ambiguous_reference"
+        assert result["candidates"] == []
+        assert port.reverse_calls == 0  # prepare() 根本没被调用
 
     asyncio.run(scenario())

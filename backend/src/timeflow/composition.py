@@ -21,6 +21,7 @@ from timeflow.intelligence.conversation.tools import build_agent_tool_registry
 from timeflow.intelligence.location import ClientLocation, LocationSearchService
 from timeflow.intelligence.ports import ResultSink
 from timeflow.intelligence.schedule_category import LlmScheduleCategoryClassifier
+from timeflow.observability import VOICE_TELEMETRY
 
 
 def build_composed_voice_agent(
@@ -63,6 +64,7 @@ def build_composed_voice_agent(
                 client_location=client_location,
             ),
             max_tool_rounds=settings.agent_max_tool_rounds,
+            telemetry=VOICE_TELEMETRY,
         )
 
     return ComposedVoiceAgent(
@@ -71,6 +73,7 @@ def build_composed_voice_agent(
         QwenAudioTts(settings),
         result_sink,
         location_service=location_service,
+        telemetry=VOICE_TELEMETRY,
     )
 
 

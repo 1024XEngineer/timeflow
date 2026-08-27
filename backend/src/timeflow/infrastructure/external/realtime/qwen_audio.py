@@ -9,6 +9,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from timeflow.infrastructure.observability.external import ExternalCall
+from timeflow.infrastructure.observability.metrics import (
+    REALTIME_CONNECT_DURATION,
+    REALTIME_CONNECTIONS,
+    REALTIME_EVENTS,
+    bound_realtime_event,
+)
+
 logger = logging.getLogger(__name__)
 
 # Our protocol owns turn boundaries in this mode; the model must not also decide when a
@@ -21,6 +29,15 @@ INPUT_SAMPLE_RATE_HZ = 16_000
 OUTPUT_SAMPLE_RATE_HZ = 24_000
 # 16-bit mono at the output rate: bytes of PCM per second of actual playback time.
 _OUTPUT_BYTES_PER_SECOND = OUTPUT_SAMPLE_RATE_HZ * 2
+_REALTIME_EVENT_KINDS = {
+    "conversation.item.input_audio_transcription.completed": "input_transcript",
+    "response.audio_transcript.delta": "output_transcript",
+    "response.audio_transcript.done": "output_transcript",
+    "response.audio.delta": "audio",
+    "response.function_call_arguments.done": "tool",
+    "response.done": "response_done",
+    "error": "error",
+}
 
 
 class Transport(Protocol):
@@ -44,6 +61,10 @@ class Observer(Protocol):
 
     async def heard(self, text: str) -> None:
         """The model reported what the user said."""
+        ...
+
+    async def user_started_speaking(self) -> None:
+        """The vendor detected user speech, including a barge-in."""
         ...
 
     async def spoke(self, text: str) -> None:
@@ -302,10 +323,11 @@ class QwenAudioSession:
 
     async def pump(self, observer: Observer) -> None:
         """Report what the model says until the stream ends or fails."""
-        if self._voice_mode == PUSH_TO_TALK:
-            await self._pump_single_turn(observer)
-        else:
-            await self._pump_continuous(observer)
+        async with ExternalCall("realtime", "pump"):
+            if self._voice_mode == PUSH_TO_TALK:
+                await self._pump_single_turn(observer)
+            else:
+                await self._pump_continuous(observer)
 
     async def _pump_single_turn(self, observer: Observer) -> None:
         """Report the one reply this stream asked for, decoded and renamed."""
@@ -389,6 +411,7 @@ class QwenAudioSession:
                 self._speech_started_at = self._clock()
                 # A real barge-in even once generation has finished: the phone can still
                 # be sounding out audio that was already fully sent (see _playable_until).
+                await observer.user_started_speaking()
                 if not suppressed and (self._responding or self._clock() < self._playable_until):
                     suppressed = True
                     await self.cancel_response()
@@ -482,6 +505,11 @@ class QwenAudioSession:
         if not isinstance(event, dict):
             await observer.failed("realtime session sent a non-object frame")
             return None
+        kind = event.get("type")
+        if isinstance(kind, str):
+            REALTIME_EVENTS.labels(
+                bound_realtime_event(_REALTIME_EVENT_KINDS.get(kind, "other"))
+            ).inc()
         return event
 
 
@@ -576,14 +604,30 @@ class QwenAudioSessionFactory:
         Closes on failure: a socket the caller never receives is one nobody can close.
         """
         connect = self._connect or _default_connect
-        async with asyncio.timeout(self._open_timeout_seconds):
-            transport = await connect(self._config)
-            session = QwenAudioSession(transport, self._config, voice_mode)
-            try:
-                await session.configure(instructions, tools)
-            except BaseException:
-                await session.close()
-                raise
+        started = time.perf_counter()
+        status = "ok"
+        session: QwenAudioSession | None = None
+        try:
+            async with ExternalCall("realtime", "open") as call:
+                async with asyncio.timeout(self._open_timeout_seconds):
+                    transport = await connect(self._config)
+                    session = QwenAudioSession(transport, self._config, voice_mode)
+                    try:
+                        await session.configure(instructions, tools)
+                    except BaseException:
+                        await session.close()
+                        raise
+                call.mark_first_byte()
+        except TimeoutError:
+            status = "error"
+            raise
+        except Exception:
+            status = "error"
+            raise
+        finally:
+            REALTIME_CONNECTIONS.labels(status).inc()
+            REALTIME_CONNECT_DURATION.labels(status).observe(time.perf_counter() - started)
+        assert session is not None
         return session
 
 

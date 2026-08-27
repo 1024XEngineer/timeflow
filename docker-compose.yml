@@ -3,34 +3,50 @@ name: timeflow
 services:
   db:
     image: postgres:16.4-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-timeapp}
       POSTGRES_USER: ${POSTGRES_USER:-timeapp}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-timeapp}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_HOST:-0.0.0.0}:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - timeflow-postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U timeapp -d timeapp"]
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 5s
       timeout: 5s
       retries: 10
 
   api:
+    image: ghcr.io/1024xengineer/timeflow-backend:${TIMEFLOW_API_IMAGE_TAG:-latest}
     build:
       context: ./backend
+    restart: unless-stopped
+    # 根目录 .env 只用于 ${VAR} 插值。不要 env_file 整文件，Grafana / Sentry 密钥不能进 API。
     environment:
       TIMEFLOW_ENVIRONMENT: ${TIMEFLOW_ENVIRONMENT:-development}
       TIMEFLOW_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-timeapp}:${POSTGRES_PASSWORD:-timeapp}@db:5432/${POSTGRES_DB:-timeapp}
       TIMEFLOW_JWT_SECRET: ${TIMEFLOW_JWT_SECRET:?Set TIMEFLOW_JWT_SECRET to at least 32 UTF-8 bytes}
       TIMEFLOW_JWT_ACCESS_TTL_SECONDS: ${TIMEFLOW_JWT_ACCESS_TTL_SECONDS:-2592000}
       TIMEFLOW_CORS_ALLOWED_ORIGINS: ${TIMEFLOW_CORS_ALLOWED_ORIGINS:-http://localhost:8081,http://127.0.0.1:8081}
+      TIMEFLOW_VOICE_AGENT_MODE: ${TIMEFLOW_VOICE_AGENT_MODE:-1}
+      TIMEFLOW_ALIYUN_AUDIO_API_KEY: ${TIMEFLOW_ALIYUN_AUDIO_API_KEY:-}
+      TIMEFLOW_ALIYUN_AUDIO_WORKSPACE_ID: ${TIMEFLOW_ALIYUN_AUDIO_WORKSPACE_ID:-}
+      TIMEFLOW_ALIYUN_AUDIO_MODEL: ${TIMEFLOW_ALIYUN_AUDIO_MODEL:-qwen-audio-3.0-realtime-plus}
+      TIMEFLOW_ALIYUN_AUDIO_REGION: ${TIMEFLOW_ALIYUN_AUDIO_REGION:-cn-beijing}
+      TIMEFLOW_ALIYUN_AUDIO_VOICE: ${TIMEFLOW_ALIYUN_AUDIO_VOICE:-longanqian}
+      TIMEFLOW_OPENAI_BASE_URL: ${TIMEFLOW_OPENAI_BASE_URL:-}
+      TIMEFLOW_OPENAI_API_KEY: ${TIMEFLOW_OPENAI_API_KEY:-}
+      TIMEFLOW_OPENAI_MODEL: ${TIMEFLOW_OPENAI_MODEL:-qwen3.6-flash}
+      TIMEFLOW_TENCENT_MAP_KEY: ${TIMEFLOW_TENCENT_MAP_KEY:-}
+      TIMEFLOW_OTEL_SERVICE_NAME: ${TIMEFLOW_OTEL_SERVICE_NAME:-timeflow-backend}
+      TIMEFLOW_OTEL_EXPORTER_OTLP_ENDPOINT: ${TIMEFLOW_OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
       db:
         condition: service_healthy
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "${API_HOST:-0.0.0.0}:${API_PORT:-8000}:8000"
     command:
       [
         "/bin/sh",
