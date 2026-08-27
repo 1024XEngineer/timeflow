@@ -1317,6 +1317,72 @@ def test_a_response_done_between_the_cancel_and_its_error_does_not_end_the_call(
     asyncio.run(scenario())
 
 
+def test_a_reused_session_does_not_inherit_the_previous_stream_s_expectations() -> None:
+    """A held session serves the next call too, so its per-stream state starts over.
+
+    _expecting_response left true by the call that just ended would wave through the
+    first spontaneous response of the next one -- the duplicate reply this guard exists
+    to catch, slipping past on exactly the turn nobody is watching for it.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            # First call: a reply we were legitimately waiting on, cut short.
+            _event("input_audio_buffer.speech_started"),
+            _event("response.created"),
+            _event("error", error={"message": "stream ended"}),
+            # Second call on the same session: the vendor speaks up unprompted.
+            _event("response.created"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        session = QwenAudioSession(transport, CONFIG, CONTINUOUS)
+
+        await session.pump(RecordingObserver())
+        second = RecordingObserver()
+        await session.pump(second)
+
+        assert second.calls == [("failed", "stream ended")]
+        assert transport.types() == ["response.cancel"]
+
+    asyncio.run(scenario())
+
+
+def test_a_reused_session_does_not_inherit_the_previous_reply_s_playback_estimate() -> None:
+    """The same reset, for the audio a previous call left counted as still playing.
+
+    Within one call, `suppressed` shadows a stale playback estimate; across calls
+    nothing does, and the next call's opening speech_started gets reported as a barge-in
+    on a reply from the call before it -- a voice.tts.canceled the moment a fresh call
+    starts, over audio nobody is hearing.
+    """
+
+    async def scenario() -> None:
+        # First call: speech_started stamps and compares, response.created, first audio,
+        # then response.done estimates 0.5s of playback for the 24000 bytes below. The
+        # second call's speech_started stamps and compares 0.1s later -- inside that
+        # estimate, which is what makes the leak visible.
+        clock_reads = iter([0.0, 0.0, 0.0, 0.0, 0.0, 0.1, 0.1])
+        transport = FakeTransport(
+            _event("input_audio_buffer.speech_started"),
+            _event("response.created"),
+            _event("response.audio.delta", delta=base64.b64encode(b"a" * 24000).decode()),
+            _event("response.done"),
+            _event("error", error={"message": "stream ended"}),
+            # Second call on the same session.
+            _event("input_audio_buffer.speech_started"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        session = QwenAudioSession(transport, CONFIG, CONTINUOUS, clock=lambda: next(clock_reads))
+
+        await session.pump(RecordingObserver())
+        second = RecordingObserver()
+        await session.pump(second)
+
+        assert second.kinds() == ["user_started_speaking", "failed"]
+
+    asyncio.run(scenario())
+
+
 def test_continuous_pump_reports_tool_calls_and_a_bad_one_ends_the_stream() -> None:
     """Continuous mode reports tool calls the same way push-to-talk does."""
 

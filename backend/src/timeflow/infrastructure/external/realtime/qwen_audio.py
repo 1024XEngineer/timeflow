@@ -433,6 +433,18 @@ class QwenAudioSession:
         """
         spoken = ""
         self._responding = False
+        # A held session serves this conversation's next stream too, so everything this
+        # loop reasons about has to start over here rather than carry the last stream's
+        # answers into a call that has heard nothing yet: an expectation left standing
+        # would wave through the first spontaneous response, and a playback estimate
+        # left standing would report the opening speech_started as a barge-in on a reply
+        # from the previous call. Within one stream `suppressed` shadows a stale estimate;
+        # across streams nothing does. A follow-up already asked for and not yet delivered
+        # is the one expectation that legitimately outlives the loop that created it.
+        self._expecting_response = self._followup_requested
+        self._playable_until = 0.0
+        self._reply_bytes = 0
+        self._cancel_pending = False
         # True from the moment we cancel a reply until the next one starts: the vendor
         # may still emit a few queued deltas for the cancelled reply before it catches up.
         suppressed = False
