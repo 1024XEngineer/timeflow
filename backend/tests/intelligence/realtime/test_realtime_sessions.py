@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+import pytest
 
 from timeflow.intelligence.location import ClientLocation, Coordinate
 from timeflow.intelligence.ports import (
@@ -513,5 +516,66 @@ def test_a_tool_call_that_does_not_end_the_conversation_sends_nothing_extra() ->
         ).handle_audio(_chunks(b"a" * 3200), _Stream())
 
         assert "session_end" not in sink.kinds()
+
+    asyncio.run(scenario())
+
+
+def test_a_turn_logs_what_the_user_said_and_what_the_model_asked_a_tool_for(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Both lines have to render their content, which extra= would silently not do.
+
+    This project's log format string never references extra fields, so anything passed
+    that way prints nothing at all -- a trap this module has already fallen into twice
+    (see failed() and usage_reported()). Without these two lines a log shows replies
+    arriving with no way to tell what was said or what got written, which is what turned
+    every past investigation here into guesswork.
+    """
+
+    async def scenario() -> None:
+        tools = StubToolBox(
+            ToolResult(
+                output=json.dumps({"status": "applied"}),
+                outcome={"operation": "create_schedule", "status": "applied", "schedule": {}},
+            )
+        )
+        factory = CountingFactory(
+            [
+                ("heard", ("明天我将会去看电影",)),
+                ("tool_requested", ("call_1", "schedule_create", {"title": "看电影"})),
+            ]
+        )
+
+        with caplog.at_level(logging.INFO, logger="timeflow.intelligence.realtime.agent"):
+            await RealtimeAgent(
+                factory,
+                RecordingSink(),
+                tools_factory=_stub_factory(tools),  # type: ignore[arg-type]
+            ).handle_audio(_chunks(b"a" * 3200), _Stream())
+
+        logged = [record.getMessage() for record in caplog.records]
+        # 中文原样可读，不能被转义成 \uXXXX。
+        assert any("明天我将会去看电影" in line for line in logged)
+        assert any("schedule_create" in line and "看电影" in line for line in logged)
+
+    asyncio.run(scenario())
+
+
+def test_tool_arguments_that_cannot_be_serialized_do_not_crash_the_turn() -> None:
+    """The log line must never be the thing that fails a turn."""
+
+    async def scenario() -> None:
+        tools = StubToolBox(ToolResult(output=json.dumps({"status": "applied"})))
+        factory = CountingFactory(
+            [("tool_requested", ("call_1", "schedule_create", {"when": object()}))]
+        )
+
+        await RealtimeAgent(
+            factory,
+            RecordingSink(),
+            tools_factory=_stub_factory(tools),  # type: ignore[arg-type]
+        ).handle_audio(_chunks(b"a" * 3200), _Stream())
+
+        assert [name for name, _ in tools.calls] == ["schedule_create"]
 
     asyncio.run(scenario())

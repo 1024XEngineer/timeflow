@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import json
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -404,6 +405,13 @@ class _Turn:
             logger.info("realtime model returned an empty transcript")
             self._input_bytes = 0
             return
+        # Logged in full, and interpolated rather than passed via extra= for the reason
+        # failed() states below. Without it a log shows a reply arriving with no
+        # transcript behind it and no way to tell whether the user said nothing, the
+        # vendor dropped the transcription event, or the reply belongs to some other
+        # turn entirely -- every one of those reads the same. Quoted so leading and
+        # trailing whitespace is visible.
+        logger.info("realtime heard the user say: %r", text)
         await self._result_sink.deliver_transcript(
             HeardSpeech(
                 text=text,
@@ -456,6 +464,16 @@ class _Turn:
         occupy_tool = name not in {"end_conversation", "request_user_input"}
         if occupy_tool:
             self._telemetry.set_session_stage(self._stream.session_id, "tool")
+        # Ahead of the call, not folded into the "executed" line below: run() raises on a
+        # failing tool and can sit there on a slow one, and the arguments are exactly what
+        # is wanted in both cases -- a request line with no executed line after it says
+        # which call hung or blew up. Interpolated for the reason failed() states below;
+        # default=str keeps an unexpected value from turning a log line into a crash.
+        logger.info(
+            "realtime tool requested: tool=%s arguments=%s",
+            name,
+            json.dumps(arguments, ensure_ascii=False, default=str),
+        )
         tool_started = self._stopwatch()
         try:
             result = await self._tools.run(name, arguments)
