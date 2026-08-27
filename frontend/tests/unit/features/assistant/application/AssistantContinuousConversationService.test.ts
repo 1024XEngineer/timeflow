@@ -1303,6 +1303,59 @@ describe('AssistantContinuousConversationService', () => {
     disposeService(service);
   });
 
+  it('stops playback when the call ends', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      payload: { format: 'pcm_s16le', purpose: 'reply', sample_rate_hz: 24000, speech_text: '' },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    await service.endTurn();
+
+    expect(deps.playback.stop).toHaveBeenCalledTimes(1);
+    expect(service.getState()).toEqual({ phase: 'idle' });
+  });
+
+  it('stops playback on dispose', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      payload: { format: 'pcm_s16le', purpose: 'reply', sample_rate_hz: 24000, speech_text: '' },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    disposeService(service);
+
+    expect(deps.playback.stop).toHaveBeenCalled();
+  });
+
+  it('keeps the farewell audio playing when the call ends by voice', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({ type: 'voice.session.end' } as AssistantServerMessage);
+    await flushAsync();
+
+    // 语音挂断（AI 已道别）不截断道别音频，不调 playback.stop。
+    expect(deps.playback.stop).not.toHaveBeenCalled();
+    expect(service.getState()).toEqual({ phase: 'idle' });
+  });
+
   it('ignores the canceled stream end that arrives after interruption', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });

@@ -66,6 +66,13 @@ export class AssistantConversationService implements AssistantApplicationPort {
    * 里同名字段的注释——一次按住说话也可能在一句话里触发多个工具调用（批量新建/
    * 删除），不排队会让两个 applyCommandResultLocally() 并发抢同一个 SQLite 连接。 */
   private commandResultChain: Promise<void> = Promise.resolve();
+  /** 串起 startStream/pushChunk/endStream/stop 全部对原生播放模块的调用，保证严格
+   * 按到达顺序执行（与 AssistantContinuousConversationService.playbackChain 同源）。
+   * pushChunk 内部会把一块切成多块依次 playAudio，不排队的话两块音频并发会让它们
+   * 的小块交错乱序、或被原生侧拒绝，错误又被吞掉、界面上看不出来。 */
+  private playbackChain: Promise<void> = Promise.resolve();
+  /** 取消/关闭时递增，让已经排队但尚未执行的旧流操作失效。 */
+  private playbackGeneration = 0;
   private disposed = false;
 
   constructor(
@@ -246,7 +253,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
     this.replyText = null;
     this.currentAudioId = null;
     this.notifyListeners();
-    await this.deps.playback.stop().catch(() => {});
+    await this.stopPlaybackImmediately();
   }
 
   dispose(): void {
@@ -350,18 +357,19 @@ export class AssistantConversationService implements AssistantApplicationPort {
         this.notifyListeners();
         return;
       case 'voice.tts.start':
+        this.playbackGeneration += 1;
         this.currentAudioId = message.audio_id;
         this.setState({ conversationId: message.conversation_id, phase: 'speaking' });
-        this.deps.playback
-          .startStream({
+        this.chainPlayback(() =>
+          this.deps.playback.startStream({
             encoding: 'pcm_s16le',
             sampleRateHz: message.payload.sample_rate_hz,
-          })
-          .catch(() => {});
+          }),
+        );
         return;
       case 'voice.tts.end':
         this.currentAudioId = null;
-        this.deps.playback.endStream().catch(() => {});
+        this.chainPlayback(() => this.deps.playback.endStream());
         this.setState({ phase: 'idle' });
         return;
       default:
@@ -391,6 +399,30 @@ export class AssistantConversationService implements AssistantApplicationPort {
     this.commandResultChain = this.commandResultChain
       .then(() => this.applyCommandResultLocally(command, messageId, sourceConnection))
       .catch(() => {});
+  }
+
+  /** 把一次对原生播放模块的调用接到 playbackChain 末尾，保证上一次真正执行完
+   * (不管成功与否)才轮到这一次；取消后旧代次的操作会被跳过。 */
+  private chainPlayback(run: () => Promise<void>): void {
+    const generation = this.playbackGeneration;
+    this.playbackChain = this.playbackChain
+      .then(async () => {
+        if (generation !== this.playbackGeneration) {
+          return;
+        }
+        await run();
+      })
+      .catch(() => {});
+  }
+
+  /** 立即清空原生播放器，并把后续新操作排在 stop 完成之后。stop 串在 playbackChain
+   * 末尾而非直接替换：正在执行的 pushChunk 内部会逐块 playAudio，直接 stop 会让
+   * stop 与在途写入竞争、stop 之后又继续写剩余小块；串行后 stop 等当前操作跑完。 */
+  private async stopPlaybackImmediately(): Promise<void> {
+    this.playbackGeneration += 1;
+    const stop = this.playbackChain.then(() => this.deps.playback.stop()).catch(() => {});
+    this.playbackChain = stop;
+    await stop;
   }
 
   private async applyCommandResultLocally(
@@ -471,7 +503,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
     if (sourceConnection !== this.connection || this.currentAudioId === null) {
       return;
     }
-    this.deps.playback.pushChunk(chunk).catch(() => {});
+    this.chainPlayback(() => this.deps.playback.pushChunk(chunk));
   }
 
   private handleClose(
@@ -523,7 +555,7 @@ export class AssistantConversationService implements AssistantApplicationPort {
         this.captureCleanup = null;
       }
     });
-    void this.deps.playback.stop().catch(() => {});
+    void this.stopPlaybackImmediately();
   }
 
   private setState(state: ConversationTurnState): void {
