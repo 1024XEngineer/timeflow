@@ -128,6 +128,23 @@ def test_tool_returns_stable_invalid_input(arguments: dict[str, object]) -> None
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("query", ["家", "公司", "学校", "到家", "回公司", "附近", "老地方"])
+def test_tool_refuses_personal_place_references(query: str) -> None:
+    """「家」「公司」这类模糊指代不搜 provider，直接返回需要追问的信号。"""
+
+    async def scenario() -> None:
+        port = SearchPort(tuple(_candidate(index) for index in range(1, 3)))
+        tool = build_location_search_tool(LocationSearchService(port), _context())
+
+        result = json.loads(await tool.execute({"query": query}))
+
+        assert result["status"] == "ambiguous_reference"
+        assert result["candidates"] == []
+        assert port.queries == []  # 拦截在检索之前，provider 根本没被调用
+
+    asyncio.run(scenario())
+
+
 def test_tool_sanitizes_provider_failure() -> None:
     async def scenario() -> None:
         tool = build_location_search_tool(

@@ -17,6 +17,7 @@ from timeflow.intelligence.location.contracts import (
     LocationProtocolError,
     LocationSearchContext,
 )
+from timeflow.intelligence.location.references import is_personal_place_reference
 from timeflow.intelligence.location.service import LocationSearchService
 
 LOCATION_SEARCH = "location_search"
@@ -34,9 +35,12 @@ class LocationSearchTool:
         """Validate the one Agent argument and return stable provider-neutral JSON."""
         try:
             query = _query(arguments)
-            candidates = await self.service.search(self.context, query)
         except LocationInputError:
             return _json({"status": "invalid_input", "candidates": []})
+        if is_personal_place_reference(query):
+            return AMBIGUOUS_REFERENCE_RESULT
+        try:
+            candidates = await self.service.search(self.context, query)
         except (LocationConfigurationError, LocationConnectionError, LocationProtocolError):
             return _json({"status": "provider_unavailable", "candidates": []})
         return _json(
@@ -53,7 +57,9 @@ def location_search_definition() -> ToolDefinition:
         name=LOCATION_SEARCH,
         description=(
             "Search real points of interest for the target location expressed by the user. "
-            "The system supplies the current area and search scope; never invent coordinates."
+            "The system supplies the current area and search scope; never invent coordinates. "
+            "For a location schedule, create it with the latitude and longitude of the "
+            "returned candidate."
         ),
         parameters={
             "type": "object",
@@ -119,6 +125,20 @@ def _json(value: object) -> str:
 # sees one error contract regardless of which layer decided location search was unavailable.
 PROVIDER_UNAVAILABLE_RESULT = _json({"status": "provider_unavailable", "candidates": []})
 
+# 模糊指代（「家」「公司」等）不是可检索地点：不返回候选，并明确引导模型向用户追问
+# 具体地点/地址，而不是拿这个模糊词继续创建。
+AMBIGUOUS_REFERENCE_RESULT = _json(
+    {
+        "status": "ambiguous_reference",
+        "candidates": [],
+        "hint": (
+            "这是模糊指代，不是可检索的具体地点，无法返回候选；"
+            "请调用 request_user_input 自然地问具体位置（如对「家」问「你家的地址是？」），"
+            "不要生硬复述「具体是哪个家」这类说法。"
+        ),
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class _UnavailableLocationSearchTool:
@@ -169,6 +189,7 @@ def build_lazy_location_search_tool(
 
 
 __all__ = [
+    "AMBIGUOUS_REFERENCE_RESULT",
     "LOCATION_SEARCH",
     "PROVIDER_UNAVAILABLE_RESULT",
     "LocationSearchTool",
