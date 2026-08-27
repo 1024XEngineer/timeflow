@@ -5,7 +5,7 @@ datasources:
     type: prometheus
     access: proxy
     uid: prometheus
-    url: http://127.0.0.1:9090
+    url: http://prometheus:9090
     isDefault: true
     editable: false
     jsonData:
@@ -15,7 +15,7 @@ datasources:
     type: tempo
     access: proxy
     uid: tempo
-    url: http://127.0.0.1:3200
+    url: http://tempo:3200
     editable: false
     jsonData:
       tracesToMetrics:
@@ -26,5 +26,7 @@ datasources:
         enabled: true
       streamingEnabled:
         search: false
-      tracesQuery:
+      traceQuery:
         timeShiftEnabled: true
+        spanStartTimeShift: "-1h"
+        spanEndTimeShift: "1h"

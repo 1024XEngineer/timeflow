@@ -6,7 +6,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 12,
+  "version": 15,
   "refresh": "5s",
   "time": {
     "from": "now-15m",
@@ -1794,7 +1794,6 @@
         "type": "tempo",
         "uid": "tempo"
       },
-      "timeFrom": "now-1h",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -1825,8 +1824,8 @@
             },
             "properties": [
               {
-                "id": "custom.hidden",
-                "value": true
+                "id": "displayName",
+                "value": "Trace ID"
               }
             ]
           },
@@ -1850,7 +1849,6 @@
           "options": {
             "excludeByName": {
               "nested": true,
-              "traceIdHidden": true,
               "traceService": true
             },
             "indexByName": {
@@ -1859,7 +1857,8 @@
               "name": 2,
               "duration": 3,
               "spanID": 4,
-              "traceName": 5
+              "traceIdHidden": 5,
+              "traceName": 6
             },
             "renameByName": {
               "timeflow.username": "登录账号"
@@ -1908,7 +1907,6 @@
         "type": "tempo",
         "uid": "tempo"
       },
-      "timeFrom": "now-1h",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -1939,8 +1937,8 @@
             },
             "properties": [
               {
-                "id": "custom.hidden",
-                "value": true
+                "id": "displayName",
+                "value": "Trace ID"
               }
             ]
           },
@@ -1964,7 +1962,6 @@
           "options": {
             "excludeByName": {
               "nested": true,
-              "traceIdHidden": true,
               "traceService": true
             },
             "indexByName": {
@@ -1973,7 +1970,8 @@
               "name": 2,
               "duration": 3,
               "spanID": 4,
-              "traceName": 5
+              "traceIdHidden": 5,
+              "traceName": 6
             },
             "renameByName": {
               "timeflow.username": "登录账号"

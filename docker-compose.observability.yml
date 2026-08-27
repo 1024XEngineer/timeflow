@@ -1,0 +1,77 @@
+# 同一台机器跑 API + Grafana / Prometheus / Tempo。
+# 启动：docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d --build
+#
+# Grafana 默认只绑 127.0.0.1:3000，前面加 Nginx。不要把 9090 / 3200 / 4318 暴露到公网。
+
+services:
+  api:
+    environment:
+      TIMEFLOW_OTEL_SERVICE_NAME: ${TIMEFLOW_OTEL_SERVICE_NAME:-timeflow-backend}
+      TIMEFLOW_OTEL_EXPORTER_OTLP_ENDPOINT: ${TIMEFLOW_OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4318}
+    depends_on:
+      tempo:
+        condition: service_started
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - timeflow-prometheus-data:/prometheus
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  tempo:
+    image: grafana/tempo:2.7.1
+    user: "0"
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./observability/tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - timeflow-tempo-data:/var/tempo
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_DEFAULT_THEME: dark
+      GF_SERVER_HTTP_ADDR: 0.0.0.0
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://127.0.0.1:3000}
+      GF_INSTALL_PLUGINS: ${GF_INSTALL_PLUGINS:-grafana-sentry-datasource}
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+      SENTRY_AUTH_TOKEN: ${SENTRY_AUTH_TOKEN:-}
+    volumes:
+      - ./observability/grafana-config/grafana.ini:/etc/grafana/grafana.ini:ro
+      - ./observability/grafana-config/provisioning:/etc/grafana/provisioning:ro
+      - timeflow-grafana-data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_HOST:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      tempo:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  timeflow-prometheus-data:
+  timeflow-tempo-data:
+  timeflow-grafana-data:

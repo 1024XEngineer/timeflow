@@ -1,8 +1,5 @@
 server:
-  http_listen_address: 127.0.0.1
   http_listen_port: 3200
-  grpc_listen_address: 127.0.0.1
-  grpc_listen_port: 9095
   log_level: info
 
 distributor:
@@ -10,7 +7,7 @@ distributor:
     otlp:
       protocols:
         http:
-          endpoint: 127.0.0.1:4318
+          endpoint: 0.0.0.0:4318
 
 ingester:
   max_block_duration: 5m
@@ -23,9 +20,9 @@ storage:
   trace:
     backend: local
     wal:
-      path: /Users/mac/Desktop/tf/observability/data/tempo/wal
+      path: /var/tempo/wal
     local:
-      path: /Users/mac/Desktop/tf/observability/data/tempo/blocks
+      path: /var/tempo/blocks
 
 overrides:
   defaults:
