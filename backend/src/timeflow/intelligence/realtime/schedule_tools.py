@@ -318,6 +318,16 @@ class ToolBox:
         self._client_location = client_location
         self._location_context: LocationSearchContext | None = None
         self._telemetry = telemetry if telemetry is not None else NOOP_TELEMETRY
+        # Set by _ask() when the question it just asked was recurrence_scope or
+        # confirmation; consumed the moment a delete actually runs. The composed agent
+        # gates schedule_delete the same way (see conversation/agent.py's
+        # _delete_authorized) by inspecting the user's own answer text -- realtime has
+        # no equivalent seam (the vendor session decides on its own when to call the
+        # tool again), so this only proves a qualifying question was asked at some
+        # point, not that the answer to it was affirmative. Still closes the gap this
+        # was added for: the model calling schedule_delete straight off a command with
+        # no question in between at all.
+        self._delete_authorization: str | None = None
 
     # The service is synchronous and reaches Postgres over a socket, so every call goes
     # to a worker thread: awaiting it inline would stall the loop streaming this turn's
@@ -348,6 +358,16 @@ class ToolBox:
         if name == LOCATION_SEARCH:
             return await self._location_search(arguments)
 
+        if name == SCHEDULE_DELETE and self._delete_authorization is None:
+            # A delete is irreversible; refuse it on the spot rather than trust the
+            # prompt alone -- the model does sometimes skip the confirmation or
+            # recurrence-scope question it was told to ask first.
+            return _refusal(
+                "删除是不可逆操作，必须先调用 request_user_input（confirmation 或 "
+                "recurrence_scope）向用户确认删除目标或问清楚周期删除范围，得到回答后"
+                "才能 schedule_delete。"
+            )
+
         # Normalize datetime fields before mapping
         arguments = normalize_datetime_args(arguments, self._timezone)
 
@@ -359,6 +379,7 @@ class ToolBox:
             if name == SCHEDULE_UPDATE:
                 return await self._update(arguments)
             if name == SCHEDULE_DELETE:
+                self._delete_authorization = None
                 return await self._delete(arguments)
         except ToolInputError as exc:
             return _refusal(str(exc))
@@ -456,6 +477,10 @@ class ToolBox:
         candidates = _candidates(arguments.get("candidates"))
         if kind == "ambiguous_target" and not candidates:
             return _refusal("ambiguous_target 必须提供非空 candidates。先用 schedule_query 查询。")
+
+        # A qualifying question supersedes any earlier one; any other kind (missing_field,
+        # ambiguous_target) means the model moved off the delete flow, so it drops too.
+        self._delete_authorization = kind if kind in ("recurrence_scope", "confirmation") else None
 
         required = arguments.get("required_response")
         return ToolResult(

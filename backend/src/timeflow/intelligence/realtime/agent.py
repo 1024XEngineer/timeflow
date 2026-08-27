@@ -74,6 +74,15 @@ def new_question_id() -> str:
     return f"question_{uuid4().hex}"
 
 
+# Same list the composed agent uses for the same fallback (conversation/agent.py).
+_FAREWELL_MARKERS = ("再见", "拜拜", "先这样", "就这样")
+
+
+def _is_farewell(text: str) -> bool:
+    """Return True when a reply's wording is a farewell that should end the session."""
+    return any(marker in text for marker in _FAREWELL_MARKERS)
+
+
 def _client_location_from_stream(stream: StreamInfo) -> ClientLocation | None:
     """Build a validated client position from the stream's raw wire fields, or None.
 
@@ -372,6 +381,9 @@ class _Turn:
         self._audio: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._speaking: asyncio.Task[None] | None = None
         self._ends_conversation = False
+        # Whether a tool ran as part of the reply currently being settled. Read by
+        # _finish_reply()'s farewell fallback below, then reset for the next reply.
+        self._tool_called = False
         self.failure: str | None = None
 
     def note_input_chunk(self, chunk_bytes: int) -> None:
@@ -433,6 +445,7 @@ class _Turn:
         The client needs the data to display and the model needs it to say anything true
         about it, so both are answered from the one call.
         """
+        self._tool_called = True
         if self._tools is None:
             logger.warning(
                 "realtime model asked for a tool while none are registered",
@@ -566,6 +579,19 @@ class _Turn:
                 ReplyText(reply_id=self._reply_id, speech_text=self._spoken, done=True),
                 self._stream,
             )
+            # The model sometimes says goodbye without remembering to call
+            # end_conversation. Composed guards the same gap by pattern-matching a
+            # no-tool-call reply; mirrored here rather than trusted to the prompt --
+            # otherwise the call is left open, listening, after its own farewell.
+            # Scoped to a reply that called no tool at all, same as composed: a reply
+            # that also did something ("帮你删掉了，再见") should not risk a false hit.
+            if (
+                not canceled
+                and not self._ends_conversation
+                and not self._tool_called
+                and _is_farewell(self._spoken)
+            ):
+                self._ends_conversation = True
         if self._speaking is not None:
             if canceled:
                 assert self._audio_id is not None
@@ -590,6 +616,7 @@ class _Turn:
         self._audio_id = None
         self._speaking = None
         self._purpose = REPLY_PURPOSE
+        self._tool_called = False
         if self._ends_conversation:
             # Only after the settling above -- any farewell this reply spoke has already
             # gone out in full, so telling the client to hang up here never cuts it short.
