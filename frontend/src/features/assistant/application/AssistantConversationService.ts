@@ -150,11 +150,14 @@ export class AssistantConversationService implements AssistantApplicationPort {
       this.abandonedAudioIds.add(this.currentAudioId);
       this.currentAudioId = null;
     }
-    // stop() 放在 if 外面、无条件调用（跟 dismissReply() 一致）：长回复的 TTS
+    // stop 放在 if 外面、无条件调用（跟 dismissReply() 一致）：长回复的 TTS
     // 可能分好几段下发，如果按下的瞬间恰好卡在上一段 tts.end 和下一段
-    // tts.start 之间，currentAudioId 这时候是 null，放在 if 里面的话 stop()
-    // 会被跳过，原生播放器收不到停止指令，只会眼睁睁看着它继续播下一段。
-    void this.deps.playback.stop().catch(() => {});
+    // tts.start 之间，currentAudioId 这时候是 null，放在 if 里面的话 stop
+    // 会被跳过，原生播放器收不到停止指令，只会眼睁睁看着它继续播下一段。走
+    // stopPlaybackImmediately() 而不是直接调 deps.playback.stop()：后者绕过了
+    // playbackChain/generation，会跟 chainPlayback 里在途的 pushChunk 竞争，
+    // 已经排队但还没执行的旧流分片也不会被这次 stop 作废。
+    void this.stopPlaybackImmediately();
     const previousCaptureCleanup = this.captureCleanup;
     if (this.connection === null) {
       this.setState({ phase: 'connecting' });

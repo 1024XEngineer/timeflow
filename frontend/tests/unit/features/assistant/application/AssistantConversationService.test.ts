@@ -594,6 +594,7 @@ describe('AssistantConversationService', () => {
     fake.emitAudioFrame(new ArrayBuffer(4));
     await flushAsync();
     expect(pushOrder).toEqual(['push-1-start']);
+    jest.mocked(deps.playback.stop).mockClear();
 
     const dismiss = service.dismissReply();
     resolveFirst();
