@@ -47,7 +47,7 @@ class Settings:
     openai_api_key: str = ""
     openai_model: str = "qwen-flash"
     openai_timeout_seconds: float = 30.0
-    schedule_category_timeout_seconds: float = 5.0
+    schedule_category_timeout_seconds: float = 10.0
     agent_max_tool_rounds: int = 4
     aliyun_tts_ws_url: str = ""
     aliyun_tts_api_key: str = ""

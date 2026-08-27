@@ -44,8 +44,10 @@ class LlmScheduleCategoryClassifier(ScheduleCategoryClassifier):
             return ScheduleCategory(category)
         except Exception as exc:
             logger.warning(
-                "schedule category classification failed; leaving category null",
-                extra={"error_type": type(exc).__name__},
+                "schedule category classification failed (error_type=%s): %s; "
+                "leaving category null",
+                type(exc).__name__,
+                exc,
             )
             return None
 
