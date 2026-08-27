@@ -48,11 +48,6 @@ export class AssistantConversationService implements AssistantApplicationPort {
   private replyText: string | null = null;
   /** 当前 turn 的 request_id；voice.dialogue.reply 拿它认轮次，对不上的是上一轮迟到的。 */
   private turnRequestId: string | null = null;
-  /** 当前气泡里显示的是哪个 request_id 的回复。新一轮开始不再清 replyText，
-   * 所以上一轮剩余的流式增量（同一个 request_id）应该继续更新它，不能被
-   * isCurrentTurn 当成"别人的"丢掉；点掉/取消气泡时清空，避免真正过期的
-   * 回复把已经点掉的气泡重新弹出来。 */
-  private displayedReplyRequestId: string | null = null;
   /** 被新一轮/dismissReply() 主动放弃、但还没等到 tts.end 的 audio_id 集合。
    * voice.tts.start/voice.tts.end 协议里不带 request_id，没法像 dialogue.reply
    * 那样按轮次门控，只能靠这个记住"这条迟到的收尾消息属于已经不关心的哪条
@@ -137,10 +132,10 @@ export class AssistantConversationService implements AssistantApplicationPort {
   }
 
   private async _startTurn(turnId: number): Promise<void> {
-    // 不清 replyText：上一轮的回复可能还在流式（用户在它说完前又按住说话），
-    // 这里清掉会让已经在显示的气泡瞬间消失，即使语音还在正常播（#392 同类问题
-    // 在按住说话这条路径上的版本）。旧气泡留到被新一轮自己的回复覆盖，或者
-    // 用户点掉/取消为止。
+    // 新一轮开始等于用户主动放弃上一轮，跟点掉气泡（dismissReply）是同一个
+    // 动作：文字气泡立即清空、语音立即停播，然后干净地开始听新一段——不能
+    // 留着上一轮的气泡/声音跟新一轮混在一起。
+    this.replyText = null;
     this.soundLevel = null;
     if (this.currentAudioId !== null) {
       // 上一轮的语音还没播完，新一轮开始时主动掐掉：不能让两轮音频同时播，
@@ -245,7 +240,6 @@ export class AssistantConversationService implements AssistantApplicationPort {
     this.pendingStartTurn = null;
     this.soundLevel = null;
     this.replyText = null;
-    this.displayedReplyRequestId = null;
     this.currentAudioId = null;
     // 连接马上就要整个关掉，不会再有消息进来；清空避免长会话里攒一堆再也
     // 用不上的 id。
@@ -270,7 +264,6 @@ export class AssistantConversationService implements AssistantApplicationPort {
 
   async dismissReply(): Promise<void> {
     this.replyText = null;
-    this.displayedReplyRequestId = null;
     if (this.currentAudioId !== null) {
       this.abandonedAudioIds.add(this.currentAudioId);
       this.currentAudioId = null;
@@ -374,23 +367,16 @@ export class AssistantConversationService implements AssistantApplicationPort {
           speechText: message.payload.speech_text,
         });
         return;
-      case 'voice.dialogue.reply': {
-        // 只认当前这一轮，或者当前气泡本来就在显示的那一轮——后者是为了让
-        // "上一轮回复还在流式时用户又按住说话"这种情况下，上一轮剩余的增量
-        // 还能继续更新它已经显示出来的气泡，不被当成别的轮次的内容丢掉。
-        // 除此之外一律当成上一轮被打断后晚到的、已经点掉的旧气泡，不能让它
-        // 重新弹出来——气泡是全屏点击层，会挡住语音条，用户得再点一次才能说话。
-        const requestId = message.request_id;
-        if (!this.isCurrentTurn(requestId) && requestId !== this.displayedReplyRequestId) {
+      case 'voice.dialogue.reply':
+        // 上一轮被新一轮打断（或被点掉）时它的 reply 可能晚到，把已经清空的
+        // 气泡重新弹出来——气泡是全屏点击层，会挡住语音条，用户得再点一次
+        // 才能说话。只认当前这一轮的 request_id。
+        if (!this.isCurrentTurn(message.request_id)) {
           return;
         }
         this.replyText = message.payload.speech_text;
-        if (typeof requestId === 'string') {
-          this.displayedReplyRequestId = requestId;
-        }
         this.notifyListeners();
         return;
-      }
       case 'voice.tts.start':
         this.currentAudioId = message.audio_id;
         this.setState({ conversationId: message.conversation_id, phase: 'speaking' });
