@@ -868,6 +868,80 @@ describe('AssistantConversationService', () => {
     await completeStreamStart(fake, nextTurn);
   });
 
+  it('does not let a stale tts.end from an abandoned turn clobber the new turn\'s phase', async () => {
+    // 同类问题：voice.tts.start/voice.tts.end 协议里不带 request_id，没法像
+    // voice.dialogue.reply 那样按轮次门控。turn 1 的语音还没播完，用户又按住
+    // 说话开始 turn 2——turn 1 的音频应该被主动掐掉；turn 1 迟到的 tts.end
+    // 不能把已经推进到 turn 2 的 phase 强行掰回 idle。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    // turn 1：语音开始播。
+    await completeStreamStart(fake, service.startTurn());
+    fake.emitMessage({
+      audio_id: 'audio_1',
+      conversation_id: 'conv_001',
+      payload: {
+        format: 'pcm',
+        purpose: 'command_result',
+        sample_rate_hz: 24000,
+        speech_text: '',
+      },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getState()).toMatchObject({ phase: 'speaking' });
+
+    // 语音还没播完，用户又按住说话 → turn 2 开始：应该主动掐掉 turn 1 的播放。
+    const nextTurn = service.startTurn();
+    await flushAsync();
+    expect(deps.playback.stop).toHaveBeenCalledTimes(1);
+
+    await completeStreamStart(fake, nextTurn);
+    expect(service.getState()).toMatchObject({ phase: 'recording' });
+
+    // turn 1 迟到的 tts.end 到达：不能把 phase 掰回 idle。
+    fake.emitMessage({
+      audio_id: 'audio_1',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.end',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getState()).toMatchObject({ phase: 'recording' });
+  });
+
+  it('drops a stale dialogue.question from a previous turn so it cannot hijack the new turn\'s phase', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    await completeStreamStart(fake, service.startTurn());
+    const turn1Id = fake.sent.filter((message) => message.type === 'voice.stream.start')[0]
+      .request_id;
+
+    const nextTurn = service.startTurn();
+    await flushAsync();
+    const stateBeforeStaleQuestion = service.getState();
+
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      request_id: turn1Id,
+      payload: {
+        candidates: [],
+        question_id: 'q_1',
+        question_kind: 'missing_field',
+        speech_text: '你是想订哪一天的会议室？',
+      },
+      type: 'voice.dialogue.question',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getState()).toEqual(stateBeforeStaleQuestion);
+
+    await completeStreamStart(fake, nextTurn);
+    expect(service.getState()).toMatchObject({ phase: 'recording' });
+  });
+
   it('still shows a reply whose request_id is null', async () => {
     // 后端 model_dump() 把缺省的 request_id 序列化成 null（不是省掉字段），所以
     // null 必须当作"不知道是哪一轮"放行，否则回复永远显示不出来。
