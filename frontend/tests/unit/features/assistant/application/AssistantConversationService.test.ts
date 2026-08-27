@@ -475,6 +475,68 @@ describe('AssistantConversationService', () => {
     );
   });
 
+  it('serializes pushChunk so back-to-back TTS frames cannot interleave their split pieces', async () => {
+    // Regression test: ExpoAudioPlayback.pushChunk 会把一块切成多块依次 playAudio，
+    // 语音条（按住说话）这里若像改版前那样 fire-and-forget，前后脚到达的两块 PCM
+    // 会并发 pushChunk，导致它们的小块交错乱序（或原生侧因顺序写入被拒绝），
+    // 整段 TTS 播不出来。必须像连续对话服务的 playbackChain 一样严格串行。
+    const fake = createFakeConnection();
+    const order: string[] = [];
+    let inFlight = 0;
+    let overlapped = false;
+    let callCount = 0;
+    let resolveFirst!: () => void;
+    const deps = createDeps({ connection: fake.connection });
+    deps.playback.pushChunk = jest.fn(async () => {
+      callCount += 1;
+      inFlight += 1;
+      if (inFlight > 1) overlapped = true;
+      if (callCount === 1) {
+        order.push('first-start');
+        await new Promise<void>((resolve) => {
+          resolveFirst = resolve;
+        });
+        order.push('first-end');
+      } else {
+        order.push('second-start');
+        order.push('second-end');
+      }
+      inFlight -= 1;
+    });
+
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+    const turn = service.startTurn();
+    await completeStreamStart(fake, turn);
+
+    fake.emitMessage({
+      audio_id: 'audio_001',
+      conversation_id: 'conv_001',
+      payload: {
+        format: 'pcm_s16le',
+        purpose: 'reply',
+        sample_rate_hz: 24000,
+        speech_text: '',
+      },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(deps.playback.startStream).toHaveBeenCalledTimes(1);
+
+    // 两块 PCM 前后脚到达，第二块必须等第一块写完才开始。
+    fake.emitAudioFrame(new ArrayBuffer(4));
+    fake.emitAudioFrame(new ArrayBuffer(4));
+    await flushAsync();
+
+    expect(order).toEqual(['first-start']);
+    expect(overlapped).toBe(false);
+
+    resolveFirst();
+    await flushAsync();
+
+    expect(order).toEqual(['first-start', 'first-end', 'second-start', 'second-end']);
+    expect(overlapped).toBe(false);
+  });
+
   it('patches an asynchronous category update without requiring a revision change', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
