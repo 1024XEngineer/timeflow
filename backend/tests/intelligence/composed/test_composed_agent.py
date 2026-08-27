@@ -214,6 +214,42 @@ def test_composed_turn_streams_a_multi_frame_reply() -> None:
     asyncio.run(scenario())
 
 
+def test_composed_turn_with_empty_tts_reply_delivers_no_audio_frames() -> None:
+    """TTS 无音频帧时（chunk_count 为 0）不产生 audio 事件，也不抛诊断异常。"""
+
+    class EmptyTts:
+        def stream(self, segments: AsyncIterable[SpeechSegment]) -> AsyncIterator[Any]:
+            async def events() -> AsyncIterator[Any]:
+                async for _ in segments:
+                    pass
+                yield TtsCompleted(0)
+
+            return events()
+
+    async def scenario() -> None:
+        sink = RecordingSink()
+        agent = ComposedVoiceAgent(
+            FakeAsr(["明天下午三点提醒我"]),
+            lambda account_id, observer, client_location: Agent(
+                FakeLlm([[TextDelta("好的。"), completed()]]),
+                ToolRegistry([]),
+            ),
+            EmptyTts(),
+            sink,
+            clock=lambda: datetime(2026, 8, 12, 6, tzinfo=UTC),
+            reply_id_factory=lambda: "reply_1",
+        )
+
+        await agent.handle_audio(chunks(), Stream())
+
+        audio_kinds = [
+            kind for kind, _ in sink.calls if kind in ("audio_start", "audio", "audio_end")
+        ]
+        assert audio_kinds == ["audio_start", "audio_end"]
+
+    asyncio.run(scenario())
+
+
 def test_client_location_degrades_to_none_without_permission() -> None:
     """No coordinates, an unknown system, or out-of-range values all become None."""
     assert _client_location_from_stream(Stream()) is None

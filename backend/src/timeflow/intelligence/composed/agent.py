@@ -769,8 +769,7 @@ class ComposedVoiceAgent:
                     now = time.monotonic()
                     if last_chunk_at is not None:
                         gap_ms = round((now - last_chunk_at) * 1000)
-                        if gap_ms > max_gap_ms:
-                            max_gap_ms = gap_ms
+                        max_gap_ms = max(max_gap_ms, gap_ms)
                     last_chunk_at = now
                     chunk_count += 1
                     chunk_bytes += len(event.data)
@@ -780,11 +779,8 @@ class ComposedVoiceAgent:
                         raise ValueError("Speech audio completed before start")
                     timing.tts_completed_at = self._monotonic()
                     if chunk_count:
-                        audio_duration_ms = (
-                            round(chunk_bytes / (tts_sample_rate_hz * 2 / 1000))
-                            if tts_sample_rate_hz
-                            else 0
-                        )
+                        # SpeechAudioStarted 先于任意 chunk，tts_sample_rate_hz 必非 0。
+                        audio_duration_ms = round(chunk_bytes / (tts_sample_rate_hz * 2 / 1000))
                         logger.info(
                             "composed tts frames=%d bytes=%d audio_ms=%d max_gap_ms=%d",
                             chunk_count,
