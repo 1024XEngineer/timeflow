@@ -531,9 +531,15 @@ export class AssistantContinuousConversationService implements AssistantApplicat
         ) {
           return;
         }
-        // tts.end 之后 currentAudioId 已清空：残留窗口里迟到的 canceled 只停播放，
-        // 不要把 listening 打成 interrupted。
-        if (this.currentAudioId === null) {
+        // tts.end 之后 currentAudioId 已清空、phase 回到 listening、回复已不再流式：
+        // 残留窗口里迟到的 canceled 只停播放，不要把 listening 打成 interrupted。
+        // 流式回复还没发 tts.start 时 currentAudioId 也是 null，但 replyStreaming
+        // 仍为 true，那种 barge-in 必须继续走 interrupted，否则波形和跨轮覆盖会回归。
+        if (
+          this.currentAudioId === null &&
+          this.state.phase === 'listening' &&
+          !this.replyStreaming
+        ) {
           void this.stopPlaybackImmediately();
           return;
         }
