@@ -16,11 +16,13 @@ from timeflow.intelligence.location.contracts import (
     ProviderLocationCandidate,
 )
 from timeflow.intelligence.location.coordinates import convert_coordinate
+from timeflow.intelligence.location.references import is_personal_place_reference
 from timeflow.intelligence.location.service import (
     LocationSearchService,
     build_agent_location_context,
 )
 from timeflow.intelligence.location.tools import (
+    AMBIGUOUS_REFERENCE_RESULT,
     LOCATION_SEARCH,
     PROVIDER_UNAVAILABLE_RESULT,
     LocationSearchTool,
@@ -31,6 +33,7 @@ from timeflow.intelligence.location.tools import (
 )
 
 __all__ = [
+    "AMBIGUOUS_REFERENCE_RESULT",
     "ClientLocation",
     "Coordinate",
     "CoordinateSystem",
@@ -53,5 +56,6 @@ __all__ = [
     "build_location_search_tool",
     "build_unavailable_location_search_tool",
     "convert_coordinate",
+    "is_personal_place_reference",
     "location_search_definition",
 ]

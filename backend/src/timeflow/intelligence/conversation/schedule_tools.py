@@ -88,8 +88,18 @@ _EDITABLE_PROPERTIES: dict[str, object] = {
     "timezone": {"type": "string", "minLength": 1},
     "recurrence_rule": _NULLABLE_STRING_SCHEMA,
     "location_name": _NULLABLE_STRING_SCHEMA,
-    "latitude": {"type": ["number", "null"], "minimum": -90, "maximum": 90},
-    "longitude": {"type": ["number", "null"], "minimum": -180, "maximum": 180},
+    "latitude": {
+        "type": ["number", "null"],
+        "minimum": -90,
+        "maximum": 90,
+        "description": "地点日程纬度，必须来自 location_search 返回候选的 latitude，禁止编造",
+    },
+    "longitude": {
+        "type": ["number", "null"],
+        "minimum": -180,
+        "maximum": 180,
+        "description": "地点日程经度，必须来自 location_search 返回候选的 longitude，禁止编造",
+    },
     "reminder_type": _REMINDER_TYPE_SCHEMA,
     "reminder_trigger_at": _DATETIME_SCHEMA,
     "reminder_offset_minutes": {"type": ["integer", "null"], "minimum": 0},
@@ -344,8 +354,11 @@ def map_create_schedule_command(arguments: Mapping[str, object]) -> CreateSchedu
         *ScheduleUpdatePatch.__optional_keys__,
     }
     _reject_unknown(arguments, allowed)
+    schedule_type = _required_enum(arguments, "schedule_type", ScheduleType)
+    location_name = _optional_string(arguments, "location_name")
+    _reject_vague_location(schedule_type, location_name)
     return CreateScheduleCommand(
-        schedule_type=_required_enum(arguments, "schedule_type", ScheduleType),
+        schedule_type=schedule_type,
         schedule_kind=_required_enum(arguments, "schedule_kind", ScheduleKind),
         title=_required_string(arguments, "title"),
         timezone=_required_string(arguments, "timezone"),
@@ -353,7 +366,7 @@ def map_create_schedule_command(arguments: Mapping[str, object]) -> CreateSchedu
         start_time=_optional_datetime(arguments, "start_time"),
         end_time=_optional_datetime(arguments, "end_time"),
         recurrence_rule=_optional_string(arguments, "recurrence_rule"),
-        location_name=_optional_string(arguments, "location_name"),
+        location_name=location_name,
         latitude=_optional_float(arguments, "latitude", minimum=-90, maximum=90),
         longitude=_optional_float(arguments, "longitude", minimum=-180, maximum=180),
         reminder_type=_optional_enum(arguments, "reminder_type", ReminderType),
@@ -361,6 +374,25 @@ def map_create_schedule_command(arguments: Mapping[str, object]) -> CreateSchedu
         reminder_offset_minutes=_optional_int(arguments, "reminder_offset_minutes", minimum=0),
         reminder_strength=_optional_enum(arguments, "reminder_strength", ReminderStrength),
     )
+
+
+def _reject_vague_location(schedule_type: ScheduleType, location_name: str | None) -> None:
+    """Refuse a location schedule whose place is still only a personal/relative reference.
+
+    「家」「公司」这类模糊指代不携带真实坐标，无法建成地点日程；硬性拦截，强制模型改走
+    request_user_input 向用户追问具体地点，而不是拿模糊词直接创建。
+    """
+    if schedule_type is not ScheduleType.LOCATION or location_name is None:
+        return
+    # 延迟导入避免 conversation -> location -> conversation.llm 的循环（见文件头注释）。
+    from timeflow.intelligence.location.references import is_personal_place_reference
+
+    if is_personal_place_reference(location_name):
+        raise ScheduleToolInputError(
+            f"location_name「{location_name}」是模糊指代，不是具体地点；"
+            "请调用 request_user_input 自然地问具体位置（如对「家」问「你家的地址是？」），"
+            "拿到精确地名后再创建。"
+        )
 
 
 def map_find_schedules_query(arguments: Mapping[str, object]) -> FindSchedulesQuery:

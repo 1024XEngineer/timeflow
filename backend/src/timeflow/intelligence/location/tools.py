@@ -17,6 +17,7 @@ from timeflow.intelligence.location.contracts import (
     LocationProtocolError,
     LocationSearchContext,
 )
+from timeflow.intelligence.location.references import is_personal_place_reference
 from timeflow.intelligence.location.service import LocationSearchService
 
 LOCATION_SEARCH = "location_search"
@@ -32,11 +33,10 @@ class LocationSearchTool:
 
     async def execute(self, arguments: Mapping[str, object]) -> str:
         """Validate the one Agent argument and return stable provider-neutral JSON."""
+        if (reject := _reject_invalid_or_vague_query(arguments)) is not None:
+            return reject
         try:
-            query = _query(arguments)
-            candidates = await self.service.search(self.context, query)
-        except LocationInputError:
-            return _json({"status": "invalid_input", "candidates": []})
+            candidates = await self.service.search(self.context, _query(arguments))
         except (LocationConfigurationError, LocationConnectionError, LocationProtocolError):
             return _json({"status": "provider_unavailable", "candidates": []})
         return _json(
@@ -53,7 +53,9 @@ def location_search_definition() -> ToolDefinition:
         name=LOCATION_SEARCH,
         description=(
             "Search real points of interest for the target location expressed by the user. "
-            "The system supplies the current area and search scope; never invent coordinates."
+            "The system supplies the current area and search scope; never invent coordinates. "
+            "For a location schedule, create it with the latitude and longitude of the "
+            "returned candidate."
         ),
         parameters={
             "type": "object",
@@ -119,6 +121,36 @@ def _json(value: object) -> str:
 # sees one error contract regardless of which layer decided location search was unavailable.
 PROVIDER_UNAVAILABLE_RESULT = _json({"status": "provider_unavailable", "candidates": []})
 
+# 模糊指代（「家」「公司」等）不是可检索地点：不返回候选，并明确引导模型向用户追问
+# 具体地点/地址，而不是拿这个模糊词继续创建。
+AMBIGUOUS_REFERENCE_RESULT = _json(
+    {
+        "status": "ambiguous_reference",
+        "candidates": [],
+        "hint": (
+            "这是模糊指代，不是可检索的具体地点，无法返回候选；"
+            "请调用 request_user_input 自然地问具体位置（如对「家」问「你家的地址是？」），"
+            "不要生硬复述「具体是哪个家」这类说法。"
+        ),
+    }
+)
+
+
+def _reject_invalid_or_vague_query(arguments: Mapping[str, object]) -> str | None:
+    """Return the short-circuit JSON for an invalid or vague query, else None.
+
+    模糊指代必须在任何 provider 调用之前短路——包括懒加载路径的 prepare()/反向地理
+    编码——这样模型对「家」「公司」永远看到稳定的 ambiguous_reference，而不是随
+    provider 健康状态在 provider_unavailable 之间漂移。
+    """
+    try:
+        query = _query(arguments)
+    except LocationInputError:
+        return _json({"status": "invalid_input", "candidates": []})
+    if is_personal_place_reference(query):
+        return AMBIGUOUS_REFERENCE_RESULT
+    return None
+
 
 @dataclass(frozen=True, slots=True)
 class _UnavailableLocationSearchTool:
@@ -152,6 +184,8 @@ class _LazyLocationSearchTool:
     context: LocationSearchContext | None = None
 
     async def execute(self, arguments: Mapping[str, object]) -> str:
+        if (reject := _reject_invalid_or_vague_query(arguments)) is not None:
+            return reject
         if self.context is None:
             try:
                 self.context = await self.service.prepare(self.client_location)
@@ -169,6 +203,7 @@ def build_lazy_location_search_tool(
 
 
 __all__ = [
+    "AMBIGUOUS_REFERENCE_RESULT",
     "LOCATION_SEARCH",
     "PROVIDER_UNAVAILABLE_RESULT",
     "LocationSearchTool",
