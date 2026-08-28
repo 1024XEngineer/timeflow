@@ -31,6 +31,9 @@ const SESSION_IDLE_TIMEOUT_MS = 180_000;
 // 就要把下一块 PCM 喂进原生播放器，被渲染挤掉就是一次可听见的空隙。50ms 一档，
 // 文字看起来照样是流式的，重渲染次数降到四分之一以下。
 const NOTIFY_COALESCE_MS = 50;
+// 等一个原生调用的上限。见 settleWithin 的注释：卡住不返回的原生调用会把挂断和
+// 播放两条路一起冻住，而原生停止本该是毫秒级的，1 秒已经宽裕得离谱。
+const NATIVE_TEARDOWN_TIMEOUT_MS = 1000;
 
 /** 允许暂停/由暂停恢复的阶段——除此之外调用 togglePause() 什么都不做。 */
 const PAUSABLE_PHASES: ReadonlySet<ConversationTurnState['phase']> = new Set([
@@ -332,19 +335,17 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     this.clearNotifyTimer();
     this.endingCall = true;
     try {
-      await this.deps.capture.stop();
-    } catch {
-      // 原生停止失败也不能让挂断卡在半路——跟 dispose() 的兜底思路一致，
-      // 后面几步（发 stream.end、关连接、状态归位）必须照常走完。
-    }
-    this.soundLevel = null;
-    // 手动挂断（用户点"结束对话"）要立刻停掉正在播的 TTS；语音挂断（服务端
-    // voice.session.end，AI 已道别）则让道别音频播完，不截断。
-    if (stopPlayback) {
-      await this.stopPlaybackImmediately();
-    }
-    const connection = this.connection;
-    try {
+      // 两个原生调用都限时。原来它们各自裸 await 在清 endTurnInFlight 的 finally
+      // 前面：抛错有 catch 兜着，卡住不返回没有——而卡住就再也走不到后面的收尾，
+      // endTurnInFlight 永远是 true，结束对话从此按不动（实测症状）。
+      await settleWithin(this.deps.capture.stop(), NATIVE_TEARDOWN_TIMEOUT_MS);
+      this.soundLevel = null;
+      // 手动挂断（用户点"结束对话"）要立刻停掉正在播的 TTS；语音挂断（服务端
+      // voice.session.end，AI 已道别）则让道别音频播完，不截断。
+      if (stopPlayback) {
+        await this.stopPlaybackImmediately();
+      }
+      const connection = this.connection;
       if (connection !== null && this.streamId !== null) {
         connection.send({
           payload: { stream_id: this.streamId },
@@ -354,7 +355,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
       this.unsubscribeConnection?.();
       connection?.close();
     } catch {
-      // 收尾步骤失败也不能拦住下面的状态归位。
+      // 收尾任何一步失败都不能拦住下面的状态归位。
     } finally {
       this.streamId = null;
       this.unsubscribeConnection = null;
@@ -703,7 +704,17 @@ export class AssistantContinuousConversationService implements AssistantApplicat
   /** 立即清空原生播放器，并把后续新操作排在 stop 完成之后。 */
   private async stopPlaybackImmediately(): Promise<void> {
     this.playbackGeneration += 1;
-    const stop = this.deps.playback.stop().catch(() => {});
+    // 排在 playbackChain 末尾而不是直接替换：在途的 pushChunk 正在逐块 playAudio，
+    // 让 stopAudio 跟原生侧的写入并发，正是按住说话那边同名方法的注释点名过的危险
+    // 动作。排队的成本现在很低——pushChunk 每块之前会确认这条流还在不在，代次一变
+    // 就当场停手，所以最多等一块。
+    // 再限一次时：原生 stop 卡住不返回的话，playbackChain 会停在一个永远不会 settle
+    // 的 promise 上，之后每一块音频都排在它后面，这通电话再也不出声。宁可不等，
+    // 也不能让这条链死掉。
+    const stop = settleWithin(
+      this.playbackChain.then(() => this.deps.playback.stop()),
+      NATIVE_TEARDOWN_TIMEOUT_MS,
+    );
     this.playbackChain = stop;
     await stop;
   }
@@ -896,4 +907,21 @@ function upsertTurn(
     return turns.map((turn, index) => (index === found ? update(turn) : turn));
   }
   return [...turns, fallback];
+}
+
+/** 等一个原生调用，但最多等这么久，且从不抛出。
+ *
+ * 原生桥调用失败会抛（catch 得住），卡住不返回不会。而在挂断路径上卡住意味着后面
+ * 的收尾永远走不到、结束对话按钮从此失效；在播放路径上卡住意味着 playbackChain 停
+ * 在一个不会 settle 的 promise 上、整通电话再也不出声。这两个症状实测是一起出现的。
+ * 超时不代表原生那边真的结束了，只代表我们不再等它、把控制权还给用户。 */
+function settleWithin(work: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    const settle = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    void work.then(settle, settle);
+  });
 }

@@ -20,6 +20,7 @@ import type { LocationProvider } from '../../../../../src/infrastructure/locatio
 
 const SESSION_IDLE_TIMEOUT_MS = 180_000;
 const NOTIFY_COALESCE_MS = 50;
+const NATIVE_TEARDOWN_TIMEOUT_MS = 1000;
 
 /** 跟 AssistantConversationService.test.ts 用同一套理由：startTurn() 里好几层 await，固定多轮 flush 比猜跳数稳。 */
 async function flushAsync(iterations = 20): Promise<void> {
@@ -491,6 +492,87 @@ describe('AssistantContinuousConversationService', () => {
     expect(notifications).toBe(0);
     // 但音量本身记下来了，下一次真正的状态变化会把它一起带出去。
     expect(service.getSoundLevel()).toBe(-20);
+  });
+
+  it('still hangs up when the native player never answers stop()', async () => {
+    // 实测症状：结束对话按了没反应，而且那之后 TTS 也不出声。两件事同一个根：
+    // hangUp 里清 endTurnInFlight 的 finally 只盖住最后一个 try，前面两个 await
+    // 卡住（不是抛错，是不返回）就永远走不到，之后每一次按都被开头那道门槛挡掉。
+    jest.useFakeTimers();
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    deps.playback.stop = jest.fn(() => new Promise<void>(() => {}));
+    const service = createService(deps);
+    await startListening(fake, service);
+
+    void service.endTurn();
+    // 先让 hangUp 跑到装定时器那一步，再推时钟——限时是在 await 之后才装上的。
+    await flushAsync();
+    await advanceAndFlush(NATIVE_TEARDOWN_TIMEOUT_MS);
+    await advanceAndFlush(NATIVE_TEARDOWN_TIMEOUT_MS);
+
+    expect(service.getState()).toEqual({ phase: 'idle' });
+    // 服务端那条流也必须放掉，否则下一次 voice.stream.start 会被当成"已有活跃流"拒绝。
+    expect(fake.sent).toContainEqual({
+      payload: { stream_id: 'stream_001' },
+      type: 'voice.stream.end',
+    });
+  });
+
+  it('still hangs up when the native recorder never answers stop()', async () => {
+    jest.useFakeTimers();
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    deps.capture.stop = jest.fn(() => new Promise<void>(() => {}));
+    const service = createService(deps);
+    await startListening(fake, service);
+
+    void service.endTurn();
+    // 先让 hangUp 跑到装定时器那一步，再推时钟——限时是在 await 之后才装上的。
+    await flushAsync();
+    await advanceAndFlush(NATIVE_TEARDOWN_TIMEOUT_MS);
+    await advanceAndFlush(NATIVE_TEARDOWN_TIMEOUT_MS);
+
+    expect(service.getState()).toEqual({ phase: 'idle' });
+  });
+
+  it('does not let a stop() that never answers silence the rest of the call', async () => {
+    // playbackChain 会被换成那个永不 settle 的 promise，之后每一块音频都排在它
+    // 后面——整通电话再也不出声。打断（tts.canceled）就会走到这条路上。
+    jest.useFakeTimers();
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    deps.playback.stop = jest.fn(() => new Promise<void>(() => {}));
+    const service = createService(deps);
+    await startListening(fake, service);
+
+    fake.emitMessage({
+      audio_id: 'audio_1',
+      conversation_id: 'conv_001',
+      payload: { format: 'pcm', purpose: 'command_result', sample_rate_hz: 24000 },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+    fake.emitMessage({
+      audio_id: 'audio_1',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.canceled',
+    } as AssistantServerMessage);
+    await flushAsync();
+    await advanceAndFlush(NATIVE_TEARDOWN_TIMEOUT_MS);
+
+    // 打断之后模型接着回答：这一轮的音频必须照常送进播放器。
+    fake.emitMessage({
+      audio_id: 'audio_2',
+      conversation_id: 'conv_001',
+      payload: { format: 'pcm', purpose: 'command_result', sample_rate_hz: 24000 },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+    fake.emitAudioFrame(new ArrayBuffer(4));
+    await flushAsync();
+
+    expect(deps.playback.pushChunk).toHaveBeenCalled();
   });
 
   it('keeps a streaming assistant reply pending until it is done', async () => {
@@ -1534,7 +1616,7 @@ describe('AssistantContinuousConversationService', () => {
     disposeService(service);
   });
 
-  it('stops immediately and drops queued chunks when TTS is canceled', async () => {
+  it('stops the player once the in-flight write lands, and drops what was queued behind it', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
     const service = createService(deps);
@@ -1577,7 +1659,11 @@ describe('AssistantContinuousConversationService', () => {
       conversation_id: 'conv_001',
       type: 'voice.tts.canceled',
     } as AssistantServerMessage);
-    expect(calls).toEqual(['push-1', 'stop']);
+    // stop 排在在途的 push-1 后面，不跟它并发。原来是绕过队列立刻发的，理由写的是
+    // "否则已排队的 PCM 会先继续喂给播放器"——那个理由不成立（代次检查已经把排队的
+    // 都作废了，见下面 push-2），而并发的代价是真的：stopAudio 撞上原生侧正在进行
+    // 的写入，实测会不返回，然后 playbackChain 就死在那儿，整通电话再不出声。
+    expect(calls).toEqual(['push-1']);
 
     resolveFirst();
     await flushAsync();
@@ -1623,6 +1709,9 @@ describe('AssistantContinuousConversationService', () => {
     await flushAsync();
 
     disposeService(service);
+    // stop 现在排在 playbackChain 末尾（不再跟在途的原生写入并发），所以晚一个
+    // 微任务才真正调用——保证没变，时机变了。
+    await flushAsync();
 
     expect(deps.playback.stop).toHaveBeenCalled();
   });
