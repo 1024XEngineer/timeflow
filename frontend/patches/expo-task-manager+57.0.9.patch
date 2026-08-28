@@ -1,3 +1,73 @@
+diff --git a/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskManagerInternalModule.java b/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskManagerInternalModule.java
+index 1157a8d..f209272 100644
+--- a/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskManagerInternalModule.java
++++ b/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskManagerInternalModule.java
+@@ -30,6 +30,7 @@ public class TaskManagerInternalModule implements InternalModule, TaskManagerInt
+ 
+   public TaskManagerInternalModule(Context context) {
+     mContextRef = new WeakReference<>(context);
++    Log.i("TimeflowDiag", "TaskManagerInternalModule created id=" + System.identityHashCode(this));
+   }
+ 
+   //region InternalModule
+@@ -84,8 +85,11 @@ public class TaskManagerInternalModule implements InternalModule, TaskManagerInt
+     if (mEventsQueue != null) {
+       // `startObserving` on TaskManagerModule wasn't called yet - add event body to the queue.
+       mEventsQueue.add(body);
++      Log.i("TimeflowDiag", "executeTaskWithBody QUEUED id=" + System.identityHashCode(this)
++          + " queueSize=" + mEventsQueue.size());
+     } else {
+       // Manager is already being observed by JS app, so we can execute the event immediately.
++      Log.i("TimeflowDiag", "executeTaskWithBody EMIT id=" + System.identityHashCode(this));
+       emitEvent(body);
+     }
+   }
+@@ -101,6 +105,9 @@ public class TaskManagerInternalModule implements InternalModule, TaskManagerInt
+   @Override
+   public synchronized void flushQueuedEvents() {
+     // Execute any events that came before this call.
++    Log.i("TimeflowDiag", "flushQueuedEvents called id=" + System.identityHashCode(this)
++        + " queueWasNull=" + (mEventsQueue == null)
++        + " queueSize=" + (mEventsQueue == null ? -1 : mEventsQueue.size()));
+     if (mEventsQueue != null) {
+       for (Bundle body : mEventsQueue) {
+         emitEvent(body);
+@@ -188,8 +195,10 @@ public class TaskManagerInternalModule implements InternalModule, TaskManagerInt
+ 
+   private void emitEvent(Bundle body) {
+     if (mEmitEventWrapper != null) {
++      Log.i("TimeflowDiag", "emitEvent -> mEmitEventWrapper.emit() id=" + System.identityHashCode(this));
+       mEmitEventWrapper.emit(TaskManagerInterface.EVENT_NAME, body);
+     } else {
++      Log.e("TimeflowDiag", "emitEvent SKIPPED: EmitEventWrapper is null, id=" + System.identityHashCode(this));
+       Log.e("ExpoTaskManager", "EmitEventWrapper is not set. Failed to emit the TaskManager Event.");
+     }
+   }
+diff --git a/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskManagerModule.kt b/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskManagerModule.kt
+index fc42f02..58b6d06 100644
+--- a/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskManagerModule.kt
++++ b/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskManagerModule.kt
+@@ -81,14 +81,20 @@ class TaskManagerModule : Module() {
+     }
+ 
+     OnStartObserving {
++      Log.i("TimeflowDiag", "OnStartObserving fired, internal id=" + System.identityHashCode(taskManagerInternal))
+       val handler = Handler(Looper.getMainLooper())
+       handler.postDelayed(
+         {
++          Log.i("TimeflowDiag", "OnStartObserving delayed flush running, internal id=" + System.identityHashCode(taskManagerInternal))
+           taskManagerInternal?.flushQueuedEvents()
+         },
+         1000
+       )
+     }
++
++    OnStopObserving {
++      Log.i("TimeflowDiag", "OnStopObserving fired, internal id=" + System.identityHashCode(taskManagerInternal))
++    }
+   }
+ 
+   private val appScopeKey: String
 diff --git a/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskService.java b/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskService.java
 index de829ca..8416444 100644
 --- a/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskService.java
