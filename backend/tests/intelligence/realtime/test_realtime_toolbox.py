@@ -284,40 +284,54 @@ def test_a_question_reaches_the_client_and_not_the_calendar() -> None:
     assert result.outcome is None
 
 
-def test_an_ambiguous_target_carries_the_candidates_it_found() -> None:
+def test_an_ambiguous_target_only_needs_the_question_it_speaks_aloud() -> None:
+    """Asking which of several schedules costs one spoken sentence, nothing more.
+
+    The model used to have to re-emit every matched schedule into a candidates array --
+    measured at 477 output tokens and 7.4s of generation for two schedules, then another
+    4s because the first attempt came back as a JSON string and was refused. Nothing
+    displayed it: the clients read only speech_text. So the choices are named in the
+    sentence the user actually hears, the same way ambiguous locations already work.
+    """
+    result = run(
+        "request_user_input",
+        {
+            "question_kind": "ambiguous_target",
+            "speech_text": "找到两个开会，第一个是今天下午三点，第二个是每周一早上十点，删哪个？",
+        },
+    )
+
+    assert json.loads(result.output) == {"asked": True}
+    assert result.question is not None
+    assert result.question["candidates"] == ()
+
+
+def test_candidates_the_model_volunteers_anyway_are_not_passed_on() -> None:
+    """The parameter is gone from the schema; anything sent under that name is ignored
+    rather than quietly reaching the client as a shape nothing agreed on.
+    """
     result = run(
         "request_user_input",
         {
             "question_kind": "ambiguous_target",
             "speech_text": "是哪一个会？",
-            "candidates": [{"schedule_id": "sch_1"}, "not an object", {"schedule_id": "sch_2"}],
+            "candidates": [{"schedule_id": "sch_1"}],
         },
     )
-    assert result.question is not None
-    # Anything that is not an object is dropped rather than passed to the client.
-    assert result.question["candidates"] == ({"schedule_id": "sch_1"}, {"schedule_id": "sch_2"})
 
-
-def test_an_ambiguous_target_with_nothing_to_choose_between_is_refused() -> None:
-    result = run(
-        "request_user_input",
-        {"question_kind": "ambiguous_target", "speech_text": "是哪一个会？"},
-    )
-    assert json.loads(result.output)["status"] == "failed"
-    assert result.question is None
-
-
-def test_candidates_that_are_not_a_list_are_ignored() -> None:
-    result = run(
-        "request_user_input",
-        {
-            "question_kind": "missing_field",
-            "speech_text": "哪天？",
-            "candidates": "sch_1",
-        },
-    )
     assert result.question is not None
     assert result.question["candidates"] == ()
+
+
+def test_request_user_input_no_longer_advertises_a_candidates_parameter() -> None:
+    """Left in the schema, the model keeps filling it -- that is where the seconds went."""
+    (ask,) = [
+        tool
+        for tool in ToolBox("acc_test", RecordingService()).tools()
+        if tool["function"]["name"] == "request_user_input"
+    ]
+
+    assert "candidates" not in ask["function"]["parameters"]["properties"]
 
 
 @pytest.mark.parametrize(

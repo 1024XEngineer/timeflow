@@ -254,11 +254,6 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                         "type": "string",
                         "description": "希望用户补充的字段名，例如 start_time、location",
                     },
-                    "candidates": {
-                        "type": "array",
-                        "items": {"type": "object"},
-                        "description": "匹配到多条时的候选日程，供客户端展示",
-                    },
                 },
                 "required": ["question_kind", "speech_text"],
             },
@@ -475,10 +470,6 @@ class ToolBox:
         if not isinstance(speech_text, str) or not speech_text.strip():
             return _refusal("speech_text 不能为空，要写出问用户的原话。")
 
-        candidates = _candidates(arguments.get("candidates"))
-        if kind == "ambiguous_target" and not candidates:
-            return _refusal("ambiguous_target 必须提供非空 candidates。先用 schedule_query 查询。")
-
         # A qualifying question supersedes any earlier one; any other kind (missing_field,
         # ambiguous_target) means the model moved off the delete flow, so it drops too.
         self._delete_authorization = kind if kind in ("recurrence_scope", "confirmation") else None
@@ -490,7 +481,13 @@ class ToolBox:
                 "question_kind": kind,
                 "speech_text": speech_text.strip(),
                 "required_response": required if isinstance(required, str) and required else None,
-                "candidates": candidates,
+                # Always empty from this agent: making the model re-emit every matched
+                # schedule here cost 477 output tokens and 7.4s of generation for two of
+                # them (then another 4s, because the first attempt arrived as a JSON
+                # string and was refused) -- for a field no client reads. The choices go
+                # into speech_text instead, which is what the user actually hears. The
+                # protocol keeps the field for the composed agent, which still fills it.
+                "candidates": (),
             },
         )
 
@@ -601,13 +598,6 @@ def _local_text(instant: datetime | None, tz: ZoneInfo) -> str:
     if instant is None:
         return ""
     return instant.astimezone(tz).strftime("%Y-%m-%d %H:%M")
-
-
-def _candidates(value: Any) -> tuple[dict[str, Any], ...]:
-    """Keep the choices that are actually objects, dropping anything else."""
-    if not isinstance(value, list):
-        return ()
-    return tuple(item for item in value if isinstance(item, dict))
 
 
 def _json_value(value: object) -> object:
