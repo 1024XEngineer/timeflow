@@ -717,6 +717,10 @@ async function refreshGuardRegistration(
         distanceInterval: 0,
         ...(foregroundService == null ? {} : { foregroundService }),
       });
+      // 临时诊断：任务自己的重注册才是最终生效的那次，间隔以这行为准。
+      console.warn(
+        `[guard] refreshed interval=${intervalMs} withService=${foregroundService != null}`,
+      );
     } catch (error) {
       console.warn('[guard] refresh startLocationUpdatesAsync failed', error);
     }

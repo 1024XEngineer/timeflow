@@ -1,0 +1,23 @@
+diff --git a/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskService.java b/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskService.java
+index de829ca..8416444 100644
+--- a/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskService.java
++++ b/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskService.java
+@@ -242,6 +242,7 @@ public class TaskService implements SingletonModule, TaskServiceInterface {
+     // It may be called with null when the host activity is destroyed.
+     if (taskManager == null) {
+       sTaskManagers.remove(appScopeKey);
++      sHeadlessTaskManagers.remove(appScopeKey);
+       return;
+     }
+ 
+@@ -611,9 +612,7 @@ public class TaskService implements SingletonModule, TaskServiceInterface {
+   private void invalidateAppRecord(String appScopeKey) {
+     HeadlessAppLoader appLoader = getAppLoader();
+     if (appLoader != null) {
+-      if (getAppLoader().invalidateApp(appScopeKey)) {
+-        sHeadlessTaskManagers.remove(appScopeKey);
+-      }
++      appLoader.invalidateApp(appScopeKey);
+     }
+   }
+ 

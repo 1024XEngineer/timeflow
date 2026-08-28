@@ -18,6 +18,12 @@ import {
 const LOCATION_STOP_TIMEOUT_MS = 2_000;
 
 /**
+ * 注册声称在跑、却这么久一次心跳都收不到，就当它已经不投递了。取最疏轮询间隔
+ * （5min）的两倍：宁可发现得晚，也不能误判去拆一个还在正常投递的注册。
+ */
+const REGISTRATION_STALE_AFTER_MS = 600_000;
+
+/**
  * 原生注册其实有三种状态，而 hasStartedLocationUpdatesAsync() 只能回答把后两种
  * 合并之后的那个布尔值（"注册着吗"）：
  *
@@ -54,6 +60,13 @@ export class ReminderGuardCoordinator {
   private running = false;
   private currentIntervalMs: number | null = null;
   private lastSample: GeoPoint | null = null;
+  /**
+   * 本进程自己成功建起过这个注册没有。注册记录是持久化的，进程被杀之后它依旧
+   * 完好，光看注册状态分不出"我建的"和"上个进程留下的"。
+   */
+  private ownsRegistration = false;
+  /** 上一次收到位置心跳的时刻，用来发现会话中途悄悄断掉的投递。 */
+  private lastProgressAt: number | null = null;
   private reconcileChain: Promise<void> = Promise.resolve();
 
   constructor(private readonly dependencies: ReminderGuardDependencies) {}
@@ -74,6 +87,8 @@ export class ReminderGuardCoordinator {
   async stop(): Promise<void> {
     this.started = false;
     this.generation += 1;
+    this.ownsRegistration = false;
+    this.lastProgressAt = null;
     this.unsubscribeGuardTask?.();
     this.unsubscribeGuardTask = null;
     this.unsubscribeSchedules?.();
@@ -82,6 +97,7 @@ export class ReminderGuardCoordinator {
   }
 
   private async handleSample(sample: GuardTaskSample): Promise<void> {
+    this.lastProgressAt = Date.now();
     this.lastSample = { latitude: sample.latitude, longitude: sample.longitude };
     await this.dependencies.handleLocation(sample);
     await this.reconcile();
@@ -109,6 +125,9 @@ export class ReminderGuardCoordinator {
       (schedule) =>
         schedule.status === 'active' && schedule.runtime.reminder_disposition_state !== 'confirmed',
     );
+
+    // 临时诊断：区分"reconcile 压根没被调到"和"调到了但在这里就早退"。
+    console.warn(`[guard] reconcile active=${active.length}`);
 
     if (active.length === 0) {
       if (!this.isCurrentGeneration(generation)) return;
@@ -143,19 +162,29 @@ export class ReminderGuardCoordinator {
     // 这个协调器不知情，本地标志会跟真实状态脱节；用本地标志判断的话，日程
     // 清空又新增时会被误判成"已经在跑"，永远不会真正重新启动。
     //
-    // 但"注册着"这一个布尔值还不够：注册项带没带 foregroundService 决定了常驻
-    // 前台服务在不在，而两者在 hasStartedLocationUpdatesAsync() 眼里完全一样。
-    // 只看它的话，一次没带 foregroundService 的重注册就会让协调器永远早退——
-    // 而且那份降级注册会被 expo-task-manager 持久化，force-stop 和冷启动都清不掉。
+    // 但注册状态本身不能当"还在投递"的证据，两个方向都会骗人：
+    // - options 带着 foregroundService，进程却已经被杀过一次。注册记录是持久化
+    //   的，force-stop 杀不掉，冷启动读到它就一路早退，而真正的投递早断了——
+    //   这正是"重启救不回来、只有重装能救"那个卡死状态。
+    // - options 没带 foregroundService，服务其实活得好好的。后台唤醒时
+    //   refreshGuardRegistration 只能不带这个字段重注册（带上会被原生拒），
+    //   于是每次切后台都会把 options 打成这样，回前台再去"修"一个健康的服务。
+    // 所以真正的判据是"最近还收不收得到心跳"（isRegistrationStale），注册状态
+    // 只用来回答"重建之前要不要先注销一次"。
     const state = await this.resolveRegistrationState();
+    const stale = this.isRegistrationStale(state);
+    // 临时诊断：这几个值就是下面全部分流的依据，卡住时只看这一行就够。
+    console.warn(
+      `[guard] state=${state} foregrounded=${isAppForegrounded()} stale=${stale} wantInterval=${intervalMs}`,
+    );
     if (!this.isCurrentGeneration(generation)) return;
-    if (state === 'foreground') {
-      this.running = true;
-      return;
-    }
     if (state === 'unknown') return;
 
-    if (state === 'degraded') {
+    if (state !== 'absent') {
+      if (!stale) {
+        this.running = true;
+        return;
+      }
       // 后台补不回来：带 foregroundService 的注册在后台会被原生直接拒掉，这时候
       // 硬 stop 只会把仅剩的定位任务也弄没，比维持现状更糟。等回到前台的那次
       // reconcile 再修（位置心跳每 15s~5min 就会触发一次 reconcile）。
@@ -171,8 +200,20 @@ export class ReminderGuardCoordinator {
       try {
         await Location.stopLocationUpdatesAsync(GUARD_TASK_NAME);
       } catch (error) {
-        console.warn('[guard] failed to clear the degraded registration', error);
+        console.warn('[guard] failed to clear the stale registration', error);
         return;
+      }
+      // stopLocationUpdatesAsync() 只解绑位置更新，TaskManager 里那条任务注册还留着
+      // ——跟 ExpoLocationMonitor 清理老围栏时遇到的是同一件事。真机实测：进程被杀
+      // 之后光 stop 再 start，注册看着建上了（hasStarted=true、options 带着
+      // foregroundService、间隔也对），却再也不投递一次样本，只有卸载重装才能恢复。
+      // 这里补一次真正的注销，把持久化记录也抹掉，等价于重装那一下。
+      try {
+        if (await TaskManager.isTaskRegisteredAsync(GUARD_TASK_NAME)) {
+          await TaskManager.unregisterTaskAsync(GUARD_TASK_NAME);
+        }
+      } catch (error) {
+        console.warn('[guard] failed to unregister the stale task', error);
       }
       if (!this.isCurrentGeneration(generation)) return;
       this.running = false;
@@ -218,11 +259,33 @@ export class ReminderGuardCoordinator {
         return;
       }
       if (!this.isCurrentGeneration(generation)) return;
+      // 临时诊断：这行打出来才代表注册真的建上了；之后多久没有 dispatching sample
+      // 就能直接跟 interval 对照，区分"间隔太疏"和"根本不投递"。
+      console.warn(`[guard] registered interval=${intervalMs}`);
       this.running = true;
       this.currentIntervalMs = intervalMs;
+      this.ownsRegistration = true;
+      // 自己刚建起来的注册，在第一次心跳到来之前也算"确认过还活着"，否则紧接着
+      // 的那次 reconcile（比如同时又新增了一条日程）会当它是陈旧的再拆一遍。
+      this.lastProgressAt = Date.now();
     } catch (error) {
       console.warn('[guard] startLocationUpdatesAsync failed', error);
     }
+  }
+
+  /**
+   * 注册声称在跑，但它真的还在投递吗？两个判据缺一不可：
+   *
+   * 1. 本进程自己建过它没有。继承来的注册在冷启动瞬间还会投出一两次心跳（上一份
+   *    注册的余波，真机上量到过两条紧挨着的样本），之后就彻底停摆——所以不能拿
+   *    "刚收到心跳"当它还活着的证据，只要不是自己建的就一律重建。
+   * 2. 自己建的那份，最近还在不在投递。这条管的是会话中途悄悄断掉的情况。
+   */
+  private isRegistrationStale(state: GuardRegistrationState): boolean {
+    if (state === 'absent' || state === 'unknown') return false;
+    if (!this.ownsRegistration) return true;
+    if (this.lastProgressAt == null) return true;
+    return Date.now() - this.lastProgressAt > REGISTRATION_STALE_AFTER_MS;
   }
 
   /**
