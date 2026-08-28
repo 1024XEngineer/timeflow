@@ -4,7 +4,7 @@ module.exports = {
     slug: 'timeflow',
     version: '1.0.0',
     orientation: 'portrait',
-    icon: './assets/icon.png',
+    icon: './assets/android-icon-foreground-timeflow.png',
     userInterfaceStyle: 'light',
     ios: {
       supportsTablet: true,
@@ -33,14 +33,21 @@ module.exports = {
         'VIBRATE',
       ],
       adaptiveIcon: {
-        backgroundColor: '#E6F4FE',
-        foregroundImage: './assets/android-icon-foreground.png',
-        backgroundImage: './assets/android-icon-background.png',
-        monochromeImage: './assets/android-icon-monochrome.png',
+        backgroundColor: '#F7F2E8',
+        foregroundImage: './assets/android-icon-foreground-timeflow.png',
       },
       predictiveBackGestureEnabled: false,
     },
     plugins: [
+      [
+        'expo-splash-screen',
+        {
+          backgroundColor: '#F7F2E8',
+          image: './assets/splash-bird.png',
+          imageWidth: 200,
+          resizeMode: 'contain',
+        },
+      ],
       'expo-sqlite',
       [
         'expo-location',
