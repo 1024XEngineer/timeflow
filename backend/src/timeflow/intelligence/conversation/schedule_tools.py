@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol, TypeVar, cast
+from zoneinfo import ZoneInfo
 
 from timeflow.business.calendar import (
     CreateScheduleCommand,
@@ -678,6 +679,7 @@ def _schedule_for_llm(snapshot: ScheduleSnapshot) -> dict[str, object]:
     Account scoping, status, timestamps, coordinates, and reminder disposition
     are internal noise that would bloat every turn's conversation history.
     """
+    tz = ZoneInfo(snapshot.timezone)
     return {
         "id": snapshot.id,
         "title": snapshot.title,
@@ -686,6 +688,7 @@ def _schedule_for_llm(snapshot: ScheduleSnapshot) -> dict[str, object]:
         "is_all_day": snapshot.is_all_day,
         "start_time": _iso_or_none(snapshot.start_time),
         "end_time": _iso_or_none(snapshot.end_time),
+        "starts_at_local": _local_text(snapshot.start_time, tz),
         "recurrence_rule": snapshot.recurrence_rule,
         "location_name": snapshot.location_name,
         "reminder_type": None if snapshot.reminder_type is None else snapshot.reminder_type.value,
@@ -693,6 +696,20 @@ def _schedule_for_llm(snapshot: ScheduleSnapshot) -> dict[str, object]:
         "reminder_offset_minutes": snapshot.reminder_offset_minutes,
         "revision": snapshot.revision,
     }
+
+
+def _local_text(instant: datetime | None, tz: ZoneInfo) -> str:
+    """Render a stored instant as local wall-clock text for the model to speak.
+
+    The ISO ``start_time`` keeps the exact offset for tool arguments, but the model
+    tends to read the clock digits verbatim when answering, ignoring the offset. A
+    UTC-stored instant (``10:00+00:00``) would then be spoken as "上午十点" instead of
+    the user's "下午六点". This companion field renders the same instant in the
+    schedule's own IANA zone, so the digits already match what the user meant.
+    """
+    if instant is None:
+        return ""
+    return instant.astimezone(tz).strftime("%Y-%m-%d %H:%M")
 
 
 def _iso_or_none(value: datetime | None) -> str | None:

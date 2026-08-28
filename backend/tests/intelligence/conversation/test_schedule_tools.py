@@ -7,6 +7,7 @@ import json
 import threading
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -32,6 +33,7 @@ from timeflow.business.calendar import (
 )
 from timeflow.intelligence.conversation.schedule_tools import (
     ScheduleToolInputError,
+    _local_text,
     map_create_schedule_command,
     map_delete_schedule_command,
     map_find_schedules_query,
@@ -504,6 +506,29 @@ async def test_registry_calls_service_with_injected_account_and_serializes_snaps
     assert result["result"]["schedules"][0]["schedule_type"] == "time"
     assert result["result"]["schedules"][0]["start_time"] == "2026-08-12T07:00:00+00:00"
     assert "category" not in result["result"]["schedules"][0]
+
+
+def test_local_text_renders_empty_for_a_schedule_without_a_start_time() -> None:
+    """A schedule without ``start_time`` (e.g. all-day or pending location) yields an
+    empty spoken field rather than a spurious wall-clock string."""
+    assert _local_text(None, ZoneInfo("Asia/Shanghai")) == ""
+
+
+@pytest.mark.asyncio
+async def test_serialized_snapshot_renders_local_wall_clock_for_the_model() -> None:
+    """The LLM-facing result adds a local wall-clock field so the model speaks the
+    user's clock digits, not the UTC digits it would otherwise read from the ISO.
+
+    FakeScheduleService stores ``07:00+00:00`` with timezone ``Asia/Shanghai``, so the
+    spoken field must render ``15:00`` -- the same instant on the user's clock."""
+    service = FakeScheduleService()
+    tool = build_agent_tool_registry(service, "account-1").get("schedule_create")
+
+    result = json.loads(await tool.execute(create_arguments()))
+
+    schedule = result["result"]["schedules"][0]
+    assert schedule["start_time"] == "2026-08-12T07:00:00+00:00"
+    assert schedule["starts_at_local"] == "2026-08-12 15:00"
 
 
 @pytest.mark.asyncio
