@@ -159,6 +159,13 @@ def refusing_toolbox() -> ToolBox:
     )
 
 
+def _authorize_delete(box: ToolBox) -> ToolBox:
+    """Grant the delete-authorization gate directly, for tests exercising delete
+    mechanics rather than the gate itself (see test_realtime_agent.py for that)."""
+    box._delete_authorization = "confirmation"
+    return box
+
+
 def run(name: str, arguments: dict[str, Any], box: ToolBox | None = None) -> Any:
     return asyncio.run((box or refusing_toolbox()).run(name, arguments))
 
@@ -250,7 +257,8 @@ def test_a_refused_write_tells_the_model_and_not_the_client(name: str) -> None:
             "schedule_kind": "once",
         },
     }[name]
-    result = run(name, arguments)
+    box = _authorize_delete(refusing_toolbox()) if name == "schedule_delete" else None
+    result = run(name, arguments, box)
     payload = json.loads(result.output)
     assert payload["status"] == "failed"
     assert payload["error"]["code"] == "revision_conflict"
@@ -276,40 +284,54 @@ def test_a_question_reaches_the_client_and_not_the_calendar() -> None:
     assert result.outcome is None
 
 
-def test_an_ambiguous_target_carries_the_candidates_it_found() -> None:
+def test_an_ambiguous_target_only_needs_the_question_it_speaks_aloud() -> None:
+    """Asking which of several schedules costs one spoken sentence, nothing more.
+
+    The model used to have to re-emit every matched schedule into a candidates array --
+    measured at 477 output tokens and 7.4s of generation for two schedules, then another
+    4s because the first attempt came back as a JSON string and was refused. Nothing
+    displayed it: the clients read only speech_text. So the choices are named in the
+    sentence the user actually hears, the same way ambiguous locations already work.
+    """
+    result = run(
+        "request_user_input",
+        {
+            "question_kind": "ambiguous_target",
+            "speech_text": "找到两个开会，第一个是今天下午三点，第二个是每周一早上十点，删哪个？",
+        },
+    )
+
+    assert json.loads(result.output) == {"asked": True}
+    assert result.question is not None
+    assert result.question["candidates"] == ()
+
+
+def test_candidates_the_model_volunteers_anyway_are_not_passed_on() -> None:
+    """The parameter is gone from the schema; anything sent under that name is ignored
+    rather than quietly reaching the client as a shape nothing agreed on.
+    """
     result = run(
         "request_user_input",
         {
             "question_kind": "ambiguous_target",
             "speech_text": "是哪一个会？",
-            "candidates": [{"schedule_id": "sch_1"}, "not an object", {"schedule_id": "sch_2"}],
+            "candidates": [{"schedule_id": "sch_1"}],
         },
     )
-    assert result.question is not None
-    # Anything that is not an object is dropped rather than passed to the client.
-    assert result.question["candidates"] == ({"schedule_id": "sch_1"}, {"schedule_id": "sch_2"})
 
-
-def test_an_ambiguous_target_with_nothing_to_choose_between_is_refused() -> None:
-    result = run(
-        "request_user_input",
-        {"question_kind": "ambiguous_target", "speech_text": "是哪一个会？"},
-    )
-    assert json.loads(result.output)["status"] == "failed"
-    assert result.question is None
-
-
-def test_candidates_that_are_not_a_list_are_ignored() -> None:
-    result = run(
-        "request_user_input",
-        {
-            "question_kind": "missing_field",
-            "speech_text": "哪天？",
-            "candidates": "sch_1",
-        },
-    )
     assert result.question is not None
     assert result.question["candidates"] == ()
+
+
+def test_request_user_input_no_longer_advertises_a_candidates_parameter() -> None:
+    """Left in the schema, the model keeps filling it -- that is where the seconds went."""
+    (ask,) = [
+        tool
+        for tool in ToolBox("acc_test", RecordingService()).tools()
+        if tool["function"]["name"] == "request_user_input"
+    ]
+
+    assert "candidates" not in ask["function"]["parameters"]["properties"]
 
 
 @pytest.mark.parametrize(
@@ -329,6 +351,72 @@ def test_a_question_the_client_could_not_show_is_refused(arguments: dict[str, An
     assert result.outcome is None
 
 
+_DELETE_ARGUMENTS = {"schedule_id": "sch_1", "expected_revision": 1, "schedule_kind": "once"}
+
+
+def test_a_delete_straight_off_a_command_is_refused_without_asking_first() -> None:
+    # The model does sometimes skip the confirmation it was told to ask for in the
+    # prompt; this is the code-level backstop, mirroring composed's _delete_authorized.
+    box = ToolBox("acc_test", RecordingService())
+    result = run("schedule_delete", _DELETE_ARGUMENTS, box)
+    payload = json.loads(result.output)
+    assert payload["status"] == "failed"
+    assert "request_user_input" in payload["error"]["message"]
+    assert result.outcome is None
+
+
+@pytest.mark.parametrize("kind", ["confirmation", "recurrence_scope"])
+def test_a_delete_right_after_asking_confirmation_or_scope_is_allowed(kind: str) -> None:
+    box = ToolBox("acc_test", RecordingService())
+    asked = run(
+        "request_user_input",
+        {"question_kind": kind, "speech_text": "确定要删除这条日程吗？"},
+        box,
+    )
+    assert asked.question is not None
+
+    result = run("schedule_delete", _DELETE_ARGUMENTS, box)
+    assert json.loads(result.output)["status"] == "applied"
+    assert result.outcome is not None
+
+
+def test_asking_something_else_does_not_carry_over_a_stale_delete_authorization() -> None:
+    box = ToolBox("acc_test", RecordingService())
+    run(
+        "request_user_input",
+        {"question_kind": "confirmation", "speech_text": "确定要删除这条日程吗？"},
+        box,
+    )
+    # The model moved on to a different question instead of acting on the answer --
+    # that earlier confirmation no longer authorizes a delete.
+    run(
+        "request_user_input",
+        {"question_kind": "missing_field", "speech_text": "还差开始时间，几点？"},
+        box,
+    )
+
+    result = run("schedule_delete", _DELETE_ARGUMENTS, box)
+    assert json.loads(result.output)["status"] == "failed"
+    assert result.outcome is None
+
+
+def test_one_confirmation_authorizes_a_whole_batch_of_deletes() -> None:
+    # A delete does not consume the authorization: "delete all three" only gets one
+    # confirmation from the model, then schedule_delete once per schedule -- if the
+    # first one cleared it, every delete after the first in a batch would be wrongly
+    # refused as unconfirmed.
+    box = ToolBox("acc_test", RecordingService())
+    run(
+        "request_user_input",
+        {"question_kind": "confirmation", "speech_text": "确定要把这三条日程都删除吗？"},
+        box,
+    )
+
+    for _ in range(3):
+        result = run("schedule_delete", _DELETE_ARGUMENTS, box)
+        assert json.loads(result.output)["status"] == "applied"
+
+
 @pytest.mark.parametrize(
     ("arguments", "expected"),
     [
@@ -343,7 +431,7 @@ def test_a_delete_reaches_the_call_that_matches_the_kind(
     run(
         "schedule_delete",
         {"schedule_id": "sch_1", "expected_revision": 1, **arguments},
-        ToolBox("acc_test", service),
+        _authorize_delete(ToolBox("acc_test", service)),
     )
     assert service.calls == [expected]
 
@@ -375,7 +463,7 @@ def test_a_this_occurrence_delete_reports_the_override_it_produced() -> None:
             "schedule_kind": "recurring",
             "scope": "this_occurrence",
         },
-        ToolBox("acc_test", OverrideProducingService()),
+        _authorize_delete(ToolBox("acc_test", OverrideProducingService())),
     )
     assert result.outcome is not None
     assert result.outcome["schedule"] is None
@@ -409,7 +497,7 @@ def test_a_this_occurrence_delete_with_existing_replacement_reports_both_schedul
             "schedule_kind": "recurring",
             "scope": "this_occurrence",
         },
-        ToolBox("acc_test", MultiScheduleProducingService()),
+        _authorize_delete(ToolBox("acc_test", MultiScheduleProducingService())),
     )
     assert result.outcome is not None
     # schedule（单数）保持只给第一条，向后兼容
@@ -429,7 +517,7 @@ def test_a_delete_with_nothing_left_to_report_still_says_it_applied() -> None:
             "schedule_kind": "recurring",
             "scope": "entire_series",
         },
-        ToolBox("acc_test", RecordingService()),
+        _authorize_delete(ToolBox("acc_test", RecordingService())),
     )
     assert json.loads(result.output) == {"status": "applied", "schedule": None}
     assert result.outcome is not None

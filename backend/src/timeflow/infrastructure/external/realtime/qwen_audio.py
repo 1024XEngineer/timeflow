@@ -59,24 +59,26 @@ class Transport(Protocol):
 class Observer(Protocol):
     """Where this adapter reports what the model says; restated, never imported."""
 
-    async def heard(self, text: str) -> None:
-        """The model reported what the user said."""
+    async def heard(self, text: str, turn_id: str | None = None) -> None:
+        """The model reported what the user said, and which input item it transcribes."""
         ...
 
     async def user_started_speaking(self) -> None:
         """The vendor detected user speech, including a barge-in."""
         ...
 
-    async def spoke(self, text: str) -> None:
-        """The model reported the words it is saying."""
+    async def spoke(self, text: str, turn_id: str | None = None) -> None:
+        """The model reported the words it is saying, and which input item they answer."""
         ...
 
     async def audio(self, data: bytes) -> None:
         """One chunk of the model's own speech, decoded to raw bytes."""
         ...
 
-    async def tool_requested(self, call_id: str, name: str, arguments: dict[str, Any]) -> None:
-        """The model asked for a tool to run."""
+    async def tool_requested(
+        self, call_id: str, name: str, arguments: dict[str, Any], turn_id: str | None = None
+    ) -> None:
+        """The model asked for a tool to run, as part of answering one utterance."""
         ...
 
     async def turn_completed(self) -> None:
@@ -195,6 +197,35 @@ class QwenAudioSession:
         self._speech_started_at: float | None = None
         self._response_started_at: float | None = None
         self._first_audio_at: float | None = None
+        # Diagnostic only: counts every response.create we send against every
+        # response.created the vendor reports back.
+        self._responses_sent = 0
+        self._responses_created = 0
+        # Continuous mode only: true once real user speech has started a reply we are
+        # legitimately waiting on, or a tool result has asked for a follow-up; false again
+        # the instant that reply settles. The vendor has been observed to start an extra
+        # response.created on its own -- no new speech_started, nothing asked for --
+        # sometimes minutes after a reply already settled, re-answering the same query
+        # under a fresh reply_id. _pump_continuous cancels a response.created it sees
+        # while this is false, before any of its text or audio can reach the client.
+        self._expecting_response = False
+        # True from the moment cancel_response() sends response.cancel until a new
+        # response actually starts. A cancel can race a response that the vendor was
+        # already finishing on its own -- observed in production as an "error" event
+        # back, "Conversation has no active response" -- which _pump_continuous would
+        # otherwise treat as fatal and hang up the whole call over a no-op. Held open
+        # until response.created rather than cleared on the next event, because the
+        # vendor having finished that response is exactly what makes its response.done
+        # arrive in between: a one-event allowance is spent on that response.done and
+        # never reaches the error it was meant for.
+        self._cancel_pending = False
+        # The vendor's own id for the stretch of user speech the current reply answers.
+        # It rides on speech_started and input_audio_buffer.committed, and the vendor
+        # stamps the matching transcript with it too -- which is what makes pairing a
+        # reply with the words that prompted it exact instead of positional. The
+        # transcript routinely arrives after the reply it belongs to has already
+        # started, so arrival order cannot do this job.
+        self._input_item_id: str | None = None
 
     async def configure(self, instructions: str, tools: list[dict[str, Any]]) -> None:
         """Set the session up before any audio; turn_detection only takes effect here."""
@@ -237,6 +268,7 @@ class QwenAudioSession:
         await self._send({"type": "input_audio_buffer.commit"})
         await self._send({"type": "response.create"})
         self._open_responses += 1
+        self._responses_sent += 1
 
     async def send_tool_result(self, call_id: str, output: str, *, respond: bool = True) -> None:
         """Write a tool's output back and mark whether it should be followed by a reply.
@@ -262,6 +294,7 @@ class QwenAudioSession:
         )
         if respond:
             self._followup_requested = True
+            self._expecting_response = True
         else:
             self._followup_suppressed = True
 
@@ -281,6 +314,7 @@ class QwenAudioSession:
         self._followup_requested = False
         self._followup_suppressed = False
         await self._send({"type": "response.cancel"})
+        self._cancel_pending = True
 
     async def close(self) -> None:
         """Close the underlying connection, ignoring an already-closed one."""
@@ -341,6 +375,14 @@ class QwenAudioSession:
             if kind == "conversation.item.input_audio_transcription.completed":
                 await observer.heard(str(event.get("transcript", "")))
             elif kind == "response.created":
+                self._responses_created += 1
+                if self._responses_created > self._responses_sent:
+                    logger.warning(
+                        "realtime vendor started a response we never requested "
+                        "(push_to_talk): sent=%s created=%s",
+                        self._responses_sent,
+                        self._responses_created,
+                    )
                 self._response_started_at = self._clock()
             elif kind == "response.audio_transcript.delta":
                 spoken += str(event.get("delta", ""))
@@ -380,8 +422,10 @@ class QwenAudioSession:
                 self._followup_requested = False
                 self._followup_suppressed = False
                 if wants_followup:
+                    logger.info("realtime sending follow-up response.create after a tool result")
                     await self._send({"type": "response.create"})
                     self._open_responses += 1
+                    self._responses_sent += 1
                     continue
                 if self._open_responses <= 0:
                     return
@@ -398,6 +442,18 @@ class QwenAudioSession:
         """
         spoken = ""
         self._responding = False
+        # A held session serves this conversation's next stream too, so everything this
+        # loop reasons about has to start over here rather than carry the last stream's
+        # answers into a call that has heard nothing yet: an expectation left standing
+        # would wave through the first spontaneous response, and a playback estimate
+        # left standing would report the opening speech_started as a barge-in on a reply
+        # from the previous call. Within one stream `suppressed` shadows a stale estimate;
+        # across streams nothing does. A follow-up already asked for and not yet delivered
+        # is the one expectation that legitimately outlives the loop that created it.
+        self._expecting_response = self._followup_requested
+        self._playable_until = 0.0
+        self._reply_bytes = 0
+        self._cancel_pending = False
         # True from the moment we cancel a reply until the next one starts: the vendor
         # may still emit a few queued deltas for the cancelled reply before it catches up.
         suppressed = False
@@ -408,7 +464,9 @@ class QwenAudioSession:
             kind = event.get("type")
 
             if kind == "input_audio_buffer.speech_started":
+                self._input_item_id = _item_id(event) or self._input_item_id
                 self._speech_started_at = self._clock()
+                self._expecting_response = True
                 # A real barge-in even once generation has finished: the phone can still
                 # be sounding out audio that was already fully sent (see _playable_until).
                 await observer.user_started_speaking()
@@ -417,22 +475,43 @@ class QwenAudioSession:
                     await self.cancel_response()
                     await observer.interrupted()
             elif kind == "response.created":
+                self._responses_created += 1
+                # A response is running again, so any cancel still awaiting its verdict
+                # is settled: whatever the vendor says from here on is about this one.
+                self._cancel_pending = False
+                if not self._expecting_response:
+                    logger.warning(
+                        "realtime vendor started a response with no user speech or "
+                        "requested follow-up behind it -- cancelling it before its "
+                        "content can reach the client"
+                    )
+                    suppressed = True
+                    self._responding = True
+                    await self.cancel_response()
+                    continue
                 self._responding = True
                 suppressed = False
                 spoken = ""
                 self._reply_bytes = 0
                 self._response_started_at = self._clock()
                 self._first_audio_at = None
+            elif kind == "input_audio_buffer.committed":
+                # Sent immediately before the response.created that answers it, so this
+                # is the closest reading of "which utterance the next reply is for".
+                self._input_item_id = _item_id(event) or self._input_item_id
             elif kind == "conversation.item.input_audio_transcription.completed":
-                await observer.heard(str(event.get("transcript", "")))
+                # Its own item_id, not the tracked one: a transcript that arrives late
+                # still says which utterance it belongs to, even if the user has since
+                # started another.
+                await observer.heard(str(event.get("transcript", "")), _item_id(event))
             elif kind == "response.audio_transcript.delta" and not suppressed:
                 spoken += str(event.get("delta", ""))
-                await observer.spoke(spoken)
+                await observer.spoke(spoken, self._input_item_id)
             elif kind == "response.audio_transcript.done" and not suppressed:
                 final = str(event.get("transcript", ""))
                 if final and final != spoken:
                     spoken = final
-                    await observer.spoke(spoken)
+                    await observer.spoke(spoken, self._input_item_id)
             elif kind == "response.audio.delta" and not suppressed:
                 decoded = _decode_audio(event.get("delta"))
                 if decoded:
@@ -445,7 +524,10 @@ class QwenAudioSession:
                 if requested is None:
                     await observer.failed("realtime session sent an unusable tool call")
                     return
-                await observer.tool_requested(**requested)
+                # Named here rather than left to spoke(): a tool call happens before any
+                # wording exists for this reply, so a question it raises would otherwise
+                # be stamped with the previous turn's id -- worse than carrying none.
+                await observer.tool_requested(**requested, turn_id=self._input_item_id)
             elif kind == "response.done":
                 usage = _parse_usage(event)
                 if usage is not None:
@@ -470,16 +552,32 @@ class QwenAudioSession:
                 self._followup_requested = False
                 self._followup_suppressed = False
                 if wants_followup:
+                    logger.info("realtime sending follow-up response.create after a tool result")
                     await self._send({"type": "response.create"})
                     self._open_responses += 1
+                    self._responses_sent += 1
                     continue
                 self._responding = False
+                # Not reset when suppressed: this response.done is the trailing tail of a
+                # reply a barge-in already cancelled, and that barge-in's own
+                # speech_started is what set this true -- the new reply it is about to
+                # start is exactly what we are still legitimately waiting on.
+                if not suppressed:
+                    self._expecting_response = False
                 # The bytes just sent still take this long to actually play out on the
                 # phone; a barge-in landing before then is still cancelling something
                 # audible, even though generation itself has already finished.
                 self._playable_until = self._clock() + self._reply_bytes / _OUTPUT_BYTES_PER_SECOND
                 await observer.turn_completed()
             elif kind == "error":
+                if self._cancel_pending and _is_benign_cancel_race(event):
+                    self._cancel_pending = False
+                    logger.info(
+                        "realtime response.cancel raced a response the vendor had "
+                        "already finished on its own -- nothing to actually cancel, "
+                        "continuing the call"
+                    )
+                    continue
                 await observer.failed(_error_message(event))
                 return
 
@@ -543,6 +641,12 @@ def _tool_request(event: dict[str, Any]) -> dict[str, Any] | None:
     return {"call_id": call_id, "name": name, "arguments": arguments}
 
 
+def _item_id(event: dict[str, Any]) -> str | None:
+    """Lift the vendor's conversation item id out of an event, when it carries one."""
+    item_id = event.get("item_id")
+    return item_id if isinstance(item_id, str) and item_id else None
+
+
 def _error_message(event: dict[str, Any]) -> str:
     """Extract a readable message from a vendor error event."""
     error = event.get("error")
@@ -551,6 +655,17 @@ def _error_message(event: dict[str, Any]) -> str:
         if isinstance(message, str) and message:
             return message
     return "realtime session reported an error"
+
+
+def _is_benign_cancel_race(event: dict[str, Any]) -> bool:
+    """Whether an error event is the vendor saying there was nothing to cancel.
+
+    Sent back when our own response.cancel loses a race against the vendor finishing
+    that same response on its own a moment earlier -- expected, not a real failure,
+    and safe to ignore: we already treat that response as discarded either way at both
+    cancel_response() call sites, whether the vendor got to finish it or not.
+    """
+    return "no active response" in _error_message(event).lower()
 
 
 def _parse_usage(event: dict[str, Any]) -> dict[str, Any] | None:

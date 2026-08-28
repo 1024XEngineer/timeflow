@@ -6,24 +6,26 @@ from typing import Any, Protocol
 class TurnObserver(Protocol):
     """What a realtime session reports while a turn runs, in this layer's own terms."""
 
-    async def heard(self, text: str) -> None:
-        """The model reported what the user said."""
+    async def heard(self, text: str, turn_id: str | None = None) -> None:
+        """The model reported what the user said, and which utterance it transcribes."""
         ...
 
     async def user_started_speaking(self) -> None:
         """The vendor detected user speech, including a barge-in."""
         ...
 
-    async def spoke(self, text: str) -> None:
-        """The model reported the words it is saying."""
+    async def spoke(self, text: str, turn_id: str | None = None) -> None:
+        """The model reported the words it is saying, and which utterance they answer."""
         ...
 
     async def audio(self, data: bytes) -> None:
         """One chunk of the model's own speech, already decoded to raw bytes."""
         ...
 
-    async def tool_requested(self, call_id: str, name: str, arguments: dict[str, Any]) -> None:
-        """The model asked for a tool to run before it continues."""
+    async def tool_requested(
+        self, call_id: str, name: str, arguments: dict[str, Any], turn_id: str | None = None
+    ) -> None:
+        """The model asked for a tool to run before it continues answering one utterance."""
         ...
 
     async def turn_completed(self) -> None:

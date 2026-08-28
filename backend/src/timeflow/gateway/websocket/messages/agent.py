@@ -13,6 +13,10 @@ class VoiceAsrCompletedPayload(BaseModel):
     transcript: str
     language: str
     duration_ms: int
+    # Which stretch of user speech this transcribes, so the client can pair it with the
+    # reply answering it instead of guessing from arrival order. Optional: only the
+    # realtime backend has a vendor id to report, and older clients ignore it.
+    turn_id: str | None = None
 
 
 class VoiceAsrCompleted(BaseModel):

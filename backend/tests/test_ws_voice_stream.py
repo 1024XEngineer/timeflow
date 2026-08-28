@@ -83,6 +83,18 @@ class ExplodingSink:
         raise RuntimeError("the sink is unavailable")
 
 
+class AbandoningSink:
+    """A sink that walks away from the stream without raising.
+
+    The realtime agent does exactly this when it cannot open a vendor session: it logs
+    and returns, so consume() succeeds while nothing ever reads the queue.
+    """
+
+    async def consume(self, chunks: AsyncIterator[bytes], stream: StreamContext) -> None:
+        """Return without reading anything."""
+        return
+
+
 def _build_app(
     sink: AudioSink,
     *,
@@ -464,6 +476,31 @@ def test_a_failing_sink_does_not_wedge_the_session() -> None:
         replies = [websocket.receive_json() for _ in range(1)]
 
     assert replies[0]["ok"] is False
+
+
+def test_a_sink_that_gives_up_without_failing_does_not_wedge_the_session() -> None:
+    """A sink that returns early retires its stream too, not only one that raises.
+
+    Found by walking the realtime path: it logs and returns when the vendor session
+    cannot be opened, so consume() succeeds and the exception handler never runs --
+    yet nothing drains the queue either. The receive loop then parks on a full queue
+    and the whole connection stops answering, including the voice.stream.end that
+    would have been the way out of it.
+    """
+    client = TestClient(_build_app(AbandoningSink(), queue_max_chunks=4))
+
+    with client.websocket_connect("/ws?device_id=device_001") as websocket:
+        websocket.send_json(VALID_HELLO)
+        websocket.receive_json()
+        websocket.send_json(START)
+        websocket.receive_json()
+        for _ in range(12):
+            websocket.send_bytes(b"\x00" * 320)
+        websocket.send_json({"type": "unknown.probe"})
+
+        reply = websocket.receive_json()
+
+    assert reply["ok"] is False
 
 
 def test_disconnect_cancels_an_unfinished_stream() -> None:

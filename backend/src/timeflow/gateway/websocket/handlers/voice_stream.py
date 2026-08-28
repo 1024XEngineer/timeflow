@@ -114,6 +114,18 @@ class VoiceStreamHandlers:
         # between this check and the assignment below.
         active = self._active_streams.get(session.session_id)
         if active is not None:
+            # Logged, not silent: a client that never sends voice.stream.end for an
+            # active stream (found on push-to-talk's swipe-to-cancel gesture, which
+            # closed the shared connection's local listener without ending the stream)
+            # gets every future voice.stream.start on this session rejected here, with
+            # nothing else in this file's logs to explain why.
+            logger.warning(
+                "rejected voice.stream.start: session_id=%s already has an active "
+                "stream stream_id=%s -- the client must send voice.stream.end (or "
+                "disconnect) before opening a new one",
+                session.session_id,
+                active.context.stream_id,
+            )
             return self._error(request_id, "A stream is already active for this session", active)
 
         payload = message.payload
@@ -239,17 +251,35 @@ class VoiceStreamHandlers:
                     "stream_id": stream.context.stream_id,
                 },
             )
-            self._retire_failed_stream(stream)
+        finally:
+            # Retired however consume() ended, not just when it raised: a sink may
+            # also give up by returning -- the realtime agent does exactly that when
+            # it cannot open a vendor session, and its pump returning early on a
+            # vendor error looks the same from here. Either way nothing drains the
+            # queue afterwards, so leaving the stream registered wedges the whole
+            # connection (see _retire_stream).
+            self._retire_stream(stream)
 
-    def _retire_failed_stream(self, stream: _ActiveStream) -> None:
-        """Drop a stream whose consumer has died, so the session keeps working.
+    def _retire_stream(self, stream: _ActiveStream) -> None:
+        """Drop a stream nobody is reading any more, so the session keeps working.
+
+        A no-op on the ordinary path, where voice.stream.end already took the stream
+        out before the sink finished with it.
 
         Removing it alone is not enough: the receive loop may be parked on a full
-        queue with nobody left to drain it, and would stay there forever. Emptying
-        the queue releases it, and the next frame is refused instead of enqueued.
+        queue with nobody left to drain it, and would stay there forever -- including
+        for the voice.stream.end that is the client's only way out. Emptying the queue
+        releases it, and the next frame is refused instead of enqueued.
         """
         session_id = stream.context.session.session_id
         if self._active_streams.get(session_id) is stream:
+            logger.warning(
+                "retiring an audio stream its consumer walked away from: "
+                "session_id=%s stream_id=%s -- further frames will be refused until "
+                "the client starts a new stream",
+                session_id,
+                stream.context.stream_id,
+            )
             self._active_streams.pop(session_id, None)
         while not stream.queue.empty():
             stream.queue.get_nowait()

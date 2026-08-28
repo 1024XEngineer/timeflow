@@ -76,6 +76,11 @@ class TranscriptResult(Protocol):
         """How long the audio ran."""
         ...
 
+    @property
+    def turn_id(self) -> str | None:
+        """Which stretch of user speech this belongs to, when the producer knows."""
+        ...
+
 
 class ReplyTextProgress(Protocol):
     """How much of a reply's wording is known so far."""
@@ -93,6 +98,11 @@ class ReplyTextProgress(Protocol):
     @property
     def done(self) -> bool:
         """Whether this is the last update for this reply."""
+        ...
+
+    @property
+    def turn_id(self) -> str | None:
+        """Which stretch of user speech this belongs to, when the producer knows."""
         ...
 
 
@@ -122,6 +132,11 @@ class DialogueQuestionInfo(Protocol):
     @property
     def candidates(self) -> tuple[dict[str, Any], ...]:
         """Choices the user is being asked to pick between, when there are any."""
+        ...
+
+    @property
+    def turn_id(self) -> str | None:
+        """Which stretch of user speech this belongs to, when the producer knows."""
         ...
 
 

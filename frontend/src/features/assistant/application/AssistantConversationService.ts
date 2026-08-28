@@ -255,11 +255,22 @@ export class AssistantConversationService implements AssistantApplicationPort {
     this.soundLevel = null;
     this.replyText = null;
     this.currentAudioId = null;
-    // 连接马上就要整个关掉，不会再有消息进来；清空避免长会话里攒一堆再也
-    // 用不上的 id。
+    // 清空避免长会话里攒一堆再也用不上的 id；连接不会整个关掉（见下面），
+    // 但这一路监听马上就要摘掉，不会再有消息进来。
     this.abandonedAudioIds.clear();
 
     const connection = this.connection;
+    const streamId = this.streamId;
+    // 服务端收到 voice.stream.start 那一刻就把这个 session 标成"有一条活跃
+    // 流"，只有匹配的 voice.stream.end 才能解开。connection.close() 解决不了
+    // 这件事——语音这条连接是共享的 AuthenticatedWebSocketClient，close() 只
+    // 解绑本地监听，不断真实的 WebSocket（见 AuthenticatedVoiceTransport 的
+    // 注释）。不发这一条，服务端会把这条流永远当成活跃的，下一次按住说话会
+    // 被直接拒绝——而且这条拒绝路径服务端不打日志，表现成"按下去完全没反应"
+    // （实测复现，上滑取消手势最容易触发）。
+    if (connection !== null && streamId !== null) {
+      connection.send({ payload: { stream_id: streamId }, type: 'voice.stream.end' });
+    }
     this.unsubscribeConnection?.();
     this.unsubscribeConnection = null;
     this.connection = null;
@@ -290,6 +301,12 @@ export class AssistantConversationService implements AssistantApplicationPort {
     this.disposed = true;
     this.pendingCategoryUpdates.clear();
     this.listeners.clear();
+    // 同样的原因见 cancelTurn()：卸载时如果还有一条活跃流（比如按住说话时
+    // 组件被卸载），必须先结束它，否则服务端会把这个 session 永远卡在
+    // "有活跃流"，后续同一条连接上的每一次按住说话都会被拒绝。
+    if (this.connection !== null && this.streamId !== null) {
+      this.connection.send({ payload: { stream_id: this.streamId }, type: 'voice.stream.end' });
+    }
     this.unsubscribeConnection?.();
     this.unsubscribeConnection = null;
     this.connection?.close();

@@ -254,7 +254,11 @@ describe('AssistantConversationService', () => {
     expect(service.getState()).toEqual({ conversationId: 'conv_002', phase: 'recording' });
   });
 
-  it('cancels a recording without ending the stream or applying a late command', async () => {
+  it('ends the active stream before closing so the server does not keep it marked active forever', async () => {
+    // 回归：connection.close() 不会真的断开共享连接（AuthenticatedVoiceTransport
+    // 只解绑本地监听），服务端只认 voice.stream.end。不发这一条，服务端会把
+    // 这个 session 永远标成"有活跃流"，下一次按住说话直接被拒绝，且这条拒绝
+    // 服务端不打日志，表现成按下去完全没反应——上滑取消手势实测复现过。
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
     const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
@@ -265,7 +269,10 @@ describe('AssistantConversationService', () => {
     await service.cancelTurn();
 
     expect(deps.capture.stop).toHaveBeenCalledTimes(1);
-    expect(fake.sent.filter((message) => message.type === 'voice.stream.end')).toHaveLength(0);
+    expect(fake.sent).toContainEqual({
+      payload: { stream_id: 'stream_001' },
+      type: 'voice.stream.end',
+    });
     expect(fake.closeCalls.count).toBe(1);
     expect(service.getState()).toEqual({ phase: 'idle' });
 
@@ -277,6 +284,22 @@ describe('AssistantConversationService', () => {
     } as AssistantServerMessage);
     await flushAsync();
     expect(deps.localScheduleWriter.applyCommandResult).not.toHaveBeenCalled();
+  });
+
+  it('does not send voice.stream.end when cancelling before any stream was opened', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({
+      connection: fake.connection,
+      requestPermission: () => new Promise<boolean>(() => {}),
+    });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    void service.startTurn();
+    await flushAsync();
+
+    await service.cancelTurn();
+
+    expect(fake.sent.filter((message) => message.type === 'voice.stream.end')).toHaveLength(0);
   });
 
   it('sends voice.stream.end and reports an error when capture.start() fails after the stream opened', async () => {
@@ -834,6 +857,21 @@ describe('AssistantConversationService', () => {
 
     expect(fake.unsubscribeCalls).toEqual({ audio: 1, close: 1, message: 1 });
     expect(fake.closeCalls.count).toBe(1);
+  });
+
+  it('ends the active stream on dispose() too, same reason as cancelTurn()', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = new AssistantConversationService({ accountId: 'acc_001' }, deps);
+
+    await completeStreamStart(fake, service.startTurn());
+
+    service.dispose();
+
+    expect(fake.sent).toContainEqual({
+      payload: { stream_id: 'stream_001' },
+      type: 'voice.stream.end',
+    });
   });
 
   it('tags every voice.stream.start with a fresh per-turn request_id', async () => {

@@ -62,26 +62,34 @@ class RecordingObserver:
     def __init__(self) -> None:
         """Start with nothing observed."""
         self.calls: list[tuple[str, Any]] = []
+        # Recorded apart from calls so the existing assertions on wording stay readable;
+        # only the tests about pairing an utterance with its reply look at these.
+        self.turn_ids: list[tuple[str, str | None]] = []
 
-    async def heard(self, text: str) -> None:
+    async def heard(self, text: str, turn_id: str | None = None) -> None:
         """Record the user's transcript."""
         self.calls.append(("heard", text))
+        self.turn_ids.append(("heard", turn_id))
 
     async def user_started_speaking(self) -> None:
         """Record that the vendor detected user speech."""
         self.calls.append(("user_started_speaking", None))
 
-    async def spoke(self, text: str) -> None:
+    async def spoke(self, text: str, turn_id: str | None = None) -> None:
         """Record the assistant's own words."""
         self.calls.append(("spoke", text))
+        self.turn_ids.append(("spoke", turn_id))
 
     async def audio(self, data: bytes) -> None:
         """Record one decoded audio chunk."""
         self.calls.append(("audio", data))
 
-    async def tool_requested(self, call_id: str, name: str, arguments: dict[str, Any]) -> None:
+    async def tool_requested(
+        self, call_id: str, name: str, arguments: dict[str, Any], turn_id: str | None = None
+    ) -> None:
         """Record a tool call request."""
         self.calls.append(("tool", (call_id, name, arguments)))
+        self.turn_ids.append(("tool", turn_id))
 
     async def turn_completed(self) -> None:
         """Record that one reply on a continuous stream finished normally."""
@@ -1025,24 +1033,34 @@ def test_continuous_pump_reports_multiple_replies_without_returning() -> None:
 
     async def scenario() -> None:
         transport = FakeTransport(
+            _event("input_audio_buffer.speech_started"),
             _event("response.created"),
             _event("response.audio_transcript.done", transcript="第一句"),
             _event("response.audio.delta", delta=base64.b64encode(b"pcm-1").decode()),
             _event("response.done"),
+            _event("input_audio_buffer.speech_started"),
             _event("response.created"),
             _event("response.audio_transcript.done", transcript="第二句"),
             _event("response.audio.delta", delta=base64.b64encode(b"pcm-2").decode()),
             _event("response.done"),
             _event("error", error={"message": "stream ended"}),
         )
+        # Explicit clock, not the real one: the second speech_started's own barge-in
+        # check must land safely past the first reply's (near-instant) playable_until,
+        # or this flakes depending on how fast the test happens to run.
+        clock_reads = iter([0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 2.0, 2.0, 3.0])
         observer = RecordingObserver()
 
-        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS, clock=lambda: next(clock_reads)).pump(
+            observer
+        )
 
         assert observer.calls == [
+            ("user_started_speaking", None),
             ("spoke", "第一句"),
             ("audio", b"pcm-1"),
             ("turn_completed", None),
+            ("user_started_speaking", None),
             ("spoke", "第二句"),
             ("audio", b"pcm-2"),
             ("turn_completed", None),
@@ -1061,6 +1079,7 @@ def test_continuous_pump_cancels_and_reports_an_interruption() -> None:
 
     async def scenario() -> None:
         transport = FakeTransport(
+            _event("input_audio_buffer.speech_started"),
             _event("response.created"),
             _event("response.audio_transcript.delta", delta="半句"),
             _event("input_audio_buffer.speech_started"),
@@ -1077,6 +1096,7 @@ def test_continuous_pump_cancels_and_reports_an_interruption() -> None:
         await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
 
         assert observer.calls == [
+            ("user_started_speaking", None),
             ("spoke", "半句"),
             ("user_started_speaking", None),
             ("interrupted", None),
@@ -1107,8 +1127,12 @@ def test_speech_started_still_cancels_after_generation_finishes_if_playback_is_n
         # takes to finish playing (~0.5s for the 24000 bytes below, 24kHz 16-bit
         # mono), then speech_started stamps itself and checks against that estimate
         # -- 0.1s later is still inside the playback window, so it is a real barge-in.
-        clock_reads = iter([0.0, 0.05, 0.05, 0.1, 0.1])
+        # Leading pair (0.0, 0.0) is the reply's own opening speech_started -- legitimate,
+        # nothing to interrupt yet (_playable_until starts at 0.0) -- so this stays a
+        # harmless prefix ahead of the five reads the rest of the scenario already used.
+        clock_reads = iter([0.0, 0.0, 0.0, 0.05, 0.05, 0.1, 0.1])
         transport = FakeTransport(
+            _event("input_audio_buffer.speech_started"),
             _event("response.created"),
             _event("response.audio.delta", delta=base64.b64encode(b"a" * 24000).decode()),
             _event("response.done"),
@@ -1122,6 +1146,7 @@ def test_speech_started_still_cancels_after_generation_finishes_if_playback_is_n
         )
 
         assert observer.kinds() == [
+            "user_started_speaking",
             "audio",
             "turn_completed",
             "user_started_speaking",
@@ -1144,8 +1169,12 @@ def test_speech_started_does_not_cancel_once_the_reply_would_be_done_playing() -
         # Five clock reads: created, first audio, done (playback estimate of ~0.5s for the
         # 24000 bytes below), then speech_started stamps itself and checks. 10s later is
         # far past the playback window, so nothing gets cancelled.
-        clock_reads = iter([0.0, 0.05, 0.05, 10.0, 10.0])
+        # Leading pair (0.0, 0.0) is the reply's own opening speech_started -- legitimate,
+        # nothing to interrupt yet (_playable_until starts at 0.0) -- so this stays a
+        # harmless prefix ahead of the five reads the rest of the scenario already used.
+        clock_reads = iter([0.0, 0.0, 0.0, 0.05, 0.05, 10.0, 10.0])
         transport = FakeTransport(
+            _event("input_audio_buffer.speech_started"),
             _event("response.created"),
             _event("response.audio.delta", delta=base64.b64encode(b"a" * 24000).decode()),
             _event("response.done"),
@@ -1160,6 +1189,7 @@ def test_speech_started_does_not_cancel_once_the_reply_would_be_done_playing() -
         )
 
         assert observer.kinds() == [
+            "user_started_speaking",
             "audio",
             "turn_completed",
             "user_started_speaking",
@@ -1168,6 +1198,295 @@ def test_speech_started_does_not_cancel_once_the_reply_would_be_done_playing() -
         ]
 
     asyncio.run(scenario())
+
+
+def test_a_response_created_with_no_speech_or_followup_behind_it_is_canceled_on_sight() -> None:
+    """The vendor has been seen to start a response on its own -- no new speech_started,
+    no follow-up we asked for -- re-answering an already-settled query under a fresh
+    reply_id. Cancelled before any of its text can reach the client.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("input_audio_buffer.speech_started"),
+            _event("response.created"),
+            _event("response.audio_transcript.done", transcript="今天没有日程。"),
+            _event("response.done"),
+            _event("response.created"),  # unsolicited: no speech_started, no follow-up
+            _event("response.audio_transcript.delta", delta="今天没有日程"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+
+        assert observer.calls == [
+            ("user_started_speaking", None),
+            ("spoke", "今天没有日程。"),
+            ("turn_completed", None),
+            ("failed", "stream ended"),
+        ]
+        assert transport.types() == ["response.cancel"]
+
+    asyncio.run(scenario())
+
+
+def test_a_cancel_that_races_the_vendor_already_finishing_does_not_end_the_call() -> None:
+    """Found in production: cancelling an unsolicited response.created can lose the race
+    against the vendor finishing that same response a moment earlier on its own, which
+    comes back as an "error" event ("Conversation has no active response") rather than
+    silently succeeding. Treating every error as fatal hung up the whole call over what
+    was actually a no-op -- this must be swallowed and the call carries on.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("response.created"),  # unsolicited: no speech_started yet at all
+            _event("error", error={"message": "Conversation has no active response."}),
+            _event("input_audio_buffer.speech_started"),
+            _event("response.created"),
+            _event("response.audio_transcript.done", transcript="真正的回复"),
+            _event("response.done"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+
+        assert observer.calls == [
+            ("user_started_speaking", None),
+            ("spoke", "真正的回复"),
+            ("turn_completed", None),
+            ("failed", "stream ended"),
+        ]
+        assert transport.types() == ["response.cancel"]
+
+    asyncio.run(scenario())
+
+
+def test_an_unrelated_error_after_a_cancel_still_ends_the_call() -> None:
+    """The benign-race allowance is narrow: an error that is not the vendor saying
+    there was nothing to cancel must still be treated as fatal, even right after a
+    cancel_response() call.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("input_audio_buffer.speech_started"),
+            _event("response.created"),
+            _event("response.audio.delta", delta=base64.b64encode(b"a" * 24000).decode()),
+            _event("input_audio_buffer.speech_started"),  # barge-in: cancels the reply
+            _event("error", error={"message": "internal server error"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+
+        assert observer.calls[-1] == ("failed", "internal server error")
+        assert transport.types() == ["response.cancel"]
+
+    asyncio.run(scenario())
+
+
+def test_a_response_done_between_the_cancel_and_its_error_does_not_end_the_call() -> None:
+    """The benign cancel race, in the order it actually arrives from the vendor.
+
+    The vendor having already finished that response on its own is the very thing that
+    makes our cancel a no-op, so its response.done lands *between* the response.cancel
+    and the error saying there was nothing to cancel. An allowance that only covers the
+    single next event is spent on that response.done, and the call is then hung up over
+    exactly the race the allowance was added for.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("response.created"),  # unsolicited: no speech_started, no follow-up
+            _event("response.done"),  # the vendor had already finished it on its own
+            _event("error", error={"message": "Conversation has no active response."}),
+            _event("input_audio_buffer.speech_started"),
+            _event("response.created"),
+            _event("response.audio_transcript.done", transcript="真正的回复"),
+            _event("response.done"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+
+        assert observer.calls == [
+            ("turn_completed", None),
+            ("user_started_speaking", None),
+            ("spoke", "真正的回复"),
+            ("turn_completed", None),
+            ("failed", "stream ended"),
+        ]
+        assert transport.types() == ["response.cancel"]
+
+    asyncio.run(scenario())
+
+
+def test_a_reused_session_does_not_inherit_the_previous_stream_s_expectations() -> None:
+    """A held session serves the next call too, so its per-stream state starts over.
+
+    _expecting_response left true by the call that just ended would wave through the
+    first spontaneous response of the next one -- the duplicate reply this guard exists
+    to catch, slipping past on exactly the turn nobody is watching for it.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            # First call: a reply we were legitimately waiting on, cut short.
+            _event("input_audio_buffer.speech_started"),
+            _event("response.created"),
+            _event("error", error={"message": "stream ended"}),
+            # Second call on the same session: the vendor speaks up unprompted.
+            _event("response.created"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        session = QwenAudioSession(transport, CONFIG, CONTINUOUS)
+
+        await session.pump(RecordingObserver())
+        second = RecordingObserver()
+        await session.pump(second)
+
+        assert second.calls == [("failed", "stream ended")]
+        assert transport.types() == ["response.cancel"]
+
+    asyncio.run(scenario())
+
+
+def test_a_reused_session_does_not_inherit_the_previous_reply_s_playback_estimate() -> None:
+    """The same reset, for the audio a previous call left counted as still playing.
+
+    Within one call, `suppressed` shadows a stale playback estimate; across calls
+    nothing does, and the next call's opening speech_started gets reported as a barge-in
+    on a reply from the call before it -- a voice.tts.canceled the moment a fresh call
+    starts, over audio nobody is hearing.
+    """
+
+    async def scenario() -> None:
+        # First call: speech_started stamps and compares, response.created, first audio,
+        # then response.done estimates 0.5s of playback for the 24000 bytes below. The
+        # second call's speech_started stamps and compares 0.1s later -- inside that
+        # estimate, which is what makes the leak visible.
+        clock_reads = iter([0.0, 0.0, 0.0, 0.0, 0.0, 0.1, 0.1])
+        transport = FakeTransport(
+            _event("input_audio_buffer.speech_started"),
+            _event("response.created"),
+            _event("response.audio.delta", delta=base64.b64encode(b"a" * 24000).decode()),
+            _event("response.done"),
+            _event("error", error={"message": "stream ended"}),
+            # Second call on the same session.
+            _event("input_audio_buffer.speech_started"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        session = QwenAudioSession(transport, CONFIG, CONTINUOUS, clock=lambda: next(clock_reads))
+
+        await session.pump(RecordingObserver())
+        second = RecordingObserver()
+        await session.pump(second)
+
+        assert second.kinds() == ["user_started_speaking", "failed"]
+
+    asyncio.run(scenario())
+
+
+def test_a_reply_and_its_late_transcript_report_the_same_utterance_id() -> None:
+    """Captured from a real call: the vendor stamps the user's audio with an item id and
+    puts it on the transcript, which routinely lands after the reply it belongs to has
+    already started streaming. Reporting that id on both sides is what lets the client
+    pair them without guessing from arrival order.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("input_audio_buffer.speech_started", item_id="item_user_1"),
+            _event("input_audio_buffer.committed", item_id="item_user_1"),
+            _event("response.created"),
+            _event("response.audio_transcript.delta", delta="明天"),
+            # The real ordering: the transcript arrives mid-reply, not before it.
+            _event(
+                "conversation.item.input_audio_transcription.completed",
+                item_id="item_user_1",
+                transcript="明天我要看电影。",
+            ),
+            _event("response.audio_transcript.done", transcript="明天看电影，具体几点去？"),
+            _event("response.done"),
+            _event("error", error={"message": "stream ended"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+
+        assert observer.turn_ids == [
+            ("spoke", "item_user_1"),
+            ("heard", "item_user_1"),
+            ("spoke", "item_user_1"),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_a_late_transcript_reports_its_own_utterance_not_the_one_now_running() -> None:
+    """A transcript carries its own item_id, so one that arrives after the user has
+    already started the next utterance still names the turn it actually transcribes.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("input_audio_buffer.speech_started", item_id="item_user_1"),
+            _event("input_audio_buffer.committed", item_id="item_user_1"),
+            _event("response.created"),
+            _event("response.audio_transcript.done", transcript="第一条回复"),
+            _event("response.done"),
+            # The next utterance is already under way when turn 1's transcript lands.
+            _event("input_audio_buffer.speech_started", item_id="item_user_2"),
+            _event(
+                "conversation.item.input_audio_transcription.completed",
+                item_id="item_user_1",
+                transcript="第一句话",
+            ),
+            _event("error", error={"message": "stream ended"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+
+        assert observer.turn_ids == [("spoke", "item_user_1"), ("heard", "item_user_1")]
+        assert observer.calls[-2] == ("heard", "第一句话")
+
+    asyncio.run(scenario())
+
+
+def test_a_tool_call_names_the_utterance_it_is_answering() -> None:
+    """A tool call happens before this reply has said anything, so the id has to come
+    from the session rather than from whatever the previous reply left behind -- a
+    question raised by the tool would otherwise be filed under the previous turn.
+    """
+
+    async def scenario() -> None:
+        transport = FakeTransport(
+            _event("input_audio_buffer.speech_started", item_id="item_user_1"),
+            _event("input_audio_buffer.committed", item_id="item_user_1"),
+            _event("response.created"),
+            _event("response.audio_transcript.done", transcript="第一条回复"),
+            _event("response.done"),
+            _event("input_audio_buffer.speech_started", item_id="item_user_2"),
+            _event("input_audio_buffer.committed", item_id="item_user_2"),
+            _event("response.created"),
+            _event(
+                "response.function_call_arguments.done",
+                call_id="call_1",
+                name="schedule_create",
+                arguments="{}",
+            ),
+            _event("error", error={"message": "stream ended"}),
+        )
+        observer = RecordingObserver()
+
+        await QwenAudioSession(transport, CONFIG, CONTINUOUS).pump(observer)
+
+        assert ("tool", "item_user_2") in observer.turn_ids
 
 
 def test_continuous_pump_reports_tool_calls_and_a_bad_one_ends_the_stream() -> None:
@@ -1484,16 +1803,18 @@ def test_a_second_audio_delta_does_not_re_stamp_first_audio_time() -> None:
 
     async def scenario() -> None:
         transport = FakeTransport(
+            _event("input_audio_buffer.speech_started"),
             _event("response.created"),
             _event("response.audio.delta", delta=base64.b64encode(b"pcm-1").decode()),
             _event("response.audio.delta", delta=base64.b64encode(b"pcm-2").decode()),
             _usage_event(),
             _event("error", error={"message": "stream ended"}),
         )
-        # created, first delta stamps _first_audio_at, second delta's guard reads
-        # nothing further (short-circuited), response.done's playable_until estimate,
-        # then its own latency report.
-        clock_reads = iter([0.0, 0.2, 0.5, 0.5])
+        # Leading pair (0.0, 0.0) is the reply's own opening speech_started (legitimate,
+        # nothing to interrupt yet). Then: created, first delta stamps _first_audio_at,
+        # second delta's guard reads nothing further (short-circuited), response.done's
+        # own latency report, then its playable_until estimate.
+        clock_reads = iter([0.0, 0.0, 0.0, 0.2, 0.5, 0.5])
         observer = RecordingObserver()
 
         await QwenAudioSession(transport, CONFIG, CONTINUOUS, clock=lambda: next(clock_reads)).pump(
@@ -1502,8 +1823,9 @@ def test_a_second_audio_delta_does_not_re_stamp_first_audio_time() -> None:
 
         usage = next(call[1] for call in observer.calls if call[0] == "usage_reported")
         assert usage["latency_first_audio_ms"] == 200.0
-        assert observer.calls[0] == ("audio", b"pcm-1")
-        assert observer.calls[1] == ("audio", b"pcm-2")
+        assert observer.calls[0] == ("user_started_speaking", None)
+        assert observer.calls[1] == ("audio", b"pcm-1")
+        assert observer.calls[2] == ("audio", b"pcm-2")
 
     asyncio.run(scenario())
 

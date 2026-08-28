@@ -19,6 +19,8 @@ import type {
 import type { LocationProvider } from '../../../../../src/infrastructure/location/LocationProvider';
 
 const SESSION_IDLE_TIMEOUT_MS = 180_000;
+const NOTIFY_COALESCE_MS = 50;
+const NATIVE_TEARDOWN_TIMEOUT_MS = 1000;
 
 /** 跟 AssistantConversationService.test.ts 用同一套理由：startTurn() 里好几层 await，固定多轮 flush 比猜跳数稳。 */
 async function flushAsync(iterations = 20): Promise<void> {
@@ -255,6 +257,324 @@ describe('AssistantContinuousConversationService', () => {
     ]);
   });
 
+  it('does not leave a second copy of a reply that started before its transcript', async () => {
+    // 后端日志实测：vendor 的 transcription.completed 是在回复开始之后才发的，有时
+    // 甚至晚于 response.done。也就是说"回复先于转写到达"根本不是异常分支，而是每
+    // 通电话第一轮的常态。回复的头几个分片落进 turns 为空时的兜底列表、剩下的分片
+    // 落进转写开的那一轮，同一句话就变成两个气泡——而且兜底列表永远渲染在最后、
+    // 整通电话都不会消失（用户描述的"有一条一直存在"）。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: false, reply_id: 'reply_1', speech_text: '电影' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 500, language: 'zh', transcript: '明天我将会去看电影。' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '电影几点开始?' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getMessages()).toEqual([
+      { id: 'turn-0:user', role: 'user', text: '明天我将会去看电影。' },
+      { id: 'turn-0:assistant', role: 'assistant', text: '电影几点开始?' },
+    ]);
+  });
+
+  it('lets a whole reply that beat its transcript still collect that transcript', async () => {
+    // 同一件事的另一半时序：整条回复（含 done=true）都在转写之前到达。回复开的占位
+    // 轮必须能被随后到达的转写补上，而不是各自成为一条孤立的消息。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '电影几点开始?' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 500, language: 'zh', transcript: '明天我将会去看电影。' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getTurns()).toEqual([
+      { id: 'turn-0', replyText: '电影几点开始?', transcript: '明天我将会去看电影。' },
+    ]);
+  });
+
+  it('pairs each reply with its own utterance when the backend names the turn', async () => {
+    // 到达顺序在这个时序下必然猜错：两轮的回复都在任何一条转写之前完成，按"填最后
+    // 一轮"会把问题A配到回复B上，回复A丢掉提问、问题B丢掉回复（实测三条全错位）。
+    // realtime 后端现在把 vendor 的输入 item id 带在两边，配对不再靠猜。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_A', speech_text: '回复A', turn_id: 'item_1' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_B', speech_text: '回复B', turn_id: 'item_2' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 1, language: 'zh', transcript: '问题A', turn_id: 'item_1' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 1, language: 'zh', transcript: '问题B', turn_id: 'item_2' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getTurns()).toEqual([
+      { id: 'item_1', replyText: '回复A', transcript: '问题A' },
+      { id: 'item_2', replyText: '回复B', transcript: '问题B' },
+    ]);
+  });
+
+  it('files a clarifying question under the utterance it asks about', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 1, language: 'zh', transcript: '明天看电影', turn_id: 'item_1' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: {
+        candidates: [],
+        question_id: 'q_1',
+        question_kind: 'missing_field',
+        speech_text: '电影几点开始？',
+        turn_id: 'item_1',
+      },
+      type: 'voice.dialogue.question',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getTurns()).toEqual([
+      { id: 'item_1', replyText: '电影几点开始？', transcript: '明天看电影' },
+    ]);
+  });
+
+  it('still falls back to arrival order when the backend names no turn', async () => {
+    // composed 后端拿不到 vendor 的 item id，字段是 null，老那套按到达顺序的归属
+    // 必须继续有效——不能因为加了 id 就把没有 id 的那条路走坏。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 1, language: 'zh', transcript: '明天看电影' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_A', speech_text: '好的' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getMessages()).toEqual([
+      { id: 'turn-0:user', role: 'user', text: '明天看电影' },
+      { id: 'turn-0:assistant', role: 'assistant', text: '好的' },
+    ]);
+  });
+
+  it('coalesces streaming reply fragments into one notification without delaying the text', async () => {
+    // vendor 的回复文字是逐词下发的（实测一句话约 20 条、间隔 12~16ms）。每条都通知
+    // 一次就是每条都整屏重渲染，而播放链路每 ~50ms 就得把下一块 PCM 喂进原生播放器
+    // ——被渲染挤掉就是一次听得见的空隙。合并的只是"通知界面重画"，状态本身同步更新。
+    jest.useFakeTimers();
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 1, language: 'zh', transcript: '明天看电影' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    let notifications = 0;
+    service.subscribe(() => {
+      notifications += 1;
+    });
+    for (const text of ['明天', '明天中午', '明天中午12点', '明天中午12点看电影']) {
+      fake.emitMessage({
+        conversation_id: 'conv_001',
+        payload: { done: false, reply_id: 'reply_1', speech_text: text },
+        type: 'voice.dialogue.reply',
+      } as AssistantServerMessage);
+    }
+    await flushAsync();
+
+    // 四条分片之间一次都没通知，但内容已经是最新的了。
+    expect(notifications).toBe(0);
+    expect(service.getReplyText()).toBe('明天中午12点看电影');
+
+    await advanceAndFlush(NOTIFY_COALESCE_MS);
+    expect(notifications).toBe(1);
+  });
+
+  it('does not make the last fragment of a reply wait for the coalescing window', async () => {
+    jest.useFakeTimers();
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+    await startListening(fake, service);
+
+    let notifications = 0;
+    service.subscribe(() => {
+      notifications += 1;
+    });
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '好的' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(notifications).toBe(1);
+  });
+
+  it('stops re-rendering for microphone level while a reply is playing', async () => {
+    // 放 TTS 时光球显示的是麦克风能量，本来就没有意义，而每刷一次都要跟播放链路
+    // 抢同一条 JS 线程。音量照常记着，只是不为它单独刷界面。
+    jest.useFakeTimers();
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+    await startListening(fake, service);
+    fake.emitMessage({
+      audio_id: 'audio_1',
+      conversation_id: 'conv_001',
+      payload: { format: 'pcm', purpose: 'command_result', sample_rate_hz: 24000 },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    let notifications = 0;
+    service.subscribe(() => {
+      notifications += 1;
+    });
+    deps.emitMicChunk(new ArrayBuffer(8), -20);
+    await advanceAndFlush(NOTIFY_COALESCE_MS * 2);
+
+    expect(notifications).toBe(0);
+    // 但音量本身记下来了，下一次真正的状态变化会把它一起带出去。
+    expect(service.getSoundLevel()).toBe(-20);
+  });
+
+  it('still hangs up when the native player never answers stop()', async () => {
+    // 实测症状：结束对话按了没反应，而且那之后 TTS 也不出声。两件事同一个根：
+    // hangUp 里清 endTurnInFlight 的 finally 只盖住最后一个 try，前面两个 await
+    // 卡住（不是抛错，是不返回）就永远走不到，之后每一次按都被开头那道门槛挡掉。
+    jest.useFakeTimers();
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    deps.playback.stop = jest.fn(() => new Promise<void>(() => {}));
+    const service = createService(deps);
+    await startListening(fake, service);
+
+    void service.endTurn();
+    // 先让 hangUp 跑到装定时器那一步，再推时钟——限时是在 await 之后才装上的。
+    await flushAsync();
+    await advanceAndFlush(NATIVE_TEARDOWN_TIMEOUT_MS);
+    await advanceAndFlush(NATIVE_TEARDOWN_TIMEOUT_MS);
+
+    expect(service.getState()).toEqual({ phase: 'idle' });
+    // 服务端那条流也必须放掉，否则下一次 voice.stream.start 会被当成"已有活跃流"拒绝。
+    expect(fake.sent).toContainEqual({
+      payload: { stream_id: 'stream_001' },
+      type: 'voice.stream.end',
+    });
+  });
+
+  it('still hangs up when the native recorder never answers stop()', async () => {
+    jest.useFakeTimers();
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    deps.capture.stop = jest.fn(() => new Promise<void>(() => {}));
+    const service = createService(deps);
+    await startListening(fake, service);
+
+    void service.endTurn();
+    // 先让 hangUp 跑到装定时器那一步，再推时钟——限时是在 await 之后才装上的。
+    await flushAsync();
+    await advanceAndFlush(NATIVE_TEARDOWN_TIMEOUT_MS);
+    await advanceAndFlush(NATIVE_TEARDOWN_TIMEOUT_MS);
+
+    expect(service.getState()).toEqual({ phase: 'idle' });
+  });
+
+  it('does not let a stop() that never answers silence the rest of the call', async () => {
+    // playbackChain 会被换成那个永不 settle 的 promise，之后每一块音频都排在它
+    // 后面——整通电话再也不出声。打断（tts.canceled）就会走到这条路上。
+    jest.useFakeTimers();
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    deps.playback.stop = jest.fn(() => new Promise<void>(() => {}));
+    const service = createService(deps);
+    await startListening(fake, service);
+
+    fake.emitMessage({
+      audio_id: 'audio_1',
+      conversation_id: 'conv_001',
+      payload: { format: 'pcm', purpose: 'command_result', sample_rate_hz: 24000 },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+    fake.emitMessage({
+      audio_id: 'audio_1',
+      conversation_id: 'conv_001',
+      type: 'voice.tts.canceled',
+    } as AssistantServerMessage);
+    await flushAsync();
+    await advanceAndFlush(NATIVE_TEARDOWN_TIMEOUT_MS);
+
+    // 打断之后模型接着回答：这一轮的音频必须照常送进播放器。
+    fake.emitMessage({
+      audio_id: 'audio_2',
+      conversation_id: 'conv_001',
+      payload: { format: 'pcm', purpose: 'command_result', sample_rate_hz: 24000 },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+    fake.emitAudioFrame(new ArrayBuffer(4));
+    await flushAsync();
+
+    expect(deps.playback.pushChunk).toHaveBeenCalled();
+  });
+
   it('keeps a streaming assistant reply pending until it is done', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
@@ -268,7 +588,7 @@ describe('AssistantContinuousConversationService', () => {
     } as AssistantServerMessage);
     await flushAsync();
     expect(service.getMessages()).toEqual([
-      { id: 'reply_1', pending: true, role: 'assistant', text: '明天' },
+      { id: 'turn-0:assistant', pending: true, role: 'assistant', text: '明天' },
     ]);
 
     fake.emitMessage({
@@ -278,7 +598,7 @@ describe('AssistantContinuousConversationService', () => {
     } as AssistantServerMessage);
     await flushAsync();
     expect(service.getMessages()).toEqual([
-      { id: 'reply_1', role: 'assistant', text: '明天下午三点' },
+      { id: 'turn-0:assistant', role: 'assistant', text: '明天下午三点' },
     ]);
   });
 
@@ -644,6 +964,47 @@ describe('AssistantContinuousConversationService', () => {
     ]);
   });
 
+  it('drops a stale duplicate of the just-completed reply instead of opening a new turn', async () => {
+    // 防御性加固：正常情况下后端不会在 done=true 之后又发一条同 reply_id 的
+    // 重复消息，但连续模式判断"是不是新一轮"完全靠 lastTurnReplyDone 这个
+    // 到达顺序猜测——一旦真的收到一条迟到/重复的消息，旧逻辑会把它当成
+    // "还没到的新一轮"，凭空开一个占位轮，造成重复气泡（跟 vendor 凭空多起
+    // response 那次实测的现象一样）。reply_id 没变就不该开新轮。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 800, language: 'zh', transcript: '明天几点开会' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '明天下午三点' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+    expect(service.getMessages()).toEqual([
+      { id: 'turn-0:user', role: 'user', text: '明天几点开会' },
+      { id: 'turn-0:assistant', role: 'assistant', text: '明天下午三点' },
+    ]);
+
+    // 同一个 reply_id 的重复投递。
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '明天下午三点' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(service.getMessages()).toEqual([
+      { id: 'turn-0:user', role: 'user', text: '明天几点开会' },
+      { id: 'turn-0:assistant', role: 'assistant', text: '明天下午三点' },
+    ]);
+  });
+
   it('records an assistant bubble even when a reply arrives before any transcript', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
@@ -658,7 +1019,9 @@ describe('AssistantContinuousConversationService', () => {
     await flushAsync();
 
     expect(service.getReplyText()).toBe('好的');
-    expect(service.getMessages()).toEqual([{ id: 'reply_1', role: 'assistant', text: '好的' }]);
+    expect(service.getMessages()).toEqual([
+      { id: 'turn-0:assistant', role: 'assistant', text: '好的' },
+    ]);
   });
 
   it('ignores a reply that arrives before any transcript with blank speech text', async () => {
@@ -677,10 +1040,10 @@ describe('AssistantContinuousConversationService', () => {
     expect(service.getMessages()).toEqual([]);
   });
 
-  it('records a clarifying question as an orphan bubble when it arrives before any transcript', async () => {
-    // voice.dialogue.question 跟 voice.dialogue.reply 一样，正常流程不会先于
-    // 任何 transcript 到达，但要是真的发生了，得挂到零散气泡列表兜底，而不是
-    // 丢掉。同一个 question_id 再来一次要原地更新，不能变成两条气泡。
+  it('opens a turn for a clarifying question that arrives before any transcript', async () => {
+    // voice.dialogue.question 跟 voice.dialogue.reply 一样会先于转写到达，得开一个
+    // 占位轮挂上去，等转写到了补进同一轮，而不是丢掉。同一个 question_id 再来一次
+    // 要原地更新，不能变成两条气泡。
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
     const service = createService(deps);
@@ -699,7 +1062,7 @@ describe('AssistantContinuousConversationService', () => {
     await flushAsync();
 
     expect(service.getMessages()).toEqual([
-      { id: 'q_1', role: 'assistant', text: '你是想订哪一天的会议室？' },
+      { id: 'turn-0:assistant', role: 'assistant', text: '你是想订哪一天的会议室？' },
     ]);
 
     fake.emitMessage({
@@ -715,7 +1078,11 @@ describe('AssistantContinuousConversationService', () => {
     await flushAsync();
 
     expect(service.getMessages()).toEqual([
-      { id: 'q_1', role: 'assistant', text: '你是想订哪一天的会议室，上午还是下午？' },
+      {
+        id: 'turn-0:assistant',
+        role: 'assistant',
+        text: '你是想订哪一天的会议室，上午还是下午？',
+      },
     ]);
   });
 
@@ -1249,7 +1616,7 @@ describe('AssistantContinuousConversationService', () => {
     disposeService(service);
   });
 
-  it('stops immediately and drops queued chunks when TTS is canceled', async () => {
+  it('stops the player once the in-flight write lands, and drops what was queued behind it', async () => {
     const fake = createFakeConnection();
     const deps = createDeps({ connection: fake.connection });
     const service = createService(deps);
@@ -1292,7 +1659,11 @@ describe('AssistantContinuousConversationService', () => {
       conversation_id: 'conv_001',
       type: 'voice.tts.canceled',
     } as AssistantServerMessage);
-    expect(calls).toEqual(['push-1', 'stop']);
+    // stop 排在在途的 push-1 后面，不跟它并发。原来是绕过队列立刻发的，理由写的是
+    // "否则已排队的 PCM 会先继续喂给播放器"——那个理由不成立（代次检查已经把排队的
+    // 都作废了，见下面 push-2），而并发的代价是真的：stopAudio 撞上原生侧正在进行
+    // 的写入，实测会不返回，然后 playbackChain 就死在那儿，整通电话再不出声。
+    expect(calls).toEqual(['push-1']);
 
     resolveFirst();
     await flushAsync();
@@ -1338,6 +1709,9 @@ describe('AssistantContinuousConversationService', () => {
     await flushAsync();
 
     disposeService(service);
+    // stop 现在排在 playbackChain 末尾（不再跟在途的原生写入并发），所以晚一个
+    // 微任务才真正调用——保证没变，时机变了。
+    await flushAsync();
 
     expect(deps.playback.stop).toHaveBeenCalled();
   });
@@ -1431,6 +1805,51 @@ describe('AssistantContinuousConversationService', () => {
 
     expect(deps.playback.stop).not.toHaveBeenCalled();
     expect(service.getState()).toEqual({ conversationId: 'conv_001', phase: 'speaking' });
+    disposeService(service);
+  });
+
+  it('tracks every abandoned audio id, not just the most recently abandoned one', async () => {
+    // 跟 AssistantConversationService（PTT）里同名 bug 一样的结构：canceledAudioId
+    // 原来是单个变量，两次打断前后脚发生、第一条的 tts.end 还没到就轮到第二条时，
+    // 第一条的 id 会被第二条覆盖掉——它自己迟到的 tts.end 就会被误判成"正常收尾"，
+    // 多余地调一次 endStream() 并把第二条也应该维持住的取消状态冲掉。
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    const startMessage = (audioId: string): AssistantServerMessage =>
+      ({
+        audio_id: audioId,
+        conversation_id: 'conv_001',
+        payload: { format: 'pcm_s16le', purpose: 'reply', sample_rate_hz: 24000, speech_text: '' },
+        type: 'voice.tts.start',
+      }) as AssistantServerMessage;
+    const canceledMessage = (audioId: string): AssistantServerMessage =>
+      ({
+        audio_id: audioId,
+        conversation_id: 'conv_001',
+        type: 'voice.tts.canceled',
+      }) as AssistantServerMessage;
+    const endMessage = (audioId: string): AssistantServerMessage =>
+      ({
+        audio_id: audioId,
+        conversation_id: 'conv_001',
+        type: 'voice.tts.end',
+      }) as AssistantServerMessage;
+
+    await startListening(fake, service);
+    fake.emitMessage(startMessage('audio_001'));
+    fake.emitMessage(canceledMessage('audio_001'));
+    fake.emitMessage(startMessage('audio_002'));
+    fake.emitMessage(canceledMessage('audio_002'));
+    await flushAsync();
+
+    // 两条都迟到的收尾消息，谁先谁后都不该被当成真正的收尾。
+    fake.emitMessage(endMessage('audio_001'));
+    fake.emitMessage(endMessage('audio_002'));
+    await flushAsync();
+
+    expect(deps.playback.endStream).not.toHaveBeenCalled();
     disposeService(service);
   });
 
@@ -1557,5 +1976,59 @@ describe('AssistantContinuousConversationService', () => {
     await startListening(fakeRetry, service);
     expect(retryOnChunk).not.toBeNull();
     expect(service.getState()).toEqual({ conversationId: 'conv_001', phase: 'listening' });
+  });
+
+  it('hangs up the call when the server rejects an audio frame mid-conversation', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    // 服务端这一侧的流已经没了（后端 agent 提前退出/流被回收），每一个音频帧都会
+    // 换回来一条这样的错误。只把 phase 设成 error 是不够的：麦克风还开着，帧还在
+    // 发，服务端就一帧回一条错误，直到用户自己想起来点"结束对话"。
+    fake.emitMessage({
+      error: {
+        code: 'AUDIO_INVALID',
+        message: 'Audio frames require voice.stream.start first',
+        retryable: false,
+      },
+      ok: false,
+      type: 'voice.command.error',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(deps.capture.stop).toHaveBeenCalled();
+    // 服务端那条流必须放掉，否则下一次 voice.stream.start 会被当成"已有活跃流"拒绝。
+    expect(fake.sent).toContainEqual({
+      payload: { stream_id: 'stream_001' },
+      type: 'voice.stream.end',
+    });
+    expect(fake.unsubscribeCalls).toEqual({ audio: 1, close: 1, message: 1 });
+    // 报错原因要留在界面上，不能像正常挂断那样直接归 idle 悄悄消失。
+    expect(service.getState()).toEqual({
+      message: 'Audio frames require voice.stream.start first',
+      phase: 'error',
+    });
+  });
+
+  it('does not fight a hangup already in progress when an error arrives during it', async () => {
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+
+    await startListening(fake, service);
+    const ending = service.endTurn();
+    // 我们自己发的 voice.stream.end 之后，服务端可能补一条"这条流没有音频"的错误。
+    // 挂断已经在路上了，它不该把已经归位的状态又掰成 error。
+    fake.emitMessage({
+      error: { code: 'AUDIO_INVALID', message: 'The audio stream carried no audio' },
+      ok: false,
+      type: 'voice.command.error',
+    } as AssistantServerMessage);
+    await ending;
+    await flushAsync();
+
+    expect(service.getState()).toEqual({ phase: 'idle' });
   });
 });

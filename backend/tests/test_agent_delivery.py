@@ -441,6 +441,9 @@ def test_deliver_reply_text_sends_voice_dialogue_reply() -> None:
             "reply_id": "reply_001",
             "speech_text": "好，明天下午三点",
             "done": False,
+            # Absent unless the producer can name the utterance this answers; the
+            # composed backend cannot, so the field ships as null there.
+            "turn_id": None,
         }
 
     asyncio.run(scenario())
@@ -504,6 +507,7 @@ def test_deliver_question_sends_voice_dialogue_question_in_the_documented_shape(
             "speech_text": "你说的是早会还是周会？",
             "required_response": "schedule_id",
             "candidates": [{"id": "schedule_1"}, {"id": "schedule_2"}],
+            "turn_id": None,
         }
 
     asyncio.run(scenario())

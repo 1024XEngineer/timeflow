@@ -784,3 +784,53 @@ def test_a_voice_mode_change_discards_the_held_session_and_opens_a_fresh_one() -
         assert second_session.audio_sent == [b"b"]
 
     asyncio.run(scenario())
+
+
+def test_a_farewell_without_end_conversation_still_hangs_up() -> None:
+    """The model sometimes says goodbye without remembering to call end_conversation;
+    composed guards this with the same fallback (agent.py's _is_farewell/_claims_success
+    pattern) and this mirrors it -- otherwise the call is left open after its own farewell.
+    """
+
+    async def scenario() -> None:
+        session = ScriptedSession(
+            [
+                ("heard", ("先这样，拜拜",)),
+                ("spoke", ("好的，",)),
+                ("spoke", ("好的，再见",)),
+            ]
+        )
+        sink = RecordingSink()
+
+        await RealtimeAgent(ScriptedFactory(session), sink).handle_audio(
+            _chunks(b"a" * 3200), _Stream()
+        )
+
+        assert "session_end" in sink.kinds()
+
+    asyncio.run(scenario())
+
+
+def test_a_farewell_in_a_reply_that_also_called_a_tool_does_not_auto_hang_up() -> None:
+    """Scoped to a reply that called no tool at all, same as composed: a reply that also
+    did something ("帮你删掉了，再见") should not risk a false hit on those words alone.
+    """
+
+    async def scenario() -> None:
+        session = ScriptedSession(
+            [
+                ("heard", ("帮我把这条日程删了",)),
+                ("tool_requested", ("call_1", "schedule_delete", {})),
+                ("spoke", ("好的，",)),
+                ("spoke", ("好的，删掉了，再见",)),
+            ]
+        )
+        sink = RecordingSink()
+
+        await RealtimeAgent(ScriptedFactory(session), sink).handle_audio(
+            _chunks(b"a" * 3200), _Stream()
+        )
+
+        assert "session_end" not in sink.kinds()
+
+    asyncio.run(scenario())

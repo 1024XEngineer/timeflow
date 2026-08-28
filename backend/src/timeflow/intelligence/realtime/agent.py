@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import json
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -72,6 +73,15 @@ def new_message_id() -> str:
 def new_question_id() -> str:
     """Return a fresh identifier for one question put to the user."""
     return f"question_{uuid4().hex}"
+
+
+# Same list the composed agent uses for the same fallback (conversation/agent.py).
+_FAREWELL_MARKERS = ("再见", "拜拜", "先这样", "就这样")
+
+
+def _is_farewell(text: str) -> bool:
+    """Return True when a reply's wording is a farewell that should end the session."""
+    return any(marker in text for marker in _FAREWELL_MARKERS)
 
 
 def _client_location_from_stream(stream: StreamInfo) -> ClientLocation | None:
@@ -366,12 +376,19 @@ class _Turn:
         # phone is playing -- the model finishes generating well before playback ends.
         self._last_audio_id: str | None = None
         self._reply_id: str | None = None
+        # The vendor's id for the utterance the current reply answers, set by spoke().
+        # Not reset between replies: a question asked from a tool call happens before
+        # any wording has been spoken for that reply, and must still name its turn.
+        self._turn_id: str | None = None
         self._spoken = ""
         self._purpose = REPLY_PURPOSE
         self._input_bytes = 0
         self._audio: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._speaking: asyncio.Task[None] | None = None
         self._ends_conversation = False
+        # Whether a tool ran as part of the reply currently being settled. Read by
+        # _finish_reply()'s farewell fallback below, then reset for the next reply.
+        self._tool_called = False
         self.failure: str | None = None
 
     def note_input_chunk(self, chunk_bytes: int) -> None:
@@ -386,30 +403,49 @@ class _Turn:
         """Occupy ASR while the vendor is hearing the user, including barge-ins."""
         self._telemetry.set_session_stage(self._stream.session_id, "asr")
 
-    async def heard(self, text: str) -> None:
+    async def heard(self, text: str, turn_id: str | None = None) -> None:
         """Push what the user was heard to say."""
         if not text:
             logger.info("realtime model returned an empty transcript")
             self._input_bytes = 0
             return
+        # Logged in full, and interpolated rather than passed via extra= for the reason
+        # failed() states below. Without it a log shows a reply arriving with no
+        # transcript behind it and no way to tell whether the user said nothing, the
+        # vendor dropped the transcription event, or the reply belongs to some other
+        # turn entirely -- every one of those reads the same. Quoted so leading and
+        # trailing whitespace is visible.
+        logger.info("realtime heard the user say: %r", text)
         await self._result_sink.deliver_transcript(
             HeardSpeech(
                 text=text,
                 language=ASSUMED_LANGUAGE,
                 duration_ms=self._input_bytes // _INPUT_BYTES_PER_MS,
+                turn_id=turn_id,
             ),
             self._stream,
         )
         self._telemetry.set_session_stage(self._stream.session_id, "llm")
         self._input_bytes = 0
 
-    async def spoke(self, text: str) -> None:
+    async def spoke(self, text: str, turn_id: str | None = None) -> None:
         """Push the reply's wording so far, and keep it for the audio's opening message."""
+        # Kept for the closing done=true this reply gets in _finish_reply, and for any
+        # question it asks along the way: both have to name the same utterance the
+        # streaming updates did, or the client cannot tell they are one turn.
+        self._turn_id = turn_id
         if self._reply_id is None:
             self._reply_id = self._reply_id_factory()
+            logger.info(
+                "realtime turn started a new spoken reply: reply_id=%s account_id=%s "
+                "conversation_id=%s",
+                self._reply_id,
+                self._stream.account_id,
+                self._stream.conversation_id,
+            )
         self._spoken = text
         await self._result_sink.deliver_reply_text(
-            ReplyText(reply_id=self._reply_id, speech_text=text), self._stream
+            ReplyText(reply_id=self._reply_id, speech_text=text, turn_id=turn_id), self._stream
         )
 
     async def audio(self, data: bytes) -> None:
@@ -420,12 +456,19 @@ class _Turn:
             self._speaking = asyncio.create_task(self._speak())
         await self._audio.put(data)
 
-    async def tool_requested(self, call_id: str, name: str, arguments: dict[str, Any]) -> None:
+    async def tool_requested(
+        self, call_id: str, name: str, arguments: dict[str, Any], turn_id: str | None = None
+    ) -> None:
         """Run the tool, tell the client what came of it, and let the model continue.
 
         The client needs the data to display and the model needs it to say anything true
         about it, so both are answered from the one call.
         """
+        self._tool_called = True
+        # Before _ask() below can need it: a question raised here is the first thing this
+        # turn says, so nothing else has named the turn yet.
+        if turn_id is not None:
+            self._turn_id = turn_id
         if self._tools is None:
             logger.warning(
                 "realtime model asked for a tool while none are registered",
@@ -436,6 +479,16 @@ class _Turn:
         occupy_tool = name not in {"end_conversation", "request_user_input"}
         if occupy_tool:
             self._telemetry.set_session_stage(self._stream.session_id, "tool")
+        # Ahead of the call, not folded into the "executed" line below: run() raises on a
+        # failing tool and can sit there on a slow one, and the arguments are exactly what
+        # is wanted in both cases -- a request line with no executed line after it says
+        # which call hung or blew up. Interpolated for the reason failed() states below;
+        # default=str keeps an unexpected value from turning a log line into a crash.
+        logger.info(
+            "realtime tool requested: tool=%s arguments=%s",
+            name,
+            json.dumps(arguments, ensure_ascii=False, default=str),
+        )
         tool_started = self._stopwatch()
         try:
             result = await self._tools.run(name, arguments)
@@ -487,6 +540,7 @@ class _Turn:
                 speech_text=str(question["speech_text"]),
                 required_response=question["required_response"],
                 candidates=question["candidates"],
+                turn_id=self._turn_id,
             ),
             self._stream,
         )
@@ -556,9 +610,27 @@ class _Turn:
         if self._spoken:
             assert self._reply_id is not None
             await self._result_sink.deliver_reply_text(
-                ReplyText(reply_id=self._reply_id, speech_text=self._spoken, done=True),
+                ReplyText(
+                    reply_id=self._reply_id,
+                    speech_text=self._spoken,
+                    done=True,
+                    turn_id=self._turn_id,
+                ),
                 self._stream,
             )
+            # The model sometimes says goodbye without remembering to call
+            # end_conversation. Composed guards the same gap by pattern-matching a
+            # no-tool-call reply; mirrored here rather than trusted to the prompt --
+            # otherwise the call is left open, listening, after its own farewell.
+            # Scoped to a reply that called no tool at all, same as composed: a reply
+            # that also did something ("帮你删掉了，再见") should not risk a false hit.
+            if (
+                not canceled
+                and not self._ends_conversation
+                and not self._tool_called
+                and _is_farewell(self._spoken)
+            ):
+                self._ends_conversation = True
         if self._speaking is not None:
             if canceled:
                 assert self._audio_id is not None
@@ -583,6 +655,7 @@ class _Turn:
         self._audio_id = None
         self._speaking = None
         self._purpose = REPLY_PURPOSE
+        self._tool_called = False
         if self._ends_conversation:
             # Only after the settling above -- any farewell this reply spoke has already
             # gone out in full, so telling the client to hang up here never cuts it short.
