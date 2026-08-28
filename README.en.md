@@ -8,7 +8,7 @@ Say it, and it is scheduled. When the time comes, it keeps the promise.
 
 [中文](README.md) | **English**
 
-[![TimeFlow](https://img.shields.io/website?url=https%3A%2F%2Ftimeflow.xcu.asia%3A10278%2F&up_message=online&down_message=offline&label=TimeFlow)](https://timeflow.xcu.asia:10278/)
+[![TimeFlow](https://img.shields.io/website?url=https%3A%2F%2Ftimeflow.xcu.asia%2F&up_message=online&down_message=offline&label=TimeFlow)](https://timeflow.xcu.asia/)
 [![Frontend CI](https://img.shields.io/github/check-runs/1024XEngineer/timeflow/main?nameFilter=Frontend%20(lint%2C%20types%2C%20build)&label=Frontend%20CI&logo=github)](https://github.com/1024XEngineer/timeflow/actions/workflows/ci.yml)
 [![Backend CI](https://img.shields.io/github/check-runs/1024XEngineer/timeflow/main?nameFilter=Backend%20(lint%2C%20types%2C%20tests)&label=Backend%20CI&logo=github)](https://github.com/1024XEngineer/timeflow/actions/workflows/ci.yml)
 [![codecov](https://img.shields.io/codecov/c/github/1024XEngineer/timeflow?logo=codecov&label=codecov)](https://codecov.io/gh/1024XEngineer/timeflow)
@@ -330,7 +330,7 @@ If Docker Hub is unreachable, or the server has no source tree, follow [observab
 
 ## Related links
 
-- Live preview: [TimeFlow](https://timeflow.xcu.asia:10278/)
+- Live preview: [TimeFlow](https://timeflow.xcu.asia/)
 - Backend setup and checks: [backend/README.md](backend/README.md)
 - Observability on a cloud host: [observability/README.md](observability/README.md)
 - Work tracking: [Issues](https://github.com/1024XEngineer/timeflow/issues)
