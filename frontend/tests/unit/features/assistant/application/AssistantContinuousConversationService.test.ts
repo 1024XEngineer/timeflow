@@ -19,6 +19,7 @@ import type {
 import type { LocationProvider } from '../../../../../src/infrastructure/location/LocationProvider';
 
 const SESSION_IDLE_TIMEOUT_MS = 180_000;
+const NOTIFY_COALESCE_MS = 50;
 
 /** 跟 AssistantConversationService.test.ts 用同一套理由：startTurn() 里好几层 await，固定多轮 flush 比猜跳数稳。 */
 async function flushAsync(iterations = 20): Promise<void> {
@@ -404,6 +405,92 @@ describe('AssistantContinuousConversationService', () => {
       { id: 'turn-0:user', role: 'user', text: '明天看电影' },
       { id: 'turn-0:assistant', role: 'assistant', text: '好的' },
     ]);
+  });
+
+  it('coalesces streaming reply fragments into one notification without delaying the text', async () => {
+    // vendor 的回复文字是逐词下发的（实测一句话约 20 条、间隔 12~16ms）。每条都通知
+    // 一次就是每条都整屏重渲染，而播放链路每 ~50ms 就得把下一块 PCM 喂进原生播放器
+    // ——被渲染挤掉就是一次听得见的空隙。合并的只是"通知界面重画"，状态本身同步更新。
+    jest.useFakeTimers();
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+    await startListening(fake, service);
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { duration_ms: 1, language: 'zh', transcript: '明天看电影' },
+      type: 'voice.asr.completed',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    let notifications = 0;
+    service.subscribe(() => {
+      notifications += 1;
+    });
+    for (const text of ['明天', '明天中午', '明天中午12点', '明天中午12点看电影']) {
+      fake.emitMessage({
+        conversation_id: 'conv_001',
+        payload: { done: false, reply_id: 'reply_1', speech_text: text },
+        type: 'voice.dialogue.reply',
+      } as AssistantServerMessage);
+    }
+    await flushAsync();
+
+    // 四条分片之间一次都没通知，但内容已经是最新的了。
+    expect(notifications).toBe(0);
+    expect(service.getReplyText()).toBe('明天中午12点看电影');
+
+    await advanceAndFlush(NOTIFY_COALESCE_MS);
+    expect(notifications).toBe(1);
+  });
+
+  it('does not make the last fragment of a reply wait for the coalescing window', async () => {
+    jest.useFakeTimers();
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+    await startListening(fake, service);
+
+    let notifications = 0;
+    service.subscribe(() => {
+      notifications += 1;
+    });
+    fake.emitMessage({
+      conversation_id: 'conv_001',
+      payload: { done: true, reply_id: 'reply_1', speech_text: '好的' },
+      type: 'voice.dialogue.reply',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    expect(notifications).toBe(1);
+  });
+
+  it('stops re-rendering for microphone level while a reply is playing', async () => {
+    // 放 TTS 时光球显示的是麦克风能量，本来就没有意义，而每刷一次都要跟播放链路
+    // 抢同一条 JS 线程。音量照常记着，只是不为它单独刷界面。
+    jest.useFakeTimers();
+    const fake = createFakeConnection();
+    const deps = createDeps({ connection: fake.connection });
+    const service = createService(deps);
+    await startListening(fake, service);
+    fake.emitMessage({
+      audio_id: 'audio_1',
+      conversation_id: 'conv_001',
+      payload: { format: 'pcm', purpose: 'command_result', sample_rate_hz: 24000 },
+      type: 'voice.tts.start',
+    } as AssistantServerMessage);
+    await flushAsync();
+
+    let notifications = 0;
+    service.subscribe(() => {
+      notifications += 1;
+    });
+    deps.emitMicChunk(new ArrayBuffer(8), -20);
+    await advanceAndFlush(NOTIFY_COALESCE_MS * 2);
+
+    expect(notifications).toBe(0);
+    // 但音量本身记下来了，下一次真正的状态变化会把它一起带出去。
+    expect(service.getSoundLevel()).toBe(-20);
   });
 
   it('keeps a streaming assistant reply pending until it is done', async () => {

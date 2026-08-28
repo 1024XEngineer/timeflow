@@ -26,6 +26,11 @@ const LOCATION_TIMEOUT_MS = 2000;
 // 单独的"等待用户输入 10~30 秒"档位按设计简化，不再单独实现——这一档就是
 // 最终会触发动作的那一档。
 const SESSION_IDLE_TIMEOUT_MS = 180_000;
+// 高频内容更新合并成一次通知的窗口。vendor 的回复文字是逐词下发的（实测一句话约
+// 20 条、间隔 12~16ms），每条都通知一次就是每条都整屏重渲染；而播放链路每 ~50ms
+// 就要把下一块 PCM 喂进原生播放器，被渲染挤掉就是一次可听见的空隙。50ms 一档，
+// 文字看起来照样是流式的，重渲染次数降到四分之一以下。
+const NOTIFY_COALESCE_MS = 50;
 
 /** 允许暂停/由暂停恢复的阶段——除此之外调用 togglePause() 什么都不做。 */
 const PAUSABLE_PHASES: ReadonlySet<ConversationTurnState['phase']> = new Set([
@@ -106,6 +111,8 @@ export class AssistantContinuousConversationService implements AssistantApplicat
   /** endTurn() 主动关闭连接期间为 true，让 handleClose 认出这是预期内的挂断。 */
   private endingCall = false;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  /** notifyThrottled() 排着的那次通知；非 null 表示这一档里已经有一次待发。 */
+  private notifyTimer: ReturnType<typeof setTimeout> | null = null;
   /** true 期间麦克风回调采到的帧不再往 WS 发；连接和录音本身不受影响。 */
   private muted = false;
   /** endTurn() 执行期间为 true：期间到达的服务端消息一律丢弃，防止挂断过程中
@@ -264,7 +271,12 @@ export class AssistantContinuousConversationService implements AssistantApplicat
           }
           connection.sendAudioFrame(chunk);
           this.soundLevel = soundLevel;
-          this.notifyListeners();
+          // 正在放 TTS 时不为音量刷界面：这时候光球显示的是麦克风能量，本来就没有
+          // 意义，而每刷一次都要跟播放链路抢同一条 JS 线程。音量照常记着，下一次
+          // 真正的状态变化会把它一起带出去。
+          if (this.state.phase !== 'speaking') {
+            this.notifyThrottled();
+          }
         });
       } catch (error) {
         // 服务端这时候已经确认开流了（stream_id 拿到手了）：跟 endTurn() 一样的
@@ -317,6 +329,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     }
     this.endTurnInFlight = true;
     this.clearIdleTimer();
+    this.clearNotifyTimer();
     this.endingCall = true;
     try {
       await this.deps.capture.stop();
@@ -390,6 +403,7 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     this.disposed = true;
     this.pendingCategoryUpdates.clear();
     this.clearIdleTimer();
+    this.clearNotifyTimer();
     this.unsubscribeAppState();
     this.listeners.clear();
     // 连续模式麦克风开着的时间远长于按住说话的一次按住，组件卸载时更可能还在
@@ -510,7 +524,12 @@ export class AssistantContinuousConversationService implements AssistantApplicat
           message.payload.speech_text,
           message.payload.done,
         );
-        this.notifyListeners();
+        // 收尾那条不合并，让最终文案立刻落地；中间的分片合并掉。
+        if (message.payload.done) {
+          this.notifyListeners();
+        } else {
+          this.notifyThrottled();
+        }
         return;
       }
       case 'voice.tts.start':
@@ -834,9 +853,31 @@ export class AssistantContinuousConversationService implements AssistantApplicat
     this.notifyListeners();
   }
 
+  /** 把一串高频内容更新合并成一次通知。状态本身是同步改好的——getMessages()、
+   * getReplyText() 立刻就是新值——这里推迟的只是"通知界面重画"，所以合并不会让
+   * 任何人读到旧数据，只是少刷几帧，把 JS 线程让给播放链路。 */
+  private notifyThrottled(): void {
+    if (this.notifyTimer !== null) {
+      return;
+    }
+    this.notifyTimer = setTimeout(() => {
+      this.notifyTimer = null;
+      this.notifyListeners();
+    }, NOTIFY_COALESCE_MS);
+  }
+
   private notifyListeners(): void {
+    // 立刻通知已经把最新状态送出去了，排着的那次就是多余的一帧。
+    this.clearNotifyTimer();
     for (const listener of this.listeners) {
       listener(this.state);
+    }
+  }
+
+  private clearNotifyTimer(): void {
+    if (this.notifyTimer !== null) {
+      clearTimeout(this.notifyTimer);
+      this.notifyTimer = null;
     }
   }
 }
