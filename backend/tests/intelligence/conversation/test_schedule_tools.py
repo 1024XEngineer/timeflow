@@ -507,6 +507,23 @@ async def test_registry_calls_service_with_injected_account_and_serializes_snaps
 
 
 @pytest.mark.asyncio
+async def test_serialized_snapshot_renders_local_wall_clock_for_the_model() -> None:
+    """The LLM-facing result adds a local wall-clock field so the model speaks the
+    user's clock digits, not the UTC digits it would otherwise read from the ISO.
+
+    FakeScheduleService stores ``07:00+00:00`` with timezone ``Asia/Shanghai``, so the
+    spoken field must render ``15:00`` -- the same instant on the user's clock."""
+    service = FakeScheduleService()
+    tool = build_agent_tool_registry(service, "account-1").get("schedule_create")
+
+    result = json.loads(await tool.execute(create_arguments()))
+
+    schedule = result["result"]["schedules"][0]
+    assert schedule["start_time"] == "2026-08-12T07:00:00+00:00"
+    assert schedule["starts_at_local"] == "2026-08-12 15:00"
+
+
+@pytest.mark.asyncio
 async def test_serialized_snapshot_trims_internal_fields() -> None:
     """The LLM-facing result keeps only reference/report fields and drops the
     internal snapshot noise (account scoping, status, timestamps, coordinates,
