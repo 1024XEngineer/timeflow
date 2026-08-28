@@ -33,10 +33,8 @@ module.exports = {
         'VIBRATE',
       ],
       adaptiveIcon: {
-        backgroundColor: '#E6F4FE',
-        foregroundImage: './assets/android-icon-foreground.png',
-        backgroundImage: './assets/android-icon-background.png',
-        monochromeImage: './assets/android-icon-monochrome.png',
+        backgroundColor: '#F7F2E8',
+        foregroundImage: './assets/android-icon-foreground-timeflow.png',
       },
       predictiveBackGestureEnabled: false,
     },
@@ -64,7 +62,6 @@ module.exports = {
       [
         'expo-notifications',
         {
-          icon: './assets/icon.png',
           color: '#15352B',
           defaultChannel: 'timeflow-reminders',
         },
