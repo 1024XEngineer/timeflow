@@ -27,6 +27,7 @@ import { openTimeflowDatabase } from '../infrastructure/database';
 import { ExpoLocationProvider } from '../infrastructure/location/ExpoLocationProvider';
 import { HomeScreen } from '../screens/HomeScreen';
 import { LoginScreen } from '../screens/LoginScreen';
+import { boundManufacturer, boundOs, type ClientTelemetryPort } from '../shared/observability';
 import { colors, spacing } from '../shared/ui/theme';
 import { AppProviders } from './AppProviders';
 import { createAppServices, type AppServices } from './composition/createAppServices';
@@ -59,6 +60,7 @@ export function AppRoot({ services: providedServices }: { services?: AppServices
         reminder={services.reminder}
         reminderState={services.reminderState}
         scheduleReader={services.schedules}
+        telemetry={services.reminderPorts.telemetry}
         webSocketClient={services.webSocketClient}
       />
     </AppProviders>
@@ -73,6 +75,7 @@ function AuthRoute({
   reminder,
   reminderState,
   scheduleReader,
+  telemetry,
   webSocketClient,
 }: {
   readonly alertDialog: AlertDialogPort;
@@ -82,6 +85,7 @@ function AuthRoute({
   readonly reminder: ReminderApplicationPort;
   readonly reminderState: SqliteReminderStateStore;
   readonly scheduleReader: SqliteLocalScheduleReader;
+  readonly telemetry?: ClientTelemetryPort;
   readonly webSocketClient: AuthenticatedWebSocketClient;
 }) {
   const { retryInitialization, viewState } = useAuth();
@@ -121,6 +125,7 @@ function AuthRoute({
       reminder={reminder}
       reminderState={reminderState}
       scheduleReader={scheduleReader}
+      telemetry={telemetry}
       username={viewState.username}
       webSocketClient={webSocketClient}
     />
@@ -147,6 +152,7 @@ function AuthenticatedScheduleRoute({
   reminder,
   reminderState,
   scheduleReader,
+  telemetry,
   username,
   webSocketClient,
 }: {
@@ -158,6 +164,7 @@ function AuthenticatedScheduleRoute({
   readonly reminder: ReminderApplicationPort;
   readonly reminderState: SqliteReminderStateStore;
   readonly scheduleReader: SqliteLocalScheduleReader;
+  readonly telemetry?: ClientTelemetryPort;
   readonly username: string;
   readonly webSocketClient: AuthenticatedWebSocketClient;
 }) {
@@ -174,11 +181,15 @@ function AuthenticatedScheduleRoute({
     let active = true;
     void device.getStatus().then((status) => {
       if (active) setPermissionGate(status.permissions.notifications ? 'clear' : 'gated');
+      telemetry?.setDeviceContext({
+        manufacturer: boundManufacturer(status.oemGuidance.manufacturer),
+        os: boundOs(status.platform),
+      });
     });
     return () => {
       active = false;
     };
-  }, [device]);
+  }, [device, telemetry]);
 
   const handleRequestPermission = useCallback((permission?: DevicePermission) => {
     setHighlightPermission(permission ?? null);

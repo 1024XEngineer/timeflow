@@ -24,6 +24,7 @@ Say it, and it is scheduled. When the time comes, it keeps the promise.
 - [Requirements](#requirements)
 - [Getting started](#getting-started)
 - [Pointing the app at a local API](#pointing-the-app-at-a-local-api)
+- [Client reminder telemetry (Sentry)](#client-reminder-telemetry-sentry)
 - [Enabling real voice](#enabling-real-voice)
 - [Running the API on the host](#running-the-api-on-the-host)
 - [Quality gates](#quality-gates)
@@ -191,6 +192,28 @@ A new username creates an account. An existing username verifies the password.
 
 On a physical device, allow port `8000` through the host firewall, keep phone and computer on the same network, and make sure the API listens on `0.0.0.0` (Compose does). `EXPO_PUBLIC_DEVICE_ID` can stay `device_001`; it identifies the WebSocket session.
 
+## Client reminder telemetry (Sentry)
+
+Whether a reminder fires through the native or JS channel, whether it rang in the background, and which OEM permissions are missing, is recorded on the client in Sentry. Grafana dashboards still chart server Prometheus only. Leave the DSN unset to keep the SDK off; that is the default for local development.
+
+Copy the DSN from the Sentry project **Settings → Client Keys (DSN)** into `frontend/.env` (do not commit that file):
+
+```bash
+# frontend/.env
+EXPO_PUBLIC_SENTRY_DSN=https://<key>@o<org>.ingest.sentry.io/<project>
+```
+
+See [frontend/.env.example](frontend/.env.example). After changing `EXPO_PUBLIC_*`, rebuild the app (`npm run android`) so Expo bakes the value in.
+
+Never put a real DSN in the README or commit it. Events use closed-enum tags only (manufacturer, permission, channel, outcome). They do not include account, session, transcript, schedule titles, or coordinates.
+
+Optional and unrelated to sending events:
+
+| Variable | Where | Role |
+| --- | --- | --- |
+| `SENTRY_ORG` / `SENTRY_PROJECT` | Build env | Enables the `@sentry/react-native` plugin for source maps. Unset keeps the plugin off; the DSN can still send events |
+| `SENTRY_AUTH_TOKEN` | Root `.env` | Grafana Sentry datasource reads Issues; **not** the client DSN |
+
 ## Enabling real voice
 
 Compose injects database, JWT, and CORS into the API container. It does **not** pass Aliyun keys, so `docker compose up` uses the stand-in agent in development.
@@ -292,7 +315,7 @@ There are three templates, depending on how you run things:
 | --- | --- |
 | [`.env.example`](.env.example) | `docker compose`: database, API, JWT, CORS, observability |
 | [`backend/.env.example`](backend/.env.example) | Host `uvicorn`: database URL, JWT, voice, maps, tracing |
-| [`frontend/.env.example`](frontend/.env.example) | Android client: API / WebSocket URLs, device ID |
+| [`frontend/.env.example`](frontend/.env.example) | Android client: API / WebSocket URLs, device ID, optional `EXPO_PUBLIC_SENTRY_DSN` |
 
 Compose interpolates the root `.env` for `${VAR}` substitution. The API container only receives the backend allowlist in `docker-compose.yml`; `GRAFANA_*` and `SENTRY_AUTH_TOKEN` go to Grafana only.
 
@@ -310,6 +333,14 @@ Compose interpolates the root `.env` for `${VAR}` substitution. The API containe
 | `GF_SERVER_SERVE_FROM_SUB_PATH` | `true` when Grafana shares the API host under `/grafana/` |
 | `SENTRY_AUTH_TOKEN` | Grafana → sentry.io; not the app DSN |
 | `TIMEFLOW_OTEL_EXPORTER_OTLP_ENDPOINT` | Empty disables traces; the overlay defaults to `http://tempo:4318` |
+
+`frontend/.env` values the app reads:
+
+| Variable | Notes |
+| --- | --- |
+| `EXPO_PUBLIC_API_URL` / `EXPO_PUBLIC_WS_URL` | See [Pointing the app at a local API](#pointing-the-app-at-a-local-api) |
+| `EXPO_PUBLIC_DEVICE_ID` | WebSocket session id; `device_001` is fine in development |
+| `EXPO_PUBLIC_SENTRY_DSN` | Optional; empty keeps the Sentry SDK off. Copy from Sentry Client Keys; do not commit |
 
 ## Cloud deploy and observability
 

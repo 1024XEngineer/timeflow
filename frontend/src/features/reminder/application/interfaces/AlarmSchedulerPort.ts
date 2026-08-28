@@ -35,6 +35,12 @@ export type AlarmNativeDisposition = {
   updated_at: string;
 };
 
+/** 原生在 JS 被冻住时记下的后台响铃失败，冷启动后再交给埋点。 */
+export type AlarmNativeFireAttempt = {
+  result: 'service_denied' | 'present_failed' | 'fallback_notification';
+  at: string;
+};
+
 export type AlarmPresentationRequest = {
   alarm_id: string;
   schedule_id: string;
@@ -65,6 +71,10 @@ export interface AlarmSchedulerPort {
   peekNativeDispositions?(): Promise<readonly AlarmNativeDisposition[]>;
   /** 确认对应 schedule_id 已经在 JS 侧落盘成功，原生缓冲区才真正删除这批记录。 */
   ackNativeDispositions?(scheduleIds: readonly string[]): Promise<void>;
+  /** 读取进程外记下的后台响铃失败（FGS 被拒、startForeground 抛错），不清空。 */
+  peekNativeFireAttempts?(): Promise<readonly AlarmNativeFireAttempt[]>;
+  /** JS 上报成功后清空原生失败缓冲。 */
+  ackNativeFireAttempts?(): Promise<void>;
   /** 立即交给原生全局响铃页；不可用时返回 presented=false，由上层回退。 */
   presentNow?(request: AlarmPresentationRequest): Promise<AlarmPresentationReceipt>;
 }

@@ -231,6 +231,33 @@ class AlarmModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun peekNativeFireAttempts(promise: Promise) {
+    try {
+      val records = AlarmNativeBridge.peekFireAttempts(reactContext)
+      val array: WritableArray = Arguments.createArray()
+      for (record in records) {
+        val item = Arguments.createMap()
+        item.putString("result", record.result)
+        item.putDouble("atMillis", record.atMillis.toDouble())
+        array.pushMap(item)
+      }
+      promise.resolve(array)
+    } catch (error: Exception) {
+      promise.reject("PEEK_FIRE_ATTEMPTS_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun ackNativeFireAttempts(promise: Promise) {
+    try {
+      AlarmNativeBridge.ackFireAttempts(reactContext)
+      promise.resolve(true)
+    } catch (error: Exception) {
+      promise.reject("ACK_FIRE_ATTEMPTS_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
   fun getPermissionStatus(promise: Promise) {
     try {
       val status = Arguments.createMap()

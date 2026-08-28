@@ -4,6 +4,7 @@ export type { ReminderGuardDependencies } from './ReminderGuardCoordinator';
 export type {
   AlarmNativeDisposition,
   AlarmNativeEvent,
+  AlarmNativeFireAttempt,
   AlarmPresentationReceipt,
   AlarmPresentationRequest,
   AlarmScheduleReceipt,
@@ -37,6 +38,7 @@ export type {
   ReminderDeliveryPort,
   ReminderDeliveryReceipt,
   ReminderDeliveryRequest,
+  ReminderLifecyclePort,
   ReminderDispositionSyncPort,
   ReminderDispositionSyncReceipt,
   ReminderPermissionBlockedEvent,

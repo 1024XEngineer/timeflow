@@ -206,6 +206,7 @@ public final class AlarmSoundService extends Service {
             // 走到这个 catch，整条链路就是"通知也没弹、声音也没放、震动也没震"，
             // 跟用户看到的现象完全对得上，但之前没有任何日志能证实。
             Log.w(TAG, "presentAlarm failed for alarmId=" + alarmId, exception);
+            AlarmNativeBridge.recordFireAttempt(this, AlarmNativeBridge.RESULT_PRESENT_FAILED);
             // 真的什么都没展示：之前这里完全没告诉 presentNow() 的调用方，JS 侧会把
             // 服务启动请求本身当成"已展示"，跳过通知兜底——用户彻底看不到任何东西。
             AlarmModule.resolvePresentation(alarmId, false);

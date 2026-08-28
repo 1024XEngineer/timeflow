@@ -39,6 +39,7 @@ export {
 export type {
   AlarmNativeDisposition,
   AlarmNativeEvent,
+  AlarmNativeFireAttempt,
   AlarmPresentationReceipt,
   AlarmPresentationRequest,
   AlarmScheduleReceipt,
@@ -70,6 +71,7 @@ export type {
   ReminderApplicationResult,
   ReminderConfirmedDisposition,
   ReminderDeliveryPort,
+  ReminderLifecyclePort,
   ReminderDispositionSyncPort,
   ReminderDispositionSyncReceipt,
   ReminderPermissionBlockedEvent,

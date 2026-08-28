@@ -24,6 +24,7 @@ TimeFlow 是一款语音优先的个人日程助手，帮你用说话的方式�
 - [环境要求](#环境要求)
 - [快速上手](#快速上手)
 - [客户端如何连上本机 API](#客户端如何连上本机-api)
+- [客户端提醒埋点（Sentry）](#客户端提醒埋点sentry)
 - [开启真实语音](#开启真实语音)
 - [本机开发后端](#本机开发后端)
 - [质量检查](#质量检查)
@@ -191,6 +192,28 @@ npm start
 
 真机还需要：电脑防火墙放行 `8000`，手机和电脑在同一网络，且后端监听 `0.0.0.0`（Compose 默认如此）。`EXPO_PUBLIC_DEVICE_ID` 可保持 `device_001`，用于 WebSocket 会话标识。
 
+## 客户端提醒埋点（Sentry）
+
+提醒走原生还是 JS 通道、后台是否响铃、缺哪些厂商权限，客户端记到 Sentry。服务端 Grafana 看板仍只画 Prometheus。未配置 DSN 时 SDK 保持关闭，日常开发可以不填。
+
+在 Sentry 项目 **Settings → Client Keys (DSN)** 复制 DSN，写入 `frontend/.env`（该文件不要提交）：
+
+```bash
+# frontend/.env
+EXPO_PUBLIC_SENTRY_DSN=https://<key>@o<org>.ingest.sentry.io/<project>
+```
+
+模板见 [frontend/.env.example](frontend/.env.example)。改完 `EXPO_PUBLIC_*` 后需要重新编译客户端（`npm run android`），Expo 才会打进包。
+
+不要把真实 DSN 写进 README 或提交到 Git。事件只带封闭枚举标签（厂商、权限、通道、结果），不上报账号、session、语音原文、日程标题或坐标。
+
+可选、与上报无关：
+
+| 变量 | 位置 | 作用 |
+| --- | --- | --- |
+| `SENTRY_ORG` / `SENTRY_PROJECT` | 构建环境 | 打开 `@sentry/react-native` 插件以上传 source map；不设则插件关闭，DSN 仍可上报 |
+| `SENTRY_AUTH_TOKEN` | 仓库根 `.env` | Grafana Sentry 数据源读 Issues；**不是**客户端 DSN |
+
 ## 开启真实语音
 
 Compose 默认只把数据库、JWT 和 CORS 注入 API 容器，**不会**带上阿里云密钥。因此 `docker compose up` 在 development 下走占位助手。
@@ -293,7 +316,7 @@ npm run test:coverage
 | --- | --- |
 | [`.env.example`](.env.example) | `docker compose`：数据库、API 端口、JWT、CORS、观测 |
 | [`backend/.env.example`](backend/.env.example) | 本机 `uvicorn`：数据库 URL、JWT、语音、地图、追踪 |
-| [`frontend/.env.example`](frontend/.env.example) | Android 客户端：API / WebSocket 地址、设备 ID |
+| [`frontend/.env.example`](frontend/.env.example) | Android 客户端：API / WebSocket 地址、设备 ID、可选 `EXPO_PUBLIC_SENTRY_DSN` |
 
 仓库根 `.env` 供 Compose 做 `${VAR}` 插值。API 容器只注入 `docker-compose.yml` 列出的后端变量；`GRAFANA_*` / `SENTRY_AUTH_TOKEN` 只进 Grafana。
 
@@ -311,6 +334,14 @@ npm run test:coverage
 | `GF_SERVER_SERVE_FROM_SUB_PATH` | 同域名子路径时设 `true` |
 | `SENTRY_AUTH_TOKEN` | Grafana 读 sentry.io；不是 App 的 DSN |
 | `TIMEFLOW_OTEL_EXPORTER_OTLP_ENDPOINT` | 空则不上报 trace；观测 overlay 默认 `http://tempo:4318` |
+
+`frontend/.env` 里客户端会读取的项：
+
+| 变量 | 说明 |
+| --- | --- |
+| `EXPO_PUBLIC_API_URL` / `EXPO_PUBLIC_WS_URL` | 见「客户端如何连上本机 API」 |
+| `EXPO_PUBLIC_DEVICE_ID` | WebSocket 会话标识，开发可保持 `device_001` |
+| `EXPO_PUBLIC_SENTRY_DSN` | 可选；空则 Sentry SDK 关闭。取值来自 Sentry 项目 Client Keys，不要提交 |
 
 ## 云上部署与观测
 

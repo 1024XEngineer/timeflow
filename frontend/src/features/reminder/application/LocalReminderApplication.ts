@@ -1,3 +1,21 @@
+import {
+  NOOP_CLIENT_TELEMETRY,
+  boundManufacturer,
+  boundNativeBackgroundResult,
+  boundOs,
+  boundPermissions,
+  countBucket,
+  isLateLatency,
+  latencyBucket,
+  latencyBucketFromTimes,
+  type ClientTelemetryPort,
+  type ReminderDeliveryOutcome,
+  type ReminderTelemetryChannel,
+  type ReminderTriggerSource,
+  type TelemetryAppState,
+  type TelemetryManufacturer,
+  type TelemetryOs,
+} from '../../../shared/observability';
 import type {
   ReminderApplicationDependencies,
   ReminderApplicationPort,
@@ -9,6 +27,7 @@ import type {
   LocationWatchHandle,
   AlarmScheduleReceipt,
   AlarmNativeEvent,
+  DeviceCapabilityStatus,
   DevicePermission,
 } from './interfaces';
 import type {
@@ -42,6 +61,36 @@ type RegistrationRecord = ReminderRegistration & {
 const EMPTY_CHANNELS: ReminderDeliveryReceipt['channels'] = [];
 /** 跟 reminderGuardTask.ts 的同名常量保持一致——两处合起来覆盖会话存活/已死两种场景。 */
 const STUCK_PENDING_THRESHOLD_MS = 2 * 60_000;
+/** 回到前台后这么久内的迟到 JS 送达，算「必须回 App 才响」。 */
+const RESUME_CATCHUP_WINDOW_MS = 90_000;
+
+type DeviceTelemetrySnapshot = {
+  manufacturer: TelemetryManufacturer;
+  os: TelemetryOs;
+  overlayFailed: boolean;
+  permissions: DeviceCapabilityStatus['permissions'];
+  platform: DeviceCapabilityStatus['platform'];
+  supported: boolean;
+};
+
+const DENIED_PERMISSIONS: DeviceCapabilityStatus['permissions'] = {
+  battery_optimization: false,
+  exact_alarm: false,
+  full_screen: false,
+  location_background: false,
+  location_foreground: false,
+  microphone: false,
+  notifications: false,
+  overlay: false,
+};
+
+const CHANNEL_PRIORITY: readonly DeliveryChannel[] = [
+  'popup',
+  'system_notification',
+  'tts',
+  'local_sound',
+  'vibration',
+];
 
 function emptyRegistration(scheduleId: string): ReminderRegistration {
   return {
@@ -59,6 +108,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   private unsubscribePresenter: (() => void) | null = null;
   private unsubscribeSchedules: (() => void) | null = null;
   private unsubscribeAlarms: (() => void) | null = null;
+  private unsubscribeLifecycle: (() => void) | null = null;
   private readonly registrations = new Map<string, RegistrationRecord>();
   private readonly activeDeliveries = new Set<string>();
   private readonly deliverLocks = new Set<string>();
@@ -73,8 +123,15 @@ export class LocalReminderApplication implements ReminderApplicationPort {
   /** 每次 stop / 失败回滚自增；停机前开始的工作持有旧世代，重启后仍视为已取消。 */
   private generation = 0;
   private acceptingWork = true;
+  private readonly telemetry: ClientTelemetryPort;
+  private appState: TelemetryAppState = 'unknown';
+  private resumedAtMs: number | null = null;
+  private lastBackgroundedAtMs: number | null = null;
 
-  constructor(readonly dependencies: ReminderApplicationDependencies) {}
+  constructor(readonly dependencies: ReminderApplicationDependencies) {
+    this.telemetry = dependencies.telemetry ?? NOOP_CLIENT_TELEMETRY;
+    this.appState = dependencies.lifecycle?.current() ?? 'unknown';
+  }
 
   async start(): Promise<void> {
     return this.enqueueOp(() => this.startInternal());
@@ -194,6 +251,12 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         this.dependencies.alarms.subscribe?.((event) => {
           void this.handleNativeAlarmEvent(event).catch(() => undefined);
         }) ?? null;
+      this.unsubscribeLifecycle =
+        this.dependencies.lifecycle?.subscribe((state) => {
+          this.handleLifecycle(state);
+        }) ?? null;
+      this.appState = this.dependencies.lifecycle?.current() ?? this.appState;
+      this.resumedAtMs = Date.now();
 
       // IntervalTimeListener 不在 start 时同步打点；先挂上 listener id 再 rebuild。
       const timeHandle = await this.dependencies.time.start(
@@ -214,6 +277,12 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         return;
       }
 
+      await this.hydrateNativeFireAttempts();
+      if (!this.isLive(generation)) {
+        await this.stopInternal();
+        return;
+      }
+
       this.unsubscribeSchedules = this.dependencies.schedules.subscribe(() => {
         void this.enqueueRebuild();
       });
@@ -222,6 +291,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
         await this.stopInternal();
         return;
       }
+      await this.maybeReportOverdueUnarmed();
       this.started = true;
     } catch (error) {
       if (this.isLive(generation)) this.invalidate();
@@ -259,6 +329,8 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     this.unsubscribeSchedules = null;
     this.unsubscribeAlarms?.();
     this.unsubscribeAlarms = null;
+    this.unsubscribeLifecycle?.();
+    this.unsubscribeLifecycle = null;
   }
 
   private async registerInternal(
@@ -808,6 +880,28 @@ export class LocalReminderApplication implements ReminderApplicationPort {
           return this.stoppedReceipt(trigger);
         }
 
+        if (presentedNatively) {
+          await this.recordDeliveryTelemetry({
+            schedule,
+            outcome: 'native_ok',
+            channel: 'native_full_screen',
+            source: triggerSourceFromReason(trigger.reason),
+            observedAt: trigger.triggered_at,
+            usedFallbackAudio: false,
+            nativeArmed: this.registrations.get(schedule.id)?.alarm_id != null,
+          });
+        } else if (!this.nativePresented.has(schedule.id) && channels.length > 0) {
+          await this.recordDeliveryTelemetry({
+            schedule,
+            outcome: 'js_channel',
+            channel: primaryDeliveryChannel(channels),
+            source: triggerSourceFromReason(trigger.reason),
+            observedAt: trigger.triggered_at,
+            usedFallbackAudio,
+            nativeArmed: this.registrations.get(schedule.id)?.alarm_id != null,
+          });
+        }
+
         return {
           delivery_id: deliveryId,
           schedule_id: schedule.id,
@@ -836,6 +930,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     try {
       await this.track(this.runDeliver(trigger, generation));
     } catch {
+      this.telemetry.recordUnexpectedError('reminder_delivery');
       // 单条送达失败不阻断其余日程。
     }
   }
@@ -864,6 +959,7 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     if (!event.schedule_id) return;
     if (event.type === 'fired') {
       await this.acknowledgeNativeFire(event.schedule_id, event.at);
+      await this.recordNativeAlarmFired(event.schedule_id, event.at);
       return;
     }
     if (event.type === 'snoozed') {
@@ -1118,6 +1214,9 @@ export class LocalReminderApplication implements ReminderApplicationPort {
       'battery_optimization',
       'notifications',
     ]);
+    if (!receipt.scheduled) {
+      await this.recordNativeScheduleFailure(schedule, triggerAt);
+    }
     return receipt;
   }
 
@@ -1131,12 +1230,182 @@ export class LocalReminderApplication implements ReminderApplicationPort {
     permissions: readonly DevicePermission[],
   ): Promise<void> {
     const status = await this.dependencies.device.getStatus();
+    this.syncDeviceContext(status);
     if (status.platform !== 'android') return;
     const missing = permissions.filter((permission) => !status.permissions[permission]);
     if (missing.length === 0) return;
+    this.telemetry.recordReminderPermissionBlocked({
+      manufacturer: boundManufacturer(status.oemGuidance.manufacturer),
+      missing: boundPermissions(missing),
+    });
     for (const listener of this.permissionBlockedListeners) {
       listener({ schedule_id: scheduleId, missing });
     }
+  }
+
+  private async recordNativeAlarmFired(scheduleId: string, firedAt: string): Promise<void> {
+    const schedule =
+      (await this.dependencies.schedules.getReminderSchedule(scheduleId)) ??
+      this.registrations.get(scheduleId)?.schedule ??
+      null;
+    await this.recordDeliveryTelemetry({
+      schedule,
+      outcome: 'native_ok',
+      channel: 'native_full_screen',
+      source: 'native_alarm',
+      observedAt: firedAt,
+      usedFallbackAudio: false,
+      nativeArmed: true,
+    });
+  }
+
+  private async recordNativeScheduleFailure(
+    schedule: LocalReminderSchedule,
+    triggerAt: string,
+  ): Promise<void> {
+    const snapshot = await this.snapshotDevice();
+    const outcome = classifyNativeScheduleFailure(snapshot);
+    if (outcome == null) return;
+    await this.recordDeliveryTelemetry({
+      schedule,
+      outcome,
+      channel: 'native_full_screen',
+      source: 'js_time',
+      observedAt: triggerAt,
+      usedFallbackAudio: false,
+      nativeArmed: false,
+      forceDeferred: false,
+    });
+  }
+
+  private async recordDeliveryTelemetry(input: {
+    schedule: LocalReminderSchedule | null;
+    outcome: ReminderDeliveryOutcome;
+    channel: ReminderTelemetryChannel;
+    source: ReminderTriggerSource;
+    observedAt: string;
+    usedFallbackAudio: boolean;
+    nativeArmed: boolean;
+    forceDeferred?: boolean;
+  }): Promise<void> {
+    const snapshot = await this.snapshotDevice();
+    const appState = this.dependencies.lifecycle?.current() ?? this.appState;
+    this.appState = appState;
+    const latency = latencyBucketFromTimes(
+      input.schedule == null ? null : resolveEffectiveTriggerAt(input.schedule),
+      input.observedAt,
+    );
+    const deferred =
+      input.forceDeferred === false
+        ? false
+        : this.isDeferredUntilForeground(input.source, latency, appState);
+    this.telemetry.recordReminderDelivery({
+      app_state: appState,
+      channel: input.channel,
+      deferred_until_foreground: deferred,
+      latency_bucket: latency,
+      manufacturer: snapshot.manufacturer,
+      native_armed: input.nativeArmed,
+      outcome: input.outcome,
+      overlay_failed: snapshot.overlayFailed,
+      schedule_type: input.schedule?.schedule_type ?? 'time',
+      strength: input.schedule?.reminder?.reminder_strength ?? 'medium',
+      trigger_source: input.source,
+      used_fallback_audio: input.usedFallbackAudio,
+    });
+  }
+
+  private isDeferredUntilForeground(
+    source: ReminderTriggerSource,
+    latency: ReturnType<typeof latencyBucketFromTimes>,
+    appState: TelemetryAppState,
+  ): boolean {
+    if (source !== 'js_time' && source !== 'stuck_pending') return false;
+    if (appState === 'background') return false;
+    if (!isLateLatency(latency)) return false;
+    if (this.resumedAtMs == null) return false;
+    return Date.now() - this.resumedAtMs < RESUME_CATCHUP_WINDOW_MS;
+  }
+
+  private handleLifecycle(state: TelemetryAppState): void {
+    const previous = this.appState;
+    this.appState = state;
+    if (state === 'background' || state === 'inactive') {
+      this.lastBackgroundedAtMs = Date.now();
+      return;
+    }
+    if (state !== 'active' || previous === 'active') return;
+    this.resumedAtMs = Date.now();
+    void this.maybeReportOverdueUnarmed();
+  }
+
+  private async maybeReportOverdueUnarmed(): Promise<void> {
+    const observedAt = new Date().toISOString();
+    let overdue = 0;
+    for (const registration of this.registrations.values()) {
+      if (registration.schedule.schedule_type !== 'time') continue;
+      if (registration.alarm_id != null) continue;
+      if (!isTimeWindowReached(registration.schedule, observedAt)) continue;
+      overdue += 1;
+    }
+    if (overdue === 0) return;
+    const snapshot = await this.snapshotDevice();
+    this.telemetry.recordReminderLifecycle({
+      background_duration_bucket: latencyBucket(
+        this.lastBackgroundedAtMs == null ? null : Date.now() - this.lastBackgroundedAtMs,
+      ),
+      kind: 'foreground_resume',
+      manufacturer: snapshot.manufacturer,
+      overdue_unarmed: countBucket(overdue),
+    });
+  }
+
+  private async hydrateNativeFireAttempts(): Promise<void> {
+    const rows = await this.dependencies.alarms.peekNativeFireAttempts?.();
+    if (rows == null || rows.length === 0) return;
+    const snapshot = await this.snapshotDevice();
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const result = boundNativeBackgroundResult(row.result);
+      if (result == null || seen.has(result)) continue;
+      seen.add(result);
+      this.telemetry.recordReminderNativeBackground({
+        manufacturer: snapshot.manufacturer,
+        result,
+      });
+    }
+    await this.dependencies.alarms.ackNativeFireAttempts?.();
+  }
+
+  private async snapshotDevice(): Promise<DeviceTelemetrySnapshot> {
+    try {
+      const status = await this.dependencies.device.getStatus();
+      this.syncDeviceContext(status);
+      return {
+        manufacturer: boundManufacturer(status.oemGuidance.manufacturer),
+        os: boundOs(status.platform),
+        overlayFailed: status.oemGuidance.lastOverlayFailed,
+        permissions: status.permissions,
+        platform: status.platform,
+        supported: status.supported,
+      };
+    } catch {
+      return {
+        manufacturer: 'other',
+        os: 'other',
+        overlayFailed: false,
+        permissions: DENIED_PERMISSIONS,
+        platform: 'unknown',
+        supported: false,
+      };
+    }
+  }
+
+  private syncDeviceContext(status: DeviceCapabilityStatus): void {
+    this.telemetry.setDeviceContext({
+      manufacturer: boundManufacturer(status.oemGuidance.manufacturer),
+      os: boundOs(status.platform),
+    });
   }
 
   private buildTrigger(
@@ -1187,6 +1456,24 @@ function toDeliveryRequest(
   };
 }
 
+function primaryDeliveryChannel(channels: readonly DeliveryChannel[]): ReminderTelemetryChannel {
+  for (const candidate of CHANNEL_PRIORITY) {
+    if (channels.includes(candidate)) return candidate;
+  }
+  return channels[0] ?? 'popup';
+}
+
+function classifyNativeScheduleFailure(
+  snapshot: DeviceTelemetrySnapshot,
+): ReminderDeliveryOutcome | null {
+  if (snapshot.platform !== 'android') return null;
+  if (!snapshot.supported) return 'native_unavailable';
+  if (!snapshot.permissions.exact_alarm || !snapshot.permissions.notifications) {
+    return 'native_declined';
+  }
+  return 'native_unavailable';
+}
+
 /**
  * 原生闹钟响铃时要不要震动/弹全屏止铃界面、声音走哪个档位。全屏恒为真（时间型
  * 提醒没有别的可见形式，静音也得让用户看到），vibrate/soundTier 复用 JS 侧的
@@ -1206,6 +1493,12 @@ function alarmRingChannels(schedule: LocalReminderSchedule): {
     full_screen: true,
     speech_text: speechText,
   };
+}
+
+function triggerSourceFromReason(reason: ReminderTriggerReason): ReminderTriggerSource {
+  if (reason === 'arrive_location' || reason === 'return_to_recorded_location') return 'location';
+  if (reason === 'stuck_pending') return 'stuck_pending';
+  return 'js_time';
 }
 
 function toTimeReason(schedule: LocalReminderSchedule): ReminderTriggerReason {

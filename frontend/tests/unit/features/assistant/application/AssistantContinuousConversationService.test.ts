@@ -130,6 +130,7 @@ function createDeps(
     applyCategoryUpdate: jest.fn(overrides.applyCategoryUpdate ?? (async () => true)),
   };
   const appState: AppStateProvider = {
+    current: () => 'active',
     subscribe: jest.fn((listener: (status: AppLifecycleStatus) => void) => {
       capturedAppStateListener = listener;
       return unsubscribeAppState;
