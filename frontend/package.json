@@ -9,7 +9,10 @@
   "packageManager": "npm@10.8.2",
   "expo": {
     "autolinking": {
-      "buildFromSource": ["expo-task-manager", "unimodules-app-loader"]
+      "buildFromSource": [
+        "expo-task-manager",
+        "unimodules-app-loader"
+      ]
     }
   },
   "dependencies": {

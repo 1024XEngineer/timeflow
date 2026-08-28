@@ -24,6 +24,16 @@ const LOCATION_STOP_TIMEOUT_MS = 2_000;
 const REGISTRATION_STALE_AFTER_MS = 600_000;
 
 /**
+ * 独立于心跳事件的兜底重试节奏。isRegistrationStale() 要判的恰恰是"心跳已经
+ * 不再来了"这件事——如果只在 handleSample()/日程变化触发的 reconcile 里查，
+ * 那么注册一旦在后台悄悄失活（收到过一次心跳、之后再没有），就再也没有任何
+ * 代码会主动重新检查，会一直卡到用户手动改日程或重启 App。这里独立定时唤醒
+ * 一次 reconcile，跟心跳来不来无关。取跟 REGISTRATION_STALE_AFTER_MS 同一个
+ * 最疏轮询间隔，10 分钟的陈旧窗口内能查两次，发现得不算晚。
+ */
+const WATCHDOG_INTERVAL_MS = 300_000;
+
+/**
  * 原生注册其实有三种状态，而 hasStartedLocationUpdatesAsync() 只能回答把后两种
  * 合并之后的那个布尔值（"注册着吗"）：
  *
@@ -68,6 +78,8 @@ export class ReminderGuardCoordinator {
   /** 上一次收到位置心跳的时刻，用来发现会话中途悄悄断掉的投递。 */
   private lastProgressAt: number | null = null;
   private reconcileChain: Promise<void> = Promise.resolve();
+  /** 独立于心跳事件的兜底定时器，见 WATCHDOG_INTERVAL_MS 的说明。 */
+  private watchdogTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly dependencies: ReminderGuardDependencies) {}
 
@@ -81,6 +93,15 @@ export class ReminderGuardCoordinator {
     this.unsubscribeSchedules = this.dependencies.schedules.subscribe(() => {
       void this.reconcile();
     });
+    this.watchdogTimer = setInterval(() => {
+      void this.reconcile();
+    }, WATCHDOG_INTERVAL_MS);
+    // Node 测试环境下的定时器带 unref()，不调用它 Jest 进程退不出去；React
+    // Native 运行时的 setInterval 返回值没有这个方法，特性检测一下就是安全的
+    // 空操作——两边都不影响真正的定时逻辑，只影响"这个定时器算不算 keep-alive
+    // 句柄"这一件事。
+    const maybeUnref = this.watchdogTimer as unknown as { unref?: () => void };
+    maybeUnref.unref?.();
     await this.reconcile();
   }
 
@@ -93,6 +114,10 @@ export class ReminderGuardCoordinator {
     this.unsubscribeGuardTask = null;
     this.unsubscribeSchedules?.();
     this.unsubscribeSchedules = null;
+    if (this.watchdogTimer != null) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
     await this.stopLocationUpdates();
   }
 
@@ -207,13 +232,19 @@ export class ReminderGuardCoordinator {
       // ——跟 ExpoLocationMonitor 清理老围栏时遇到的是同一件事。真机实测：进程被杀
       // 之后光 stop 再 start，注册看着建上了（hasStarted=true、options 带着
       // foregroundService、间隔也对），却再也不投递一次样本，只有卸载重装才能恢复。
-      // 这里补一次真正的注销，把持久化记录也抹掉，等价于重装那一下。
+      // 这里补一次真正的注销，把持久化记录也抹掉，等价于重装那一下。注销失败就
+      // 中止本次重建、保留现状——不能继续往下 startLocationUpdatesAsync()：
+      // 持久化记录没删掉，走的还是那条"已存在就 setOptions"的原生分支，等于
+      // 重新绑上同一条失活的记录，registerTasks 又会把它当健康注册提前返回，
+      // 恢复彻底失败且无声无息。留在原状态，等下一次 reconcile（心跳或
+      // watchdog 定时器）重试。
       try {
         if (await TaskManager.isTaskRegisteredAsync(GUARD_TASK_NAME)) {
           await TaskManager.unregisterTaskAsync(GUARD_TASK_NAME);
         }
       } catch (error) {
         console.warn('[guard] failed to unregister the stale task', error);
+        return;
       }
       if (!this.isCurrentGeneration(generation)) return;
       this.running = false;

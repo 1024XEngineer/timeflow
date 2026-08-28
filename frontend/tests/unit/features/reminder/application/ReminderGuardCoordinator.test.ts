@@ -489,7 +489,12 @@ describe('ReminderGuardCoordinator', () => {
     expect(startUpdates).toHaveBeenCalledTimes(1);
   });
 
-  it('rebuilds even when unregistering the stale task fails', async () => {
+  it('aborts the rebuild when unregistering the stale task fails, instead of re-registering anyway', async () => {
+    // 持久化记录没被真正删掉的话，重注册走的还是原生"已存在就 setOptions"那条
+    // 分支——等于又绑上了同一条失活的记录，下次 reconcile 读到的 state 还是
+    // 'foreground'，会被当成健康注册直接早退，恢复彻底失败且没有任何痕迹。
+    // 所以注销失败必须整段放弃，把重试留给下一次 reconcile，而不是硬着头皮
+    // 继续 startLocationUpdatesAsync()。
     hasStarted.mockResolvedValue(true);
     getRegisteredTasks.mockResolvedValue([registeredTask(true)]);
     unregisterTask.mockRejectedValue(new Error('boom'));
@@ -501,7 +506,58 @@ describe('ReminderGuardCoordinator', () => {
 
     await coordinator.start();
 
-    expect(startUpdates).toHaveBeenCalledTimes(1);
+    expect(startUpdates).not.toHaveBeenCalled();
+  });
+
+  it('reconciles on an independent watchdog timer even when no sample or schedule change arrives', async () => {
+    // 心跳静默失活时，三个触发源（start() 只跑一次、日程订阅要等用户凑巧去改、
+    // handleSample() 恰恰是已经停了的那个）全都指望不上。watchdog 定时器必须
+    // 独立于这三者，自己把 reconcile 叫起来，才能发现"注册看着健在、其实早就
+    // 不投递了"这种状态。
+    hasStarted.mockResolvedValue(true);
+    getRegisteredTasks.mockResolvedValue([registeredTask(true)]);
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+
+    jest.useFakeTimers();
+    try {
+      await coordinator.start();
+      getRegisteredTasks.mockClear();
+
+      jest.advanceTimersByTime(300_000);
+      await flushMicrotasks();
+
+      expect(getRegisteredTasks).toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('stops the watchdog timer on stop() so it does not keep reconciling after teardown', async () => {
+    hasStarted.mockResolvedValue(true);
+    getRegisteredTasks.mockResolvedValue([registeredTask(true)]);
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+
+    jest.useFakeTimers();
+    try {
+      await coordinator.start();
+      await coordinator.stop();
+      getRegisteredTasks.mockClear();
+
+      jest.advanceTimersByTime(600_000);
+      await flushMicrotasks();
+
+      expect(getRegisteredTasks).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('leaves the registration alone once a heartbeat has confirmed it is delivering', async () => {
