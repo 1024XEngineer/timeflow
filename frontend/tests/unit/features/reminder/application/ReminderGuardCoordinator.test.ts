@@ -26,6 +26,8 @@ jest.mock('expo-task-manager', () => ({
   isTaskDefined: jest.fn(() => true),
   defineTask: jest.fn(),
   getRegisteredTasksAsync: jest.fn(),
+  isTaskRegisteredAsync: jest.fn(),
+  unregisterTaskAsync: jest.fn(),
 }));
 
 jest.mock('../../../../../src/infrastructure/location/reminderGuardTask', () => {
@@ -59,6 +61,12 @@ const subscribeTaskEvents = subscribeGuardTaskEvents as jest.MockedFunction<
 >;
 const getRegisteredTasks = TaskManager.getRegisteredTasksAsync as jest.MockedFunction<
   typeof TaskManager.getRegisteredTasksAsync
+>;
+const isTaskRegistered = TaskManager.isTaskRegisteredAsync as jest.MockedFunction<
+  typeof TaskManager.isTaskRegisteredAsync
+>;
+const unregisterTask = TaskManager.unregisterTaskAsync as jest.MockedFunction<
+  typeof TaskManager.unregisterTaskAsync
 >;
 const foregrounded = isAppForegrounded as jest.MockedFunction<typeof isAppForegrounded>;
 
@@ -176,6 +184,8 @@ describe('ReminderGuardCoordinator', () => {
     getForeground.mockResolvedValue(granted());
     startUpdates.mockResolvedValue(undefined);
     stopUpdates.mockResolvedValue(undefined);
+    isTaskRegistered.mockResolvedValue(true);
+    unregisterTask.mockResolvedValue(undefined);
     // 默认"还没启动"——ensureLocationUpdates 现在也会查这个真实状态来判断
     // 要不要重新调 startLocationUpdatesAsync，跟 stopLocationUpdates 共用同一个
     // mock；哪个测试要验证"已经在跑"分支（比如停止逻辑），在 start() 成功之后
@@ -407,7 +417,10 @@ describe('ReminderGuardCoordinator', () => {
     expect(options?.timeInterval).toBe(300_000);
   });
 
-  it('does not re-register when the running registration still carries the foreground service', async () => {
+  it('rebuilds a registration inherited from a previous process even when it carries the foreground service', async () => {
+    // force-stop 杀不掉 expo-task-manager 持久化的注册记录：冷启动读到的
+    // 'foreground' 可能是上一个进程留下的，注册还在、投递已经随进程一起死了。
+    // 改之前协调器信了它直接早退，守护就此永久停摆，只有重装能恢复。
     hasStarted.mockResolvedValue(true);
     getRegisteredTasks.mockResolvedValue([registeredTask(true)]);
     const reader = createReader([timeSchedule()]);
@@ -418,8 +431,171 @@ describe('ReminderGuardCoordinator', () => {
 
     await coordinator.start();
 
+    expect(stopUpdates).toHaveBeenCalledWith(GUARD_TASK_NAME);
+    expect(startUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it('still rebuilds an inherited registration when its dying heartbeats land first', async () => {
+    // 真机实测：force-stop 之后重开，继承来的注册会先投出一两次心跳（上一份注册
+    // 的余波，两条样本紧挨着 13ms），之后彻底停摆。只按"最近有没有心跳"判断的话
+    // 会被这两下骗过去，当它还活着而不去重建，守护就此又卡死。
+    let sampleListener:
+      | ((sample: {
+          latitude: number;
+          longitude: number;
+          accuracy_meters: number;
+          observed_at: string;
+        }) => void)
+      | undefined;
+    subscribeTaskEvents.mockImplementation((listener) => {
+      sampleListener = listener as typeof sampleListener;
+      return () => {};
+    });
+    hasStarted.mockResolvedValue(true);
+    getRegisteredTasks.mockResolvedValue([registeredTask(true)]);
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+
+    await sampleListener?.({
+      latitude: 31.2304,
+      longitude: 121.4737,
+      accuracy_meters: 10,
+      observed_at: '2026-08-18T10:00:00.000Z',
+    });
+    await coordinator.start();
+
+    expect(stopUpdates).toHaveBeenCalledWith(GUARD_TASK_NAME);
+    expect(startUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it('unregisters the task itself before rebuilding, not just the location updates', async () => {
+    // 真机实测：进程被杀之后光 stopLocationUpdatesAsync 再 start，注册看着建上了
+    // （hasStarted=true、options 带着 foregroundService、间隔也对）却一次样本都不
+    // 投递，只有卸载重装能恢复——因为 TaskManager 里那条持久化的任务注册没被清掉。
+    hasStarted.mockResolvedValue(true);
+    getRegisteredTasks.mockResolvedValue([registeredTask(true)]);
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+
+    await coordinator.start();
+
+    expect(unregisterTask).toHaveBeenCalledWith(GUARD_TASK_NAME);
+    expect(startUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts the rebuild when unregistering the stale task fails, instead of re-registering anyway', async () => {
+    // 持久化记录没被真正删掉的话，重注册走的还是原生"已存在就 setOptions"那条
+    // 分支——等于又绑上了同一条失活的记录，下次 reconcile 读到的 state 还是
+    // 'foreground'，会被当成健康注册直接早退，恢复彻底失败且没有任何痕迹。
+    // 所以注销失败必须整段放弃，把重试留给下一次 reconcile，而不是硬着头皮
+    // 继续 startLocationUpdatesAsync()。
+    hasStarted.mockResolvedValue(true);
+    getRegisteredTasks.mockResolvedValue([registeredTask(true)]);
+    unregisterTask.mockRejectedValue(new Error('boom'));
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+
+    await coordinator.start();
+
     expect(startUpdates).not.toHaveBeenCalled();
+  });
+
+  it('reconciles on an independent watchdog timer even when no sample or schedule change arrives', async () => {
+    // 心跳静默失活时，三个触发源（start() 只跑一次、日程订阅要等用户凑巧去改、
+    // handleSample() 恰恰是已经停了的那个）全都指望不上。watchdog 定时器必须
+    // 独立于这三者，自己把 reconcile 叫起来，才能发现"注册看着健在、其实早就
+    // 不投递了"这种状态。
+    hasStarted.mockResolvedValue(true);
+    getRegisteredTasks.mockResolvedValue([registeredTask(true)]);
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+
+    jest.useFakeTimers();
+    try {
+      await coordinator.start();
+      getRegisteredTasks.mockClear();
+
+      jest.advanceTimersByTime(300_000);
+      await flushMicrotasks();
+
+      expect(getRegisteredTasks).toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('stops the watchdog timer on stop() so it does not keep reconciling after teardown', async () => {
+    hasStarted.mockResolvedValue(true);
+    getRegisteredTasks.mockResolvedValue([registeredTask(true)]);
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+
+    jest.useFakeTimers();
+    try {
+      await coordinator.start();
+      await coordinator.stop();
+      getRegisteredTasks.mockClear();
+
+      jest.advanceTimersByTime(600_000);
+      await flushMicrotasks();
+
+      expect(getRegisteredTasks).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('leaves the registration alone once a heartbeat has confirmed it is delivering', async () => {
+    // 心跳还在流就说明注册真的在投递，这时候 options 里带不带 foregroundService
+    // 都不该去动它——后台唤醒重注册必然丢掉那个字段，据此"修复"就是对着一个
+    // 健康的服务做一次多余的 stop+start。
+    let sampleListener:
+      | ((sample: {
+          latitude: number;
+          longitude: number;
+          accuracy_meters: number;
+          observed_at: string;
+        }) => void)
+      | undefined;
+    subscribeTaskEvents.mockImplementation((listener) => {
+      sampleListener = listener as typeof sampleListener;
+      return () => {};
+    });
+    hasStarted.mockResolvedValue(true);
+    getRegisteredTasks.mockResolvedValue([registeredTask(false)]);
+    const reader = createReader([timeSchedule()]);
+    const coordinator = new ReminderGuardCoordinator({
+      schedules: reader,
+      handleLocation: jest.fn(async () => {}),
+    });
+    await coordinator.start();
+    stopUpdates.mockClear();
+    startUpdates.mockClear();
+
+    await sampleListener?.({
+      latitude: 31.2304,
+      longitude: 121.4737,
+      accuracy_meters: 10,
+      observed_at: '2026-08-18T10:00:00.000Z',
+    });
+
     expect(stopUpdates).not.toHaveBeenCalled();
+    expect(startUpdates).not.toHaveBeenCalled();
   });
 
   it('repairs a registration that lost its foreground service', async () => {

@@ -68,7 +68,7 @@ function toRadians(degrees: number): number {
 
 /** local_schedules 表没有单独的半径列，地点提醒目前全局统一用这个值——改这里
  * 就是改全部地点提醒的实际触发半径，跟下面轮询密度用的门槛是同一个数字。 */
-export const DEFAULT_GEOFENCE_RADIUS_METERS = 400;
+export const DEFAULT_GEOFENCE_RADIUS_METERS = 200;
 
 /** 离围栏边界（不是中心点）≤ 此距离时，按最密的轮询间隔查。门槛直接等于围栏
  * 半径本身：沿着半径这段路程加密轮询，正好在真正跨过边界前进入最密档。之前

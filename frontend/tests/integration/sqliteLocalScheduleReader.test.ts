@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import { ScheduleLocalRepository, type CloudScheduleRow } from '../../src/features/schedule/data';
 import { SqliteLocalScheduleReader } from '../../src/features/reminder/data/local/SqliteLocalScheduleReader';
+import { DEFAULT_GEOFENCE_RADIUS_METERS } from '../../src/features/reminder/domain/geofence';
 import { migrateScheduleDatabase } from '../../src/infrastructure/database/migrations';
 import { SqlJsExpoDatabase } from '../helpers/sqliteTestDatabase';
 
@@ -70,7 +71,7 @@ describe('SqliteLocalScheduleReader', () => {
       id: 'schedule-a',
       account_id: 'account-a',
       title: 'Original title',
-      geofence_radius_meters: 400,
+      geofence_radius_meters: DEFAULT_GEOFENCE_RADIUS_METERS,
       reminder: {
         reminder_type: 'before_start',
         reminder_offset_minutes: 15,

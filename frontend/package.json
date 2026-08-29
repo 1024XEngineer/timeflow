@@ -7,6 +7,14 @@
     "npm": ">=10.8.2 <11"
   },
   "packageManager": "npm@10.8.2",
+  "expo": {
+    "autolinking": {
+      "buildFromSource": [
+        "expo-task-manager",
+        "unimodules-app-loader"
+      ]
+    }
+  },
   "dependencies": {
     "@expo/metro-runtime": "~57.0.8",
     "@irvingouj/expo-audio-stream": "3.1.0",
